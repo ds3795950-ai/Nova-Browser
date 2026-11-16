@@ -1,8 +1,9 @@
 package com.nova.browser
 
-import android.net.Uri
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
-/** Pure URL/search routing so provider behavior can be unit tested. */
+/** Pure URL/search routing so provider behavior can be unit tested on the JVM. */
 object BrowserUrlResolver {
     fun resolve(input: String, engine: String = "Google"): String? {
         val value = input.trim()
@@ -11,7 +12,7 @@ object BrowserUrlResolver {
         if (value.contains('.') && !value.contains(' ') && !value.startsWith("about:", true)) {
             return "https://$value"
         }
-        val query = Uri.encode(value)
+        val query = URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
         return when (engine) {
             "Bing" -> "https://www.bing.com/search?q=$query"
             "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
