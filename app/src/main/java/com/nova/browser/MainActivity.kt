@@ -2,6 +2,8 @@ package com.nova.browser
 
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import android.app.AlertDialog
 import android.text.Editable
 import android.text.TextWatcher
@@ -15,7 +17,10 @@ import org.mozilla.geckoview.TranslationsController
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.FilePrompt
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.FolderUploadPrompt
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.net.Uri
 import android.os.Bundle
 import android.graphics.Typeface
@@ -48,6 +53,8 @@ import org.mozilla.geckoview.GeckoView
 
 /** Nova browser core. GeckoView is the only rendering engine. */
 class MainActivity : ComponentActivity() {
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private var notificationPermissionRequestPending = false
     private lateinit var runtime: GeckoRuntime
     private lateinit var browserView: GeckoView
     private lateinit var secondaryBrowserView: GeckoView
@@ -104,6 +111,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            notificationPermissionRequestPending = false
+            if (!granted) toast("Downloads still work, but Android may hide their notifications until permission is enabled")
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
@@ -497,6 +508,7 @@ class MainActivity : ComponentActivity() {
                 if (body == null) { toast("This download has no readable response body"); return }
                 val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
+                requestDownloadNotificationPermission()
                 novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
                 toast("Webpage download received · saving to Downloads/Nova")
             }
@@ -1006,6 +1018,13 @@ class MainActivity : ComponentActivity() {
         render(""); dialog.show()
     }
 
+    private fun requestDownloadNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !notificationPermissionRequestPending) {
+            notificationPermissionRequestPending = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     private fun startDownload(input: String) {
         if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
             toast("Downloads are disabled in private and Guest Mode because files remain on the device")
@@ -1013,6 +1032,7 @@ class MainActivity : ComponentActivity() {
         }
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
+        requestDownloadNotificationPermission()
         runCatching { novaDownloads.enqueue(url); toast("Download started · resumable") }
             .onFailure { toast("Download could not start: ${it?.localizedMessage ?: "Unknown error"}") }
     }

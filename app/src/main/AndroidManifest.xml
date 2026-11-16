@@ -2,9 +2,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@drawable/ic_nova_launcher"
+        android:roundIcon="@drawable/ic_nova_launcher"
         android:label="Nova Browser"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

@@ -104,8 +104,9 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             val vault = PasswordVault(applicationContext)
             val localVault = vault.exportForSync()
             val remote = cloud.downloadEncrypted()
-            val merged = if (remote.first == null) localSnapshot else NovaSyncMerge.merge(localSnapshot,
-                JSONObject(CloudCrypto.decrypt(remote.first, passphrase)))
+            val remoteSnapshot = remote.first
+            val merged = if (remoteSnapshot == null) localSnapshot else NovaSyncMerge.merge(localSnapshot,
+                JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val vaultMap = linkedMapOf<String, JSONObject>()
             remote.second?.let { encrypted ->
                 val remoteVault = JSONArray(CloudCrypto.decrypt(encrypted, passphrase))
