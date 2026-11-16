@@ -437,7 +437,7 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this)
         val grid = GridLayout(this).apply { columnCount = 2; useDefaultMargins = true }
         val normal = tabs.indices.filter { !tabs[it].isPrivate }
-        val private = tabs.indices.filter { tabs[it].isPrivate }
+        val privateIndices = tabs.indices.filter { tabs[it].isPrivate }
         fun addSection(label: String, indices: List<Int>) {
             if (indices.isEmpty()) return
             val heading = TextView(this).apply { text = "$label (${indices.size})"; textSize = 13f; setTextColor(0xFFD8CBE8.toInt()); setPadding(8, 14, 8, 6) }
@@ -469,7 +469,7 @@ class MainActivity : Activity() {
             }
         }
         addSection("NORMAL TABS", normal)
-        addSection("PRIVATE TABS", private)
+        addSection("PRIVATE TABS", privateIndices)
         scroll.addView(grid)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         tabDialog = AlertDialog.Builder(this).setTitle("Tabs · ${tabs.size}")
