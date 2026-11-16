@@ -40,13 +40,24 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Verify BrowserStack secrets
+      - name: Parse and verify BrowserStack credentials
         env:
-          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          ROHANSAHA_NGXOSY: ${{ secrets.ROHANSAHA_NGXOSY }}
         run: |
-          test -n "$BROWSERSTACK_USERNAME" || { echo "Missing BROWSERSTACK_USERNAME repository secret"; exit 1; }
-          test -n "$BROWSERSTACK_ACCESS_KEY" || { echo "Missing BROWSERSTACK_ACCESS_KEY repository secret"; exit 1; }
+          set -euo pipefail
+          BROWSERSTACK_USERNAME="$(printf '%s\n' "$ROHANSAHA_NGXOSY" | sed -n '1p' | tr -d '\r')"
+          BROWSERSTACK_ACCESS_KEY="$(printf '%s\n' "$ROHANSAHA_NGXOSY" | sed -n '2p' | tr -d '\r')"
+          EXTRA_LINE="$(printf '%s\n' "$ROHANSAHA_NGXOSY" | sed -n '3p' | tr -d '\r')"
+          if [ -z "$BROWSERSTACK_USERNAME" ] || [ -z "$BROWSERSTACK_ACCESS_KEY" ] || [ -n "$EXTRA_LINE" ]; then
+            echo "ROHANSAHA_NGXOSY must contain exactly two non-empty lines: username, then access key."
+            exit 1
+          fi
+          echo "::add-mask::$BROWSERSTACK_USERNAME"
+          echo "::add-mask::$BROWSERSTACK_ACCESS_KEY"
+          {
+            printf 'BROWSERSTACK_USERNAME=%s\n' "$BROWSERSTACK_USERNAME"
+            printf 'BROWSERSTACK_ACCESS_KEY=%s\n' "$BROWSERSTACK_ACCESS_KEY"
+          } >> "$GITHUB_ENV"
 
       - name: Build universal debug App Bundle
         run: ./gradlew --no-daemon :app:bundleDebug
@@ -54,8 +65,8 @@ jobs:
       - name: Upload Nova to BrowserStack App Automate
         id: upload
         env:
-          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}
         run: |
           set -euo pipefail
           APP_FILE="app/build/outputs/bundle/debug/app-debug.aab"
@@ -73,8 +84,8 @@ jobs:
 
       - name: Run home screen and search bar tests
         env:
-          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}
           BROWSERSTACK_APP_URL: ${{ steps.upload.outputs.app_url }}
           BROWSERSTACK_DEVICE_NAME: ${{ inputs.device_name }}
           BROWSERSTACK_OS_VERSION: ${{ inputs.os_version }}
