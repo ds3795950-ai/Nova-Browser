@@ -794,14 +794,25 @@ class MainActivity : ComponentActivity() {
             val savedActiveIndex = prefs.getInt("active_normal_tab", 0)
             for (i in 0 until saved.length()) {
                 val item = saved.getJSONObject(i)
-                createTab(false, item.optString("url", HOME_URL))
-                tabs.last().group = item.optString("group", "Ungrouped")
-                tabs.last().title = item.optString("title", "New tab")
-                tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
+                val tab = BrowserTab(
+                    session = null,
+                    isPrivate = false,
+                    isGuest = false,
+                    lastUrl = url,
+                    group = item.optString("group", "Ungrouped"),
+                    title = item.optString("title", "New tab"),
+                    desktopSite = isDesktopUrl(url),
+                    readerOriginalUrl = item.optString("readerOriginalUrl")
+                        .takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                )
+                tabs.add(tab)
             }
             if (tabs.isNotEmpty()) {
-                val index = savedActiveIndex.coerceIn(tabs.indices)
-                switchTab(index)
+                activeIndex = savedActiveIndex.coerceIn(tabs.indices)
+                // Only the selected tab gets a GeckoSession on startup. Other tabs
+                // remain lightweight records until the user opens them.
+                switchTab(activeIndex)
             }
         } catch (_: Exception) {
             prefs.edit().remove("open_normal_tabs").apply()
