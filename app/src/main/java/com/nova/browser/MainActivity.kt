@@ -2,17 +2,18 @@ package com.nova.browser
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.DownloadManager
-import android.database.Cursor
-import android.os.Environment
 import android.text.Editable
 import android.text.TextWatcher
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.WebResponse
+import org.mozilla.geckoview.TranslationsController
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.FilePrompt
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse
+import org.mozilla.geckoview.GeckoSession.PromptDelegate.FolderUploadPrompt
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -50,7 +51,8 @@ class MainActivity : Activity() {
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
-    private val downloadManager by lazy { getSystemService(DOWNLOAD_SERVICE) as DownloadManager }
+    private lateinit var novaDownloads: NovaDownloadManager
+    private var readerOriginalUrl: String? = null
     private val bookmarkRequestCode = 4101
     private val uploadRequestCode = 4102
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -88,6 +90,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
+        novaDownloads = NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
         val previousGuestContext = prefs.getString("guest_context_id", null)
         if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
         guestContextId = "nova-guest-${UUID.randomUUID()}"
@@ -345,7 +348,7 @@ class MainActivity : Activity() {
         session.promptDelegate = object : GeckoSession.PromptDelegate {
             override fun onFilePrompt(session: GeckoSession, prompt: FilePrompt): GeckoResult<PromptResponse> {
                 if (prompt.type == FilePrompt.Type.FOLDER) {
-                    toast("Folder upload is not supported yet")
+                    toast("Folder selection is handled by the page's folder-upload confirmation")
                     return GeckoResult.fromValue(prompt.dismiss())
                 }
                 pendingFilePrompt = prompt
@@ -360,6 +363,37 @@ class MainActivity : Activity() {
                 try { startActivityForResult(picker, uploadRequestCode) }
                 catch (error: Exception) { pendingFilePrompt = null; pendingFileResult = null; result.complete(prompt.dismiss()); toast("Could not open file picker") }
                 return result
+            }
+
+            override fun onFolderUploadPrompt(session: GeckoSession, prompt: FolderUploadPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Upload folder?")
+                        .setMessage("The website is requesting access to upload the folder ${prompt.directoryName ?: "selected folder"}. Its files may be sent to this site.")
+                        .setPositiveButton("Allow") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
+                        .setNegativeButton("Deny") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                        .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                        .show()
+                }
+                return result
+            }
+        }
+        session.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                val body = response.body
+                if (body == null) { toast("This download has no readable response body"); return }
+                val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
+                val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
+                novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
+                toast("Webpage download received · saving to Downloads/Nova")
+            }
+            override fun onTitleChange(session: GeckoSession, title: String?) {
+                if (!title.isNullOrBlank()) {
+                    val tab = tabs.firstOrNull { it.session === session } ?: return
+                    tab.title = title
+                    if (currentTab() === tab) tabLabel.text = title.take(32)
+                }
             }
         }
         session.open(runtime)
@@ -827,56 +861,74 @@ class MainActivity : Activity() {
     }
 
     private fun startDownload(input: String) {
-        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) { toast("Downloads are disabled in private and Guest Mode because files remain on the device"); return }
+        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+            toast("Downloads are disabled in private and Guest Mode because files remain on the device")
+            return
+        }
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
-        runCatching {
-            val name = Uri.parse(url).lastPathSegment?.takeIf { it.isNotBlank() } ?: "nova-download-${System.currentTimeMillis()}"
-            val request = DownloadManager.Request(Uri.parse(url))
-                .setTitle(name).setDescription("Downloading with Nova Browser")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true).setAllowedOverRoaming(false)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
-            val id = downloadManager.enqueue(request)
-            val ids = prefs.getStringSet("nova_download_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
-            ids.add(id.toString()); prefs.edit().putStringSet("nova_download_ids", ids).apply()
-            toast("Download started")
-        }.onFailure { toast("Download could not start: ${it.localizedMessage}") }
+        runCatching { novaDownloads.enqueue(url); toast("Download started · resumable") }
+            .onFailure { toast("Download could not start: ${it.localizedMessage}") }
+    }
+
+    private fun updateDownloadSummary(items: List<NovaDownloadManager.Item>) {
+        if (!::pageStatus.isInitialized || items.isEmpty()) return
+        val active = items.count { it.state == "RUNNING" || it.state == "QUEUED" || it.state == "FINALIZING" }
+        if (active > 0 && currentTab()?.isPrivate != true && currentTab()?.isGuest != true) {
+            pageStatus.text = "Downloads · $active active"
+        }
     }
 
     private fun showDownloads() {
-        val ids = prefs.getStringSet("nova_download_ids", emptySet())?.mapNotNull { it.toLongOrNull() }.orEmpty()
-        if (ids.isEmpty()) { downloadPrompt(); return }
-        val rows = mutableListOf<Pair<Long, String>>()
-        ids.forEach { id ->
-            val cursor: Cursor? = runCatching { downloadManager.query(DownloadManager.Query().setFilterById(id)) }.getOrNull()
-            cursor?.use { c -> if (c.moveToFirst()) {
-                val title = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE))
-                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                val downloaded = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                val label = when (status) {
-                    DownloadManager.STATUS_SUCCESSFUL -> "Complete"
-                    DownloadManager.STATUS_FAILED -> "Failed"
-                    DownloadManager.STATUS_PAUSED -> "Paused by Android"
-                    DownloadManager.STATUS_PENDING -> "Waiting"
-                    DownloadManager.STATUS_RUNNING -> if (total > 0) "${downloaded * 100 / total}%" else "Downloading"
-                    else -> "Unknown"
-                }
-                rows.add(id to "$title · $label")
-            } }
+        val items = novaDownloads.items()
+        if (items.isEmpty()) { downloadPrompt(); return }
+        val rows = items.map { item ->
+            val state = when (item.state) {
+                "RUNNING" -> "Downloading · ${item.progressLabel()}"
+                "QUEUED" -> "Queued"
+                "PAUSED" -> "Paused · ${item.progressLabel()}"
+                "FINALIZING" -> "Saving to Downloads…"
+                "COMPLETE" -> "Complete · ${item.progressLabel()}"
+                "FAILED" -> "Failed · ${item.error}"
+                else -> item.state
+            }
+            "${item.fileName}\n$state"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Nova Downloads · ${items.size}")
+            .setItems(rows) { _, which -> showDownloadActions(items[which]) }
+            .setPositiveButton("New download") { _, _ -> downloadPrompt() }
+            .setNeutralButton("Refresh", null)
+            .setNegativeButton("Close", null).show()
+    }
+
+    private fun showDownloadActions(item: NovaDownloadManager.Item) {
+        val actions = when (item.state) {
+            "RUNNING", "QUEUED", "FINALIZING" -> arrayOf("Pause", "Cancel")
+            "PAUSED", "FAILED" -> arrayOf("Resume", "Cancel")
+            "COMPLETE" -> arrayOf("Open file", "Remove from list")
+            else -> arrayOf("Resume", "Cancel")
         }
-        if (rows.isEmpty()) { toast("No active or saved Nova downloads"); downloadPrompt(); return }
-        AlertDialog.Builder(this).setTitle("Downloads")
-            .setItems(rows.map { it.second }.toTypedArray()) { _, which ->
-                val id = rows[which].first
-                AlertDialog.Builder(this).setItems(arrayOf("Cancel / remove download", "Open Downloads folder")) { _, action ->
-                    if (action == 0) { downloadManager.remove(id); val remaining = ids.filterNot { it == id }.map { it.toString() }.toSet(); prefs.edit().putStringSet("nova_download_ids", remaining).apply(); toast("Download removed") }
-                    else startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))
-                }.show()
-            }.setPositiveButton("New download") { _, _ -> downloadPrompt() }
-            .setNegativeButton("Close", null)
-            .setNeutralButton("System downloads") { _, _ -> startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)) }.show()
+        AlertDialog.Builder(this).setTitle(item.fileName).setItems(actions) { _, which ->
+            when (actions[which]) {
+                "Pause" -> { novaDownloads.pause(item.id); toast("Pausing download…") }
+                "Resume" -> { novaDownloads.resume(item.id); toast("Resuming with HTTP Range when supported…") }
+                "Cancel" -> { novaDownloads.cancel(item.id); toast("Download cancelled") }
+                "Open file" -> openDownloadedFile(item)
+                "Remove from list" -> novaDownloads.cancel(item.id)
+            }
+        }.show()
+    }
+
+    private fun openDownloadedFile(item: NovaDownloadManager.Item) {
+        if (item.savedUri.isBlank()) { toast("Downloaded file location is unavailable"); return }
+        runCatching {
+            val uri = Uri.parse(item.savedUri)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, item.mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        }.onFailure { toast("No app can open this file: ${it.localizedMessage}") }
     }
 
     private fun downloadPrompt() {
@@ -903,20 +955,54 @@ class MainActivity : Activity() {
     }
 
     private fun openReaderMode() {
-        val url = currentTab()?.lastUrl ?: return
-        if (!url.startsWith("http")) { toast("Open an article first"); return }
-        val readerUrl = "about:reader?url=${Uri.encode(url)}"
         val tab = currentTab() ?: return
+        val url = tab.lastUrl
+        if (!url.startsWith("http")) { toast("Open an article first"); return }
+        readerOriginalUrl = url
+        val readerUrl = "about:reader?url=${Uri.encode(url)}"
         tab.lastUrl = readerUrl
         addressBar.setText(readerUrl)
+        tabLabel.text = "Reader view"
         showBrowserPage()
         ensureSession(tab).loadUri(readerUrl)
+        AlertDialog.Builder(this).setTitle("Reader view")
+            .setMessage("GeckoView's built-in reader extracts the article and provides its own reading controls. Use the browser menu to leave Reader view.")
+            .setPositiveButton("OK", null).setNeutralButton("Exit reader") { _, _ -> exitReaderMode() }.show()
+    }
+
+    private fun exitReaderMode() {
+        val original = readerOriginalUrl ?: return
+        readerOriginalUrl = null
+        navigate(original)
     }
 
     private fun translatePage() {
-        val url = currentTab()?.lastUrl ?: return
-        if (!url.startsWith("http")) { toast("Open a webpage first"); return }
-        navigate("https://translate.google.com/translate?sl=auto&tl=en&u=${Uri.encode(url)}")
+        val tab = currentTab() ?: return
+        if (!tab.lastUrl.startsWith("http")) { toast("Open a webpage first"); return }
+        val languages = arrayOf(
+            "English" to "en", "Hindi" to "hi", "Bengali" to "bn", "Assamese" to "as",
+            "Japanese" to "ja", "Chinese" to "zh", "Spanish" to "es", "French" to "fr",
+            "German" to "de", "Arabic" to "ar", "Portuguese" to "pt", "Russian" to "ru"
+        )
+        var source = "en"
+        AlertDialog.Builder(this).setTitle("Translate from")
+            .setItems(languages.map { it.first }.toTypedArray()) { _, fromIndex ->
+                source = languages[fromIndex].second
+                AlertDialog.Builder(this).setTitle("Translate to")
+                    .setItems(languages.map { it.first }.toTypedArray()) { _, toIndex ->
+                        val target = languages[toIndex].second
+                        if (source == target) { toast("Choose two different languages"); return@setItems }
+                        val translation = tab.session?.sessionTranslation
+                        if (translation == null) { toast("GeckoView translation is unavailable for this session"); return@setItems }
+                        toast("Preparing translation models…")
+                        translation.translate(source, target,
+                            TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
+                        ).accept(
+                            { runOnUiThread { toast("Translation started · $source → $target") } },
+                            { error -> runOnUiThread { toast("Translation unavailable: ${error.localizedMessage ?: "language model not supported"}") } }
+                        )
+                    }.setNegativeButton("Cancel", null).show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun cleanupGuestContextIfIdle() {
@@ -977,7 +1063,7 @@ class MainActivity : Activity() {
 
     private fun showSettings() {
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "About Nova")
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "About Nova")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
@@ -1003,7 +1089,8 @@ class MainActivity : Activity() {
                     toast("Private and Guest tabs closed")
                 }
                 4 -> closeGuestTabs()
-                5 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
+                5 -> exitReaderMode()
+                6 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
                     .setPositiveButton("OK", null).show()
             }
         }.show()
