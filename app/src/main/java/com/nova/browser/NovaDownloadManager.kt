@@ -205,16 +205,47 @@ class NovaDownloadManager(
     }
 
     fun saveExternalStream(stream: InputStream, fileName: String, mimeType: String) {
+        val id = UUID.randomUUID().toString()
+        val item = Item(id, "", sanitize(fileName), mimeType, 0, 0, "SAVING")
+        val worker = Running(item)
+        running[id] = worker
+        put(item)
         executor.execute {
-            val safeName = sanitize(fileName)
-            val temp = File(context.cacheDir, "external-${UUID.randomUUID()}.part")
+            val part = partial(id)
             try {
-                stream.use { input -> FileOutputStream(temp).use { output -> input.copyTo(output) } }
-                publish(temp, safeName, mimeType)
-                android.os.Handler(android.os.Looper.getMainLooper()).post { changed(items()) }
-            } catch (_: Exception) {
+                part.parentFile?.mkdirs()
+                stream.use { input ->
+                    FileOutputStream(part, false).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var lastUpdate = System.currentTimeMillis()
+                        while (!worker.cancel.get()) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                            val now = System.currentTimeMillis()
+                            if (now - lastUpdate >= 500) {
+                                worker.item = worker.item.copy(downloaded = part.length())
+                                put(worker.item)
+                                lastUpdate = now
+                            }
+                        }
+                        output.fd.sync()
+                    }
+                }
+                if (worker.cancel.get()) {
+                    synchronized(this) { records.remove(id); persist(); changed(items()) }
+                } else {
+                    val uri = publish(part, item.fileName, item.mimeType)
+                    worker.item = worker.item.copy(downloaded = part.length(), state = "COMPLETE", savedUri = uri.toString())
+                    put(worker.item)
+                }
+            } catch (error: Exception) {
                 runCatching { stream.close() }
-            } finally { temp.delete() }
+                if (!worker.cancel.get()) put(worker.item.copy(state = "FAILED", error = error.message ?: "Could not save browser download"))
+            } finally {
+                part.delete()
+                running.remove(id)
+            }
         }
     }
 

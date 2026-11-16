@@ -910,7 +910,7 @@ class MainActivity : Activity() {
                 "RUNNING" -> "Downloading · ${item.progressLabel()}"
                 "QUEUED" -> "Queued"
                 "PAUSED" -> "Paused · ${item.progressLabel()}"
-                "FINALIZING" -> "Saving to Downloads…"
+                "FINALIZING", "SAVING" -> "Saving to Downloads… · ${item.progressLabel()}"
                 "COMPLETE" -> "Complete · ${item.progressLabel()}"
                 "FAILED" -> "Failed · ${item.error}"
                 else -> item.state
@@ -927,6 +927,7 @@ class MainActivity : Activity() {
     private fun showDownloadActions(item: NovaDownloadManager.Item) {
         val actions = when (item.state) {
             "RUNNING", "QUEUED", "FINALIZING" -> arrayOf("Pause", "Cancel")
+            "SAVING" -> arrayOf("Cancel")
             "PAUSED", "FAILED" -> arrayOf("Resume", "Cancel")
             "COMPLETE" -> arrayOf("Open file", "Remove from list")
             else -> arrayOf("Resume", "Cancel")
