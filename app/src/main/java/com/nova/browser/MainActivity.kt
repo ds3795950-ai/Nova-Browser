@@ -1,6 +1,7 @@
 package com.nova.browser
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import android.app.AlertDialog
 import android.text.Editable
 import android.text.TextWatcher
@@ -46,7 +47,7 @@ import android.content.ClipboardManager
 import org.mozilla.geckoview.GeckoView
 
 /** Nova browser core. GeckoView is the only rendering engine. */
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private lateinit var runtime: GeckoRuntime
     private lateinit var browserView: GeckoView
     private lateinit var secondaryBrowserView: GeckoView
@@ -103,6 +104,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val tab = currentTab()
+                if (tab?.canGoBack == true) tab.session?.goBack() else finish()
+            }
+        })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
         passwordVault = PasswordVault(this)
@@ -124,6 +131,7 @@ class MainActivity : Activity() {
         runtime.settings.setLoginAutofillEnabled(false)
         configureExtensionPermissions()
         novaDownloads = NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
+        novaDownloads.resumeInterrupted()
         val previousGuestContext = prefs.getString("guest_context_id", null)
         if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
         guestContextId = "nova-guest-${UUID.randomUUID()}"
@@ -818,7 +826,18 @@ class MainActivity : Activity() {
         }.toMutableList()
     }
 
-    private fun saveBookmarks(items: List<BookmarkEntry>) {
+    private fun saveBookmarks(items: List<BookmarkEntry>, trackDeletes: Boolean = true) {
+        if (trackDeletes) {
+            val previous = readBookmarks()
+            val retained = items.map { it.url }.toSet()
+            val removed = previous.filterNot { it.url in retained }
+            if (removed.isNotEmpty()) {
+                val tombstones = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+                val deletedAt = System.currentTimeMillis()
+                removed.forEach { tombstones.put(it.url, maxOf(deletedAt, it.addedAt + 1L)) }
+                prefs.edit().putString("bookmark_tombstones", tombstones.toString()).apply()
+            }
+        }
         val array = JSONArray()
         items.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
         prefs.edit().putString("bookmarks_v2", array.toString()).putStringSet("bookmarks", items.map { it.url }.toSet()).apply()
@@ -831,7 +850,11 @@ class MainActivity : Activity() {
         val items = readBookmarks()
         val existing = items.indexOfFirst { it.url == tab.lastUrl }
         if (existing >= 0) { items.removeAt(existing); saveBookmarks(items); toast("Bookmark removed") }
-        else { items.add(BookmarkEntry(tab.lastUrl, tab.title, "General", System.currentTimeMillis())); saveBookmarks(items); toast("Bookmark saved") }
+        else {
+            val priorDelete = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}").optLong(tab.lastUrl) }.getOrDefault(0L)
+            items.add(BookmarkEntry(tab.lastUrl, tab.title, "General", maxOf(System.currentTimeMillis(), priorDelete + 1L)))
+            saveBookmarks(items); toast("Bookmark saved")
+        }
     }
 
     private fun showBookmarks() {
@@ -924,10 +947,15 @@ class MainActivity : Activity() {
         startActivityForResult(intent, bookmarkRequestCode)
     }
 
+    private fun clearBrowsingHistory() {
+        prefs.edit().putLong("history_cleared_at", System.currentTimeMillis()).remove("history").remove("history_v2").apply()
+    }
+
     private fun addHistory(url: String) {
         if (url.isBlank() || url == HOME_URL) return
         val items = readHistory().filterNot { it.url == url }.toMutableList()
-        items.add(HistoryEntry(url, Uri.parse(url).host ?: url, System.currentTimeMillis()))
+        val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
+        items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
         val array = JSONArray()
         items.takeLast(500).forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
         prefs.edit().putString("history_v2", array.toString()).apply()
@@ -950,7 +978,7 @@ class MainActivity : Activity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(search); content.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
         val dialog = AlertDialog.Builder(this).setTitle("History · ${items.size}").setView(content)
-            .setNeutralButton("Clear history") { _, _ -> prefs.edit().remove("history").remove("history_v2").apply(); toast("Browsing history cleared") }
+            .setNeutralButton("Clear history") { _, _ -> clearBrowsingHistory(); toast("Browsing history cleared") }
             .setNegativeButton("Close", null).create()
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -1434,7 +1462,7 @@ class MainActivity : Activity() {
                     homeShortcuts.visibility = if (show) View.VISIBLE else View.GONE
                     toast(if (show) "Home shortcuts shown" else "Home shortcuts hidden")
                 }
-                2 -> { prefs.edit().remove("history").remove("history_v2").apply(); toast("Browsing history cleared") }
+                2 -> { clearBrowsingHistory(); toast("Browsing history cleared") }
                 3 -> {
                     val activeId = currentTab()?.id
                     tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
@@ -1495,7 +1523,7 @@ class MainActivity : Activity() {
 
     private fun showCloudOtp(email: String) {
         val input = EditText(this).apply { hint = "6-digit email code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; isSingleLine = true }
-        AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the one-time code sent to $email")
+        AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the six-digit code sent to $email")
             .setView(input).setPositiveButton("Verify") { _, _ ->
                 val code = input.text.toString().trim()
                 toast("Verifying code…")
@@ -1525,6 +1553,11 @@ class MainActivity : Activity() {
 
     private fun performCloudSync(passphrase: CharArray) {
         try {
+            val userId = cloudSync.signedInUserId() ?: throw IllegalStateException("Sign in to Nova Cloud first")
+            val boundUserId = prefs.getString("cloud_sync_user_id", null)
+            if (!boundUserId.isNullOrBlank() && boundUserId != userId) {
+                throw IllegalStateException("This device's local browser profile is linked to a different Nova Cloud account. Use that account or clear this app's local data before switching accounts.")
+            }
             val local = buildSyncSnapshot()
             val localVault = passwordVault.exportForSync()
             val remote = cloudSync.downloadEncrypted()
@@ -1551,7 +1584,7 @@ class MainActivity : Activity() {
             runOnUiThread {
                 applySyncSnapshot(merged)
                 passwordVault.importFromSync(mergedVault)
-                prefs.edit().putBoolean("cloud_sync_enabled", true).apply()
+                prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
                 toast("Encrypted cloud sync completed")
             }
         } catch (error: Exception) {
@@ -1572,31 +1605,14 @@ class MainActivity : Activity() {
             .put("font_scale_index", prefs.getInt("font_scale_index", 2))
             .put("desktop_sites", JSONArray(prefs.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
             .put("bookmark_folders", JSONArray(prefs.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
-        return JSONObject().put("schema", 1).put("bookmarks", bookmarks).put("history", history)
+        val tombstones = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        return JSONObject().put("schema", 2).put("bookmarks", bookmarks).put("history", history)
+            .put("bookmark_tombstones", tombstones)
+            .put("history_cleared_at", prefs.getLong("history_cleared_at", 0L))
             .put("workspaces", workspaces).put("settings", settings)
     }
 
-    private fun mergeSyncSnapshots(local: JSONObject, remote: JSONObject): JSONObject {
-        val result = JSONObject(remote.toString())
-        fun mergeArray(key: String, idField: String, maxField: String? = null) {
-            val merged = linkedMapOf<String, JSONObject>()
-            val old = remote.optJSONArray(key) ?: JSONArray()
-            val current = local.optJSONArray(key) ?: JSONArray()
-            for (i in 0 until old.length()) { val item = old.getJSONObject(i); merged[item.optString(idField)] = item }
-            for (i in 0 until current.length()) {
-                val item = current.getJSONObject(i); val id = item.optString(idField)
-                val prior = merged[id]
-                if (prior == null || maxField == null || item.optLong(maxField) >= prior.optLong(maxField)) merged[id] = item
-            }
-            result.put(key, JSONArray().also { array -> merged.values.forEach { array.put(it) } })
-        }
-        mergeArray("bookmarks", "url", "addedAt")
-        mergeArray("history", "url", "visitedAt")
-        mergeArray("workspaces", "name")
-        result.put("settings", local.optJSONObject("settings") ?: remote.optJSONObject("settings") ?: JSONObject())
-        result.put("schema", 1)
-        return result
-    }
+    private fun mergeSyncSnapshots(local: JSONObject, remote: JSONObject): JSONObject = NovaSyncMerge.merge(local, remote)
 
     private fun applySyncSnapshot(snapshot: JSONObject) {
         val bookmarks = snapshot.optJSONArray("bookmarks") ?: JSONArray()
@@ -1606,11 +1622,14 @@ class MainActivity : Activity() {
             if (url.startsWith("http://") || url.startsWith("https://")) bookmarkItems.add(BookmarkEntry(url,
                 item.optString("title", Uri.parse(url).host ?: url), item.optString("folder", "General"), item.optLong("addedAt")))
         }
-        saveBookmarks(bookmarkItems)
+        val tombstones = snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()
+        prefs.edit().putString("bookmark_tombstones", tombstones.toString())
+            .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L)).apply()
+        saveBookmarks(bookmarkItems, trackDeletes = false)
         val history = snapshot.optJSONArray("history") ?: JSONArray()
         val historyItems = JSONArray()
         val safeHistory = (0 until history.length()).map { history.getJSONObject(it) }
-            .filter { it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://") }
+            .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && it.optLong("visitedAt") > snapshot.optLong("history_cleared_at", 0L) }
             .sortedByDescending { it.optLong("visitedAt") }.take(500)
         safeHistory.forEach { historyItems.put(it) }
         prefs.edit().putString("history_v2", historyItems.toString()).apply()
@@ -1707,11 +1726,6 @@ class MainActivity : Activity() {
                 }
             }.onFailure { toast("Bookmark transfer failed: ${it?.localizedMessage ?: "Unknown error"}") }
         }
-    }
-
-    override fun onBackPressed() {
-        val tab = currentTab()
-        if (tab?.canGoBack == true) tab.session?.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {

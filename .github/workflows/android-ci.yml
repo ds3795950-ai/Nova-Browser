@@ -25,7 +25,18 @@ jobs:
         run: gradle :app:testDebugUnitTest
       - name: Assemble debug APK
         run: gradle :app:assembleDebug
-      - name: Assemble release APK (unsigned)
+      - name: Decode release keystore
+        if: ${{ secrets.NOVA_RELEASE_KEYSTORE_BASE64 != '' && secrets.NOVA_RELEASE_STORE_PASSWORD != '' && secrets.NOVA_RELEASE_KEY_ALIAS != '' && secrets.NOVA_RELEASE_KEY_PASSWORD != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.NOVA_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/nova-release.jks"
+          echo "NOVA_RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/nova-release.jks" >> "$GITHUB_ENV"
+      - name: Assemble release APK (signed when release secrets are configured)
+        env:
+          NOVA_RELEASE_STORE_PASSWORD: ${{ secrets.NOVA_RELEASE_STORE_PASSWORD }}
+          NOVA_RELEASE_KEY_ALIAS: ${{ secrets.NOVA_RELEASE_KEY_ALIAS }}
+          NOVA_RELEASE_KEY_PASSWORD: ${{ secrets.NOVA_RELEASE_KEY_PASSWORD }}
         run: gradle :app:assembleRelease
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
@@ -33,6 +44,6 @@ jobs:
           name: nova-apks
           path: |
             app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/app-release-unsigned.apk
+            app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7

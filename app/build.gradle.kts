@@ -2,6 +2,13 @@ plugins {
     id("com.android.application")
 }
 
+val releaseStorePath = System.getenv("NOVA_RELEASE_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("NOVA_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("NOVA_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("NOVA_RELEASE_KEY_PASSWORD")
+val releaseSigningReady = !releaseStorePath.isNullOrBlank() && file(releaseStorePath ?: "__missing_keystore__").isFile &&
+    !releaseStorePassword.isNullOrBlank() && !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
+
 kotlin {
     jvmToolchain(17)
 }
@@ -26,8 +33,20 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseSigningReady) {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -45,6 +64,7 @@ configurations.configureEach {
 }
 
 dependencies {
+    implementation("androidx.activity:activity:1.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.2.20")
     // GeckoView is the sole browser engine.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")

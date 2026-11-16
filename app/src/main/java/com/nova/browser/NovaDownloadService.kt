@@ -50,7 +50,7 @@ class NovaDownloadService : Service() {
         val openIntent = Intent(this, MainActivity::class.java)
         val pending = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val text = if (count == 1) "1 download in progress" else "$count downloads in progress"
-        val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
+        val builder = Notification.Builder(this, CHANNEL_ID)
         return builder.setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Nova Browser")
             .setContentText(text)

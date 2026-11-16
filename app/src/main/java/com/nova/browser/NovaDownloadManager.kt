@@ -86,8 +86,8 @@ class NovaDownloadManager(
                     o.optLong("total"), o.optString("state", "PAUSED"), o.optString("etag"),
                     o.optString("lastModified"), o.optString("savedUri"), o.optString("error"))
                 records[item.id] = when (item.state) {
-                    "RUNNING" -> item.copy(state = "PAUSED")
-                    "SAVING", "FINALIZING" -> item.copy(state = "INTERRUPTED", error = "This transfer was interrupted. Start it again from the page if needed.")
+                    "RUNNING" -> item.copy(state = "INTERRUPTED", error = "Download was interrupted by Android. It will resume when Nova starts.")
+                    "SAVING", "FINALIZING" -> item.copy(state = "INTERRUPTED", error = "The final save was interrupted. Resume to retry the transfer.")
                     else -> item
                 }
             }
@@ -102,6 +102,12 @@ class NovaDownloadManager(
         put(Item(id, url, name, mimeType, 0, 0, "QUEUED"))
         resume(id)
         return id
+    }
+
+    /** Restarts only transfers that were interrupted by process death; user-paused items stay paused. */
+    fun resumeInterrupted() {
+        val pending = synchronized(this) { records.values.filter { it.state == "INTERRUPTED" || it.state == "QUEUED" }.map { it.id } }
+        pending.forEach(::resume)
     }
 
     fun resume(id: String) {

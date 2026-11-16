@@ -79,7 +79,7 @@ class NovaCloudSync(context: Context) {
 
     fun verifyEmailOtp(email: String, code: String) {
         val cleanCode = code.trim()
-        require(cleanCode.matches(Regex("[0-9]{6,8}"))) { "Enter the numeric code from your email" }
+        require(cleanCode.matches(Regex("[0-9]{6}"))) { "Enter the numeric code from your email" }
         val result = request("POST", "/auth/v1/verify", JSONObject().put("type", "email")
             .put("email", email.trim().lowercase()).put("token", cleanCode).toString())
         val session = JSONObject(result)
@@ -91,6 +91,8 @@ class NovaCloudSync(context: Context) {
     }
 
     fun signedInEmail(): String? = runCatching { loadSession()?.optJSONObject("user")?.optString("email")?.takeIf { it.isNotBlank() } }.getOrNull()
+
+    fun signedInUserId(): String? = runCatching { validSession()?.optString("user_id")?.takeIf { it.isNotBlank() } }.getOrNull()
 
     fun signOut() {
         runCatching { validSession()?.let { request("POST", "/auth/v1/logout", "{}", it.getString("access_token")) } }
