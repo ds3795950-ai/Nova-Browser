@@ -292,6 +292,7 @@ class MainActivity : Activity() {
         tabLabel.text = (if (tab.isPrivate) "Private tab" else "Tab") + " · ${index + 1}/${tabs.size}"
         pageStatus.text = if (tab.isPrivate) "Private session" else "Normal session · ${tab.group}"
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
+        persistTabs()
     }
 
     private fun navigate(input: String) {
@@ -334,6 +335,7 @@ class MainActivity : Activity() {
         actions.addView(actionButton("Workspaces") { showSavedWorkspaces() })
         content.addView(actions)
         val scroll = ScrollView(this)
+        var tabDialog: AlertDialog? = null
         val grid = GridLayout(this).apply { columnCount = 2; useDefaultMargins = true }
         val normal = tabs.indices.filter { !tabs[it].isPrivate }
         val private = tabs.indices.filter { tabs[it].isPrivate }
@@ -352,9 +354,9 @@ class MainActivity : Activity() {
                 val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(0xFFB9AEC8.toInt()); maxLines = 2; setPadding(0, 5, 0, 5) }
                 val groupText = TextView(this).apply { text = "Group: ${tab.group}"; textSize = 10f; setTextColor(0xFFD8CBE8.toInt()) }
                 card.addView(headingText); card.addView(urlText); card.addView(groupText)
-                card.addView(actionButton("Open") { switchTab(index) })
-                card.addView(actionButton("Group / rename") { editTabGroup(index) })
-                card.addView(actionButton("Close") { closeTabAt(index) })
+                card.addView(actionButton("Open") { tabDialog?.dismiss(); switchTab(index) })
+                card.addView(actionButton("Group / rename") { tabDialog?.dismiss(); editTabGroup(index) })
+                card.addView(actionButton("Close") { tabDialog?.dismiss(); closeTabAt(index) })
                 grid.addView(card, GridLayout.LayoutParams().apply { width = 0; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); setMargins(5, 5, 5, 5) })
             }
         }
@@ -362,8 +364,9 @@ class MainActivity : Activity() {
         addSection("PRIVATE TABS", private)
         scroll.addView(grid)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        AlertDialog.Builder(this).setTitle("Tabs · ${tabs.size}")
-            .setView(content).setNegativeButton("Done", null).show()
+        tabDialog = AlertDialog.Builder(this).setTitle("Tabs · ${tabs.size}")
+            .setView(content).setNegativeButton("Done", null).create()
+        tabDialog?.show()
     }
 
     private fun editTabGroup(index: Int) {
@@ -392,13 +395,15 @@ class MainActivity : Activity() {
         if (index !in tabs.indices) return
         val wasActive = index == activeIndex
         tabs.removeAt(index).session.close()
-        persistTabs()
-        if (tabs.isEmpty()) createTab(false, HOME_URL)
-        else {
-            if (index < activeIndex) activeIndex--
-            if (wasActive) switchTab(activeIndex.coerceIn(tabs.indices))
-            else persistTabs()
+        if (tabs.isEmpty()) {
+            activeIndex = 0
+            createTab(false, HOME_URL)
+            return
         }
+        if (index < activeIndex) activeIndex--
+        else if (wasActive) activeIndex = index.coerceAtMost(tabs.lastIndex)
+        persistTabs()
+        if (wasActive) switchTab(activeIndex.coerceIn(tabs.indices))
     }
 
     private fun saveNamedSession() {
