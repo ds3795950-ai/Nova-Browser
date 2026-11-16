@@ -93,7 +93,7 @@ class MainActivity : Activity() {
         controls.addView(actionButton("←") { goBack() })
         controls.addView(actionButton("→") { goForward() })
         controls.addView(actionButton("↻") { reloadPage() })
-        controls.addView(actionButton("Home") { navigate(HOME_URL) })
+        controls.addView(actionButton("Home") { goHome() })
         controls.addView(actionButton("＋") { createTab(false, HOME_URL) })
         controls.addView(actionButton("Tabs") { showTabs() })
         controls.addView(actionButton("Private") { createTab(true, HOME_URL) })
@@ -204,6 +204,11 @@ class MainActivity : Activity() {
         searchEngineButton.text = "$searchEngine ▾"
         searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
+    }
+
+    private fun goHome() {
+        currentTab()?.lastUrl = HOME_URL
+        showHomeScreen()
     }
 
     private fun showBrowserPage() {
