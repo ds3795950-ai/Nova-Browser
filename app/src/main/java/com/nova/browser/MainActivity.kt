@@ -81,7 +81,7 @@ class MainActivity : Activity() {
         }
         addressBar = EditText(this).apply {
             hint = "Search or enter address"
-            singleLine = true
+            isSingleLine = true
             textSize = 15f
             setTextColor(0xFFFFFFFF.toInt())
             setHintTextColor(0xFFB9AEC8.toInt())
@@ -147,7 +147,7 @@ class MainActivity : Activity() {
         secondaryBrowserView = GeckoView(this)
         secondaryAddressBar = EditText(this).apply {
             hint = "Second pane address"
-            singleLine = true
+            isSingleLine = true
             textSize = 12f
             setTextColor(0xFFFFFFFF.toInt())
             setHintTextColor(0xFFB9AEC8.toInt())
@@ -600,7 +600,7 @@ class MainActivity : Activity() {
         val history = prefs.getStringSet("history", emptySet())?.toMutableSet() ?: mutableSetOf()
         history.remove(url)
         history.add(url)
-        prefs.edit().putStringSet("history", history.takeLast(300).toSet()).apply()
+        prefs.edit().putStringSet("history", history.toList().takeLast(300).toSet()).apply()
     }
 
     private fun showHistory() {
