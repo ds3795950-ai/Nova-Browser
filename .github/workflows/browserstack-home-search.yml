@@ -45,7 +45,10 @@ jobs:
           ROHANSAHA_NGXOSY: ${{ secrets.ROHANSAHA_NGXOSY }}
         run: |
           set -euo pipefail
-          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$ROHANSAHA_NGXOSY" | tr -d '\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
+          # Accept either real newlines or the literal two-character \n separator
+          # (some mobile password managers paste escaped newlines into secret fields).
+          NORMALIZED_SECRET="${ROHANSAHA_NGXOSY//\\n/$'\n'}"
+          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
           if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ]; then
             echo "Expected exactly two non-empty credential lines (username then access key); found ${#CREDENTIAL_LINES[@]}."
             exit 1
