@@ -1024,7 +1024,7 @@ class MainActivity : Activity() {
                             TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
                         ).accept(
                             { runOnUiThread { toast("Translation started · $source → $target") } },
-                            { error -> runOnUiThread { toast("Translation unavailable: ${error.localizedMessage ?: "language model not supported"}") } }
+                            { error -> runOnUiThread { toast("Translation unavailable: ${error?.localizedMessage ?: "language model not supported"}") } }
                         )
                     }.setNegativeButton("Cancel", null).show()
             }.setNegativeButton("Cancel", null).show()

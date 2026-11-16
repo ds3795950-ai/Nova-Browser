@@ -26,3 +26,8 @@
 - Device tests are still required on Android 16 / Realme RMX5313 for downloads, cookies/session isolation, folder upload, translation model downloads, and reader mode. No physical-device test is claimed here.
 - HTTP Range support is server-dependent; non-range servers restart rather than resume. Downloads do not yet run in a dedicated foreground service, so active transfers may stop if Android kills the app process. Partial data and metadata remain so the user can resume after reopening Nova.
 - GeckoView native translation requires its translation toolkit/model support; available language pairs vary by GeckoView build and device.
+
+
+## Follow-up build fix
+
+- Translation failure callback now handles GeckoResult nullable Throwable safely.
