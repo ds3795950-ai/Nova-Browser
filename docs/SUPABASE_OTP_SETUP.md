@@ -19,3 +19,9 @@ The current deployed template uses `{{ .ConfirmationURL }}` instead of `{{ .Toke
 ## Email delivery
 
 The project currently has no custom SMTP host configured. Supabase's default email service is intended for testing and applies recipient/rate restrictions. Configure a verified custom SMTP provider under **Project Settings → Authentication → SMTP Settings** before production use. Do not put SMTP credentials in the Android app or Git repository.
+
+## Important: default SMTP restrictions
+
+The live project has no custom SMTP host configured. Supabase's built-in email provider is limited to 2 emails per hour and only sends to addresses belonging to members of the Supabase organization. For normal users, configure a custom SMTP provider first. On newer Free-tier projects, Supabase also restricts editing auth email templates while using its default SMTP provider; connecting custom SMTP restores template customization. See Supabase's email rate-limit guidance and template customization change.
+
+Nova's code and project OTP length/expiry are aligned, but a real numeric-code email flow cannot be declared complete until the Magic Link template uses `{{ .Token }}` and email delivery is tested through a working SMTP provider.
