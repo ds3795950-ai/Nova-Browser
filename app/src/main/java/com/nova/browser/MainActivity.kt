@@ -1305,7 +1305,7 @@ class MainActivity : ComponentActivity() {
         val current = NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD"))
         val tab = currentTab()
         val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log")
+        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log", "Open Orbot · system VPN routing")
         AlertDialog.Builder(this).setTitle("Nova Shield · ${current.name}")
             .setItems(items) { _, which ->
                 when (which) {
@@ -1332,8 +1332,23 @@ class MainActivity : ComponentActivity() {
                                 .setPositiveButton("OK", null).show() }
                         }, { error -> runOnUiThread { toast("Protection log unavailable: ${error?.localizedMessage ?: "Unknown error"}") } })
                     }
+                    5 -> openOrbotTorRouting()
                 }
             }.setNegativeButton("Close", null).show()
+    }
+
+    private fun openOrbotTorRouting() {
+        val launch = packageManager.getLaunchIntentForPackage("org.torproject.android")
+        if (launch == null) {
+            AlertDialog.Builder(this).setTitle("Orbot is not installed")
+                .setMessage("Install Orbot from the official Tor Project distribution, then return here. Nova does not bundle Tor.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
+            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Guest Mode remains isolated private browsing, not Tor.")
+            .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
+            .setNegativeButton("Cancel", null).show()
     }
 
     private fun showAiAssistant() {
@@ -1364,7 +1379,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 val installed = extensions.orEmpty()
                 val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}")
+                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
                     .setItems(rows) { _, which ->
                         val extension = installed[which]
                         val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")

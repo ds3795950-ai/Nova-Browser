@@ -6,7 +6,7 @@ Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Brow
 
 ## Guest Mode and Tor
 
-Guest Mode is an isolated, ephemeral GeckoView private session. It clears its session context when closed/restarted, but it does **not** route traffic through Tor and does not provide Tor's multi-hop anonymity. Nova's current GeckoView integration has no supported first-party proxy controller for a Tor SOCKS route. Do not describe Guest Mode as Tor-level browsing. A system-wide VPN from a separately installed Tor client may route app traffic, but Nova does not currently verify or enforce that routing.
+Guest Mode is an isolated, ephemeral GeckoView private session. It clears its session context when closed/restarted, but it does **not** route traffic through Tor and does not provide Tor's multi-hop anonymity. Nova's current GeckoView integration has no supported first-party proxy controller for a Tor SOCKS route. The Shield dialog now offers an Orbot launcher; the user must enable Orbot VPN mode and include Nova in Orbot's app list. Android Always-on VPN plus Block connections without VPN can provide fail-closed system routing. Nova cannot independently verify the Tor circuit or enforce the VPN. Do not describe Guest Mode as Tor-level browsing.
 
 ## Extensions
 
