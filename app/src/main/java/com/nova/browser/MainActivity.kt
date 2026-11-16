@@ -123,7 +123,9 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
-                if (tab?.canGoBack == true) tab.session?.goBack() else finish()
+                if (tab?.lastUrl == HOME_URL) finish()
+                else if (tab?.canGoBack == true) tab.session?.goBack()
+                else finish()
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
@@ -183,17 +185,23 @@ class MainActivity : ComponentActivity() {
                 if (actionId == EditorInfo.IME_ACTION_GO ||
                     actionId == EditorInfo.IME_ACTION_SEARCH || enterKey
                 ) {
-                    val query = text.toString()
-                    if (query.isNotBlank()) navigate(query)
+                    submitAddressBar()
                     true
                 } else false
             }
         }
+        val homeButton = actionButton("⌂") { goHome() }.apply {
+            contentDescription = "Home"
+            textSize = 18f
+            minWidth = 40
+            minimumWidth = 40
+        }
+        addressRow.addView(homeButton, LinearLayout.LayoutParams(40, 48))
         addressRow.addView(addressBar, LinearLayout.LayoutParams(0, 48, 1f))
         searchEngineButton = actionButton("$searchEngine ▾") { chooseSearchEngine() }
         searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
         addressRow.addView(searchEngineButton)
-        addressRow.addView(actionButton("Go") { navigate(addressBar.text.toString()) })
+        addressRow.addView(actionButton("Go") { submitAddressBar() })
         top.addView(addressRow)
 
         val controls = LinearLayout(this).apply {
@@ -203,7 +211,6 @@ class MainActivity : ComponentActivity() {
         controls.addView(actionButton("←") { goBack() })
         controls.addView(actionButton("→") { goForward() })
         controls.addView(actionButton("↻") { reloadPage() })
-        controls.addView(actionButton("Home") { goHome() })
         controls.addView(actionButton("＋") { createTab(false, HOME_URL) })
         controls.addView(actionButton("Tabs") { showTabs() })
         controls.addView(actionButton("Split") { chooseSplitTab() })
@@ -360,7 +367,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun goHome() {
-        currentTab()?.lastUrl = HOME_URL
+        currentTab()?.let { tab ->
+            tab.lastUrl = HOME_URL
+            tab.title = "Nova Home"
+            tab.needsReload = false
+            if (!tab.isPrivate && !tab.isGuest) persistTabs()
+        }
         showHomeScreen()
     }
 
@@ -629,6 +641,15 @@ class MainActivity : ComponentActivity() {
         ensureSession(tab).loadUri(target)
         secondaryAddressBar.setText(target)
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
+    }
+
+    private fun submitAddressBar() {
+        val query = addressBar.text?.toString()?.trim().orEmpty()
+        if (query.isEmpty()) return
+        navigate(query)
+        addressBar.clearFocus()
+        (getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+            ?.hideSoftInputFromWindow(addressBar.windowToken, 0)
     }
 
     private fun navigate(input: String) {

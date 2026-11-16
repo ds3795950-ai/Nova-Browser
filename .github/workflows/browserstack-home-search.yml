@@ -45,13 +45,13 @@ jobs:
           ROHANSAHA_NGXOSY: ${{ secrets.ROHANSAHA_NGXOSY }}
         run: |
           set -euo pipefail
-          BROWSERSTACK_USERNAME="$(printf '%s\n' "$ROHANSAHA_NGXOSY" | sed -n '1p' | tr -d '\r')"
-          BROWSERSTACK_ACCESS_KEY="$(printf '%s\n' "$ROHANSAHA_NGXOSY" | sed -n '2p' | tr -d '\r')"
-          EXTRA_LINE="$(printf '%s\n' "$ROHANSAHA_NGXOSY" | sed -n '3p' | tr -d '\r')"
-          if [ -z "$BROWSERSTACK_USERNAME" ] || [ -z "$BROWSERSTACK_ACCESS_KEY" ] || [ -n "$EXTRA_LINE" ]; then
-            echo "ROHANSAHA_NGXOSY must contain exactly two non-empty lines: username, then access key."
+          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$ROHANSAHA_NGXOSY" | tr -d '\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
+          if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ]; then
+            echo "Expected exactly two non-empty credential lines (username then access key); found ${#CREDENTIAL_LINES[@]}."
             exit 1
           fi
+          BROWSERSTACK_USERNAME="${CREDENTIAL_LINES[0]}"
+          BROWSERSTACK_ACCESS_KEY="${CREDENTIAL_LINES[1]}"
           echo "::add-mask::$BROWSERSTACK_USERNAME"
           echo "::add-mask::$BROWSERSTACK_ACCESS_KEY"
           {

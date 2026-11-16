@@ -46,13 +46,14 @@ try {
     timeoutMsg: 'Nova home screen did not appear after launch',
   });
   if (!(await addressBar.isDisplayed())) throw new Error('Accessible address bar not found on home screen');
+  if (!(await byA11y('Home').isDisplayed())) throw new Error('Dedicated Home button is not visible beside the address bar');
   if (!(await byText('Google').isDisplayed().catch(() => false))) {
     // Search engine label includes a dropdown glyph on the toolbar; the home shortcut remains a separate control.
     const googleShortcut = await byText('Google').isDisplayed().catch(() => false);
     if (!googleShortcut) throw new Error('Google shortcut/search control is missing');
   }
   await driver.saveScreenshot('test-results/01-home-screen.png');
-  record('Home screen renders', true, 'NOVA title and accessible address bar are visible');
+  record('Home screen renders', true, 'NOVA title, accessible address bar and dedicated Home button are visible');
 
   await addressBar.click();
   await addressBar.setValue('nova browser smoke test');
