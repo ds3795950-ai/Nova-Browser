@@ -112,7 +112,7 @@ class MainActivity : Activity() {
                 return GeckoResult.fromValue(matches.toTypedArray())
             }
             override fun onLoginSave(login: Autocomplete.LoginEntry) {
-                runCatching { passwordVault.save(login) }.onFailure { runOnUiThread { toast("Could not save login securely: ${it.localizedMessage}") } }
+                runCatching { passwordVault.save(login) }.onFailure { runOnUiThread { toast("Could not save login securely: ${it?.localizedMessage ?: "Unknown error"}") } }
             }
         })
         runtime.settings.setLoginAutofillEnabled(false)
@@ -610,7 +610,7 @@ class MainActivity : Activity() {
             if (!tab.isPrivate && !tab.isGuest) addHistory(target)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
-            toast("Could not open page: ${error.localizedMessage}")
+            toast("Could not open page: ${error?.localizedMessage ?: "Unknown error"}")
         }
     }
 
@@ -979,7 +979,7 @@ class MainActivity : Activity() {
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
         runCatching { novaDownloads.enqueue(url); toast("Download started · resumable") }
-            .onFailure { toast("Download could not start: ${it.localizedMessage}") }
+            .onFailure { toast("Download could not start: ${it?.localizedMessage ?: "Unknown error"}") }
     }
 
     private fun updateDownloadSummary(items: List<NovaDownloadManager.Item>) {
@@ -1044,7 +1044,7 @@ class MainActivity : Activity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             startActivity(intent)
-        }.onFailure { toast("No app can open this file: ${it.localizedMessage}") }
+        }.onFailure { toast("No app can open this file: ${it?.localizedMessage ?: "Unknown error"}") }
     }
 
     private fun downloadPrompt() {
@@ -1240,9 +1240,9 @@ class MainActivity : Activity() {
                         if (session == null) { toast("Open a page first"); return@setItems }
                         runtime.getContentBlockingController().getLog(session).accept({ entries ->
                             runOnUiThread { AlertDialog.Builder(this).setTitle("Nova Shield · $host")
-                                .setMessage("${entries.size} content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
+                                .setMessage("${entries?.size ?: 0} content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
                                 .setPositiveButton("OK", null).show() }
-                        }, { error -> runOnUiThread { toast("Protection log unavailable: ${error.localizedMessage}") } })
+                        }, { error -> runOnUiThread { toast("Protection log unavailable: ${error?.localizedMessage ?: "Unknown error"}") } })
                     }
                 }
             }.setNegativeButton("Close", null).show()
@@ -1274,18 +1274,19 @@ class MainActivity : Activity() {
         val controller = runtime.getWebExtensionController()
         controller.list().accept({ extensions ->
             runOnUiThread {
-                val rows = extensions.map { "${it.metaData.name ?: it.id} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${extensions.size}")
+                val installed = extensions.orEmpty()
+                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}")
                     .setItems(rows) { _, which ->
-                        val extension = extensions[which]
+                        val extension = installed[which]
                         val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
                         AlertDialog.Builder(this).setTitle(extension.metaData.name ?: extension.id)
                             .setItems(actions) { _, action ->
                                 when (actions[action]) {
-                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it.localizedMessage}") })
-                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension enabled") }, { toast("Could not enable: ${it.localizedMessage}") })
+                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it?.localizedMessage ?: "Unknown error"}") })
+                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension enabled") }, { toast("Could not enable: ${it?.localizedMessage ?: "Unknown error"}") })
                                     "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this extension and its data?")
-                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ toast("Extension removed") }, { toast("Could not uninstall: ${it.localizedMessage}") }) }
+                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
                                         .setNegativeButton("Cancel", null).show()
                                 }
                             }.setNegativeButton("Close", null).show()
@@ -1294,7 +1295,7 @@ class MainActivity : Activity() {
                     .setNeutralButton("Browse add-ons") { _, _ -> createTab(false, "https://addons.mozilla.org/android/") }
                     .setNegativeButton("Close", null).show()
             }
-        }, { error -> runOnUiThread { toast("Could not list extensions: ${error.localizedMessage}") } })
+        }, { error -> runOnUiThread { toast("Could not list extensions: ${error?.localizedMessage ?: "Unknown error"}") } })
     }
 
     private fun installExtensionPrompt() {
@@ -1305,12 +1306,12 @@ class MainActivity : Activity() {
                 val url = input.text.toString().trim()
                 if (!url.startsWith("https://") || !url.substringBefore('?').endsWith(".xpi", true)) { toast("Use a direct HTTPS .xpi URL"); return@setPositiveButton }
                 runtime.getWebExtensionController().install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
-                    .accept({ toast("Extension installed: ${it.metaData.name ?: it.id}") }, { toast("Extension install failed: ${it.localizedMessage}") })
+                    .accept({ toast("Extension installed: ${it?.metaData?.name ?: it?.id ?: "Extension"}") }, { toast("Extension install failed: ${it?.localizedMessage ?: "Unknown error"}") })
             }.setNegativeButton("Cancel", null).show()
     }
 
     private fun showPasswordVault() {
-        val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it.localizedMessage}"); return }
+        val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it?.localizedMessage ?: "Unknown error"}"); return }
         val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} · ${it.username}" }.toTypedArray()
         val labels = rows + "Add login manually"
         AlertDialog.Builder(this).setTitle("Encrypted password vault · ${entries.size}")
@@ -1344,7 +1345,7 @@ class MainActivity : Activity() {
                 if (Uri.parse(url).host.isNullOrBlank() || username.text.isBlank() || password.text.isBlank()) { toast("Enter a valid site, username and password"); return@setPositiveButton }
                 runCatching { passwordVault.save(Autocomplete.LoginEntry.Builder().guid(UUID.randomUUID().toString()).origin("${Uri.parse(url).scheme}://${Uri.parse(url).host}").username(username.text.toString()).password(password.text.toString()).build()) }
                     .onSuccess { toast("Login saved encrypted on this device") }
-                    .onFailure { toast("Could not save login: ${it.localizedMessage}") }
+                    .onFailure { toast("Could not save login: ${it?.localizedMessage ?: "Unknown error"}") }
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -1385,7 +1386,7 @@ class MainActivity : Activity() {
                     else -> AlertDialog.Builder(this).setMessage("Clear cookies, caches, and site storage for $host? Other sites are not affected.")
                         .setPositiveButton("Clear site data") { _, _ ->
                             runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)
-                                .accept({ runOnUiThread { toast("Site data cleared for $host") } }, { error -> runOnUiThread { toast("Could not clear site data: ${error.localizedMessage}") } })
+                                .accept({ runOnUiThread { toast("Site data cleared for $host") } }, { error -> runOnUiThread { toast("Could not clear site data: ${error?.localizedMessage ?: "Unknown error"}") } })
                         }.setNegativeButton("Cancel", null).show()
                 }
             }.setNegativeButton("Close", null).show()
@@ -1496,7 +1497,7 @@ class MainActivity : Activity() {
                     contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(payload) }
                         ?: throw IllegalStateException("Could not open export destination")
                     toast("Browsing history exported")
-                }.onFailure { toast("History export failed: ${it.localizedMessage}") }
+                }.onFailure { toast("History export failed: ${it?.localizedMessage ?: "Unknown error"}") }
             }
             return
         }
@@ -1527,7 +1528,7 @@ class MainActivity : Activity() {
                     saveBookmarks(merged.values.toList())
                     toast("Imported ${imported.length()} bookmarks")
                 }
-            }.onFailure { toast("Bookmark transfer failed: ${it.localizedMessage}") }
+            }.onFailure { toast("Bookmark transfer failed: ${it?.localizedMessage ?: "Unknown error"}") }
         }
     }
 
