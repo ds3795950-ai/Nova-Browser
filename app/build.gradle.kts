@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.nova.browser"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.nova.browser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-rebuild"
+        versionCode = 2
+        versionName = "0.2.0-core"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -21,6 +21,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -31,7 +32,7 @@ android {
 }
 
 dependencies {
-    // GeckoView is the sole browser engine. Pinning this known published build for reproducibility.
+    // GeckoView is the sole browser engine.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
     testImplementation("junit:junit:4.13.2")
 }

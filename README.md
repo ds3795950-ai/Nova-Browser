@@ -1,30 +1,36 @@
 # Nova Browser
 
-A fresh Android/Kotlin rebuild of Nova Browser. The previous GitHub repository could not be read because GitHub returns an account-suspension 403, and no source backup was available. This repository is therefore a reconstruction, not a recovered copy of the old source tree.
+Nova is being reconstructed as an Android/Kotlin browser using **GeckoView as its only browser engine**.
 
-## Current baseline
+This repository is a fresh reconstruction. The previous repository/account could not be accessed, and no source backup was available; this is not a recovered copy.
 
-- Android application module (`app`)
-- Kotlin + Android Gradle Plugin
-- GeckoView is the only browser engine
-- Minimal address/search bar and page view
-- Internet permission
-- Basic unit-test wiring
+## Current browser-core slice
+
+- Address and search bar with Google, Bing, DuckDuckGo and Brave Search
+- Back, forward, reload and home controls
+- Multiple normal and private GeckoView sessions
+- Tab switcher and close-current-tab action
+- Local bookmarks and normal-session browsing history
+- Private tabs are excluded from the normal history and bookmark store
+- Android share sheet and a basic settings panel
+- GitHub Actions unit-test, debug-build and APK-artifact workflow
 
 ## Build
 
-Open this repository in Android Studio with JDK 17 and Android SDK 36 installed. Allow Gradle to sync and resolve Mozilla's Maven repository. Then run the `app` configuration on an Android device or emulator.
+Requires JDK 17, Gradle 9.3.1, Android SDK Platform 37 and Android Gradle Plugin 9.1.1.
 
-A successful build and device run have **not** yet been verified in this environment. The first CI run will provide the initial compile result.
+```bash
+gradle testDebugUnitTest
+gradle assembleDebug
+```
 
-## Product decisions already carried forward
+The CI workflow publishes the debug APK as a short-lived workflow artifact after a successful build.
 
-- Android-first Kotlin browser
-- GeckoView only; no Chromium/WebView fallback
-- Privacy-oriented private and guest browsing goals
-- Nova Shield for tracker/ad blocking
-- Search engine selection
-- ChatGPT, Claude and Perplexity assistant options
-- Supabase-backed email OTP and optional cloud sync
+## Security notes
 
-These are requirements, not claims that the features are implemented. See [ROADMAP.md](docs/ROADMAP.md).
+- GeckoView is the only rendering engine.
+- Guest Mode, Nova Shield, Tor routing, cloud sync and authentication are not yet implemented.
+- Do not put API keys, Supabase service-role keys, signing secrets or user credentials in source control.
+- Private-mode behavior still requires device-level verification before being described as production-ready.
+
+See [docs/PRODUCT_DECISIONS.md](docs/PRODUCT_DECISIONS.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
