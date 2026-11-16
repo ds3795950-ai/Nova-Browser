@@ -102,27 +102,16 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             }
             val localSnapshot = NovaSyncSnapshotRepository.build(applicationContext)
             val vault = PasswordVault(applicationContext)
-            val localVault = vault.exportForSync()
+            val localVault = vault.exportSyncBundle()
             val remote = cloud.downloadEncrypted()
             val remoteSnapshot = remote.first
             val merged = if (remoteSnapshot == null) localSnapshot else NovaSyncMerge.merge(localSnapshot,
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
-            val vaultMap = linkedMapOf<String, JSONObject>()
-            remote.second?.let { encrypted ->
-                val remoteVault = JSONArray(CloudCrypto.decrypt(encrypted, passphrase))
-                for (i in 0 until remoteVault.length()) {
-                    val item = remoteVault.getJSONObject(i)
-                    vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
-                }
-            }
-            for (i in 0 until localVault.length()) {
-                val item = localVault.getJSONObject(i)
-                vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
-            }
-            val mergedVault = JSONArray().also { out -> vaultMap.values.forEach { out.put(it) } }
+            val remoteVault = remote.second?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
+            val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             cloud.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             NovaSyncSnapshotRepository.apply(applicationContext, merged)
-            vault.importFromSync(mergedVault)
+            vault.importSyncBundle(mergedVault)
             prefs.edit().putLong("cloud_sync_last_success_at", System.currentTimeMillis()).remove("cloud_sync_last_error").apply()
             return Result.success()
         } catch (error: javax.crypto.AEADBadTagException) {

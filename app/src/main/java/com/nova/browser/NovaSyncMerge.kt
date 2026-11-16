@@ -21,7 +21,7 @@ internal object NovaSyncMerge {
         }
         mergeArray("bookmarks", "url", "addedAt")
         mergeArray("history", "url", "visitedAt")
-        mergeArray("workspaces", "name")
+        mergeArray("workspaces", "name", "createdAt")
 
         // Merge deletion markers by their latest timestamp so deletes made on one device
         // are not resurrected when another device syncs an older copy.
@@ -41,6 +41,23 @@ internal object NovaSyncMerge {
         }
         result.put("bookmarks", keptBookmarks).put("bookmark_tombstones", tombstones)
 
+        val workspaceTombstones = JSONObject()
+        for (source in listOf(remote.optJSONObject("workspace_tombstones") ?: JSONObject(), local.optJSONObject("workspace_tombstones") ?: JSONObject())) {
+            val keys = source.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                workspaceTombstones.put(key, maxOf(workspaceTombstones.optLong(key), source.optLong(key)))
+            }
+        }
+        val keptWorkspaces = JSONArray()
+        val mergedWorkspaces = result.optJSONArray("workspaces") ?: JSONArray()
+        for (i in 0 until mergedWorkspaces.length()) {
+            val item = mergedWorkspaces.getJSONObject(i)
+            val deletedAt = workspaceTombstones.optLong(item.optString("name"))
+            if (deletedAt == 0L || item.optLong("createdAt") > deletedAt) keptWorkspaces.put(item)
+        }
+        result.put("workspaces", keptWorkspaces).put("workspace_tombstones", workspaceTombstones)
+
         val historyClearedAt = maxOf(local.optLong("history_cleared_at"), remote.optLong("history_cleared_at"))
         val keptHistory = JSONArray()
         val mergedHistory = result.optJSONArray("history") ?: JSONArray()
@@ -50,7 +67,7 @@ internal object NovaSyncMerge {
         }
         result.put("history", keptHistory).put("history_cleared_at", historyClearedAt)
         result.put("settings", local.optJSONObject("settings") ?: remote.optJSONObject("settings") ?: JSONObject())
-        result.put("schema", 2)
+        result.put("schema", 3)
         return result
     }
 }

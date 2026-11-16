@@ -31,6 +31,13 @@ object NovaShield {
                 blocking.setQueryParameterStrippingEnabled(true)
             }
         }
+        // Purge stale tracker cookies and protect private/Guest sessions as well as normal tabs.
+        // GeckoView's lists block known trackers and some ad trackers, not every cosmetic ad.
+        blocking.setCookiePurging(mode != ShieldMode.OFF)
+        blocking.setStrictSocialTrackingProtection(mode == ShieldMode.AGGRESSIVE)
+        blocking.setCookieBehaviorPrivateMode(if (mode == ShieldMode.OFF) ContentBlocking.CookieBehavior.ACCEPT_ALL else ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS)
+        blocking.setQueryParameterStrippingPrivateBrowsingEnabled(mode != ShieldMode.OFF)
+        blocking.setEmailTrackerBlockingPrivateBrowsing(mode != ShieldMode.OFF)
         // Keep Google's native Safe Browsing lists active in every Shield mode, including Off.
         blocking.setSafeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
         blocking.setContentBlockingDatabaseStatus(true)

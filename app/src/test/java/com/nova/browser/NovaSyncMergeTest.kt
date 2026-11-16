@@ -43,4 +43,40 @@ class NovaSyncMergeTest {
         assertEquals(2, merged.getJSONArray("bookmarks").length())
         assertTrue(merged.has("bookmark_tombstones"))
     }
+    @Test fun workspaceDeletionPropagatesAcrossDevices() {
+        val remote = JSONObject().put("workspaces", JSONArray().put(JSONObject().put("name", "Work").put("createdAt", 100)))
+        val local = JSONObject().put("workspaces", JSONArray()).put("workspace_tombstones", JSONObject().put("Work", 200))
+        val merged = NovaSyncMerge.merge(local, remote)
+        assertEquals(0, merged.getJSONArray("workspaces").length())
+        assertEquals(200L, merged.getJSONObject("workspace_tombstones").getLong("Work"))
+    }
+
+    @Test fun recreatedWorkspaceSurvivesOlderDeletion() {
+        val remote = JSONObject().put("workspaces", JSONArray().put(JSONObject().put("name", "Work").put("createdAt", 100)))
+            .put("workspace_tombstones", JSONObject().put("Work", 200))
+        val local = JSONObject().put("workspaces", JSONArray().put(JSONObject().put("name", "Work").put("createdAt", 201)))
+        assertEquals(1, NovaSyncMerge.merge(local, remote).getJSONArray("workspaces").length())
+    }
+
+    @Test fun passwordDeletionPropagatesAcrossDevices() {
+        val local = JSONObject().put("credentials", JSONArray()).put("deleted", JSONObject().put("https://example.com|alice", 200))
+        val remote = JSONObject().put("credentials", JSONArray().put(JSONObject().put("origin", "https://example.com")
+            .put("username", "alice").put("password", "secret").put("updatedAt", 100)))
+        assertEquals(0, PasswordVault.mergeSyncBundles(local, remote).getJSONArray("credentials").length())
+    }
+
+    @Test fun passwordReaddedAfterDeletionSurvives() {
+        val local = JSONObject().put("credentials", JSONArray().put(JSONObject().put("origin", "https://example.com")
+            .put("username", "alice").put("password", "new-secret").put("updatedAt", 201)))
+        val remote = JSONObject().put("credentials", JSONArray()).put("deleted", JSONObject().put("https://example.com|alice", 200))
+        val merged = PasswordVault.mergeSyncBundles(local, remote)
+        assertEquals(1, merged.getJSONArray("credentials").length())
+        assertEquals("new-secret", merged.getJSONArray("credentials").getJSONObject(0).getString("password"))
+    }
+
+    @Test fun legacyPasswordArrayCanBeReadAsBundle() {
+        val legacy = JSONArray().put(JSONObject().put("origin", "https://example.com").put("username", "alice").put("password", "secret"))
+        assertEquals(1, PasswordVault.decodeSyncBundle(legacy.toString()).getJSONArray("credentials").length())
+    }
+
 }

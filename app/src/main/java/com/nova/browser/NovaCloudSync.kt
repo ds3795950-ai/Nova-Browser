@@ -62,6 +62,8 @@ internal object CloudCrypto {
 }
 
 /** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
+class CloudSyncConflictException(message: String) : IllegalStateException(message)
+
 class NovaCloudSync(context: Context) {
     companion object {
         private const val BASE_URL = BuildConfig.SUPABASE_URL
@@ -70,6 +72,8 @@ class NovaCloudSync(context: Context) {
     }
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
+    @Volatile private var snapshotVersion: String? = null
+    @Volatile private var vaultVersion: String? = null
 
     fun sendEmailOtp(email: String) {
         val clean = email.trim().lowercase()
@@ -103,27 +107,48 @@ class NovaCloudSync(context: Context) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        return Pair(fetchRow("nova_sync_state", "snapshot", userId, token), fetchRow("nova_encrypted_vault", "payload", userId, token))
+        val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
+        val vault = fetchRow("nova_encrypted_vault", "payload", userId, token)
+        return Pair(snapshot, vault)
     }
 
     fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        upsertRow("nova_sync_state", "snapshot", userId, snapshot, token)
-        upsertRow("nova_encrypted_vault", "payload", userId, vault, token)
+        upsertRow("nova_sync_state", "snapshot", userId, snapshot, token, snapshotVersion)
+        upsertRow("nova_encrypted_vault", "payload", userId, vault, token, vaultVersion)
+        snapshotVersion = null
+        vaultVersion = null
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
         val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
         val rows = org.json.JSONArray(result)
-        return if (rows.length() == 0) null else rows.getJSONObject(0).optJSONObject(column)
+        if (rows.length() == 0) {
+            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
+            return null
+        }
+        val row = rows.getJSONObject(0)
+        val version = row.optString("updated_at").takeIf { it.isNotBlank() }
+        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
+        return row.optJSONObject(column)
     }
 
-    private fun upsertRow(table: String, column: String, userId: String, payload: JSONObject, token: String) {
+    /** Compare-and-swap prevents two devices syncing the same old revision from silently overwriting each other. */
+    private fun upsertRow(table: String, column: String, userId: String, payload: JSONObject, token: String, expectedVersion: String?) {
         val body = JSONObject().put("user_id", userId).put(column, payload)
-        request("POST", "/rest/v1/$table?on_conflict=user_id", body.toString(), token,
-            "resolution=merge-duplicates,return=minimal")
+        val response = if (expectedVersion == null) {
+            request("POST", "/rest/v1/$table?on_conflict=user_id", body.toString(), token,
+                "resolution=ignore-duplicates,return=representation")
+        } else {
+            val encodedVersion = java.net.URLEncoder.encode(expectedVersion, "UTF-8")
+            request("PATCH", "/rest/v1/$table?user_id=eq.$userId&updated_at=eq.$encodedVersion", body.toString(), token,
+                "return=representation")
+        }
+        if (org.json.JSONArray(response).length() == 0) {
+            throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
+        }
     }
 
     private fun validSession(): JSONObject? {

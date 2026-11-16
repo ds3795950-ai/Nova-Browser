@@ -48,9 +48,27 @@ class PasswordVault(context: Context) {
         val entries = all().filterNot { it.guid == login.guid || (it.origin == login.origin && it.username == login.username) }.toMutableList()
         entries.add(login)
         persist(entries)
+        val key = credentialKey(login.origin, login.username)
+        val metadata = readJsonPreference(META_KEY)
+        val tombstones = readJsonPreference(TOMBSTONES_KEY)
+        metadata.put(key, maxOf(System.currentTimeMillis(), tombstones.optLong(key) + 1L))
+        tombstones.remove(key)
+        prefs.edit().putString(META_KEY, metadata.toString()).putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
 
-    @Synchronized fun delete(guid: String) = persist(all().filterNot { it.guid == guid })
+    @Synchronized fun delete(guid: String) {
+        val entries = all()
+        val removed = entries.firstOrNull { it.guid == guid }
+        persist(entries.filterNot { it.guid == guid })
+        if (removed != null) {
+            val key = credentialKey(removed.origin, removed.username)
+            val metadata = readJsonPreference(META_KEY)
+            val tombstones = readJsonPreference(TOMBSTONES_KEY)
+            tombstones.put(key, maxOf(System.currentTimeMillis(), metadata.optLong(key) + 1L))
+            metadata.remove(key)
+            prefs.edit().putString(META_KEY, metadata.toString()).putString(TOMBSTONES_KEY, tombstones.toString()).apply()
+        }
+    }
 
     @Synchronized fun exportForSync(): JSONArray {
         val array = JSONArray()
@@ -60,6 +78,42 @@ class PasswordVault(context: Context) {
                 .put("httpRealm", login.httpRealm ?: "").put("username", login.username).put("password", login.password))
         }
         return array
+    }
+
+    @Synchronized fun exportSyncBundle(): JSONObject {
+        val metadata = readJsonPreference(META_KEY)
+        val credentials = JSONArray()
+        all().forEach { login ->
+            val key = credentialKey(login.origin, login.username)
+            credentials.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
+                .put("origin", login.origin).put("formActionOrigin", login.formActionOrigin ?: "")
+                .put("httpRealm", login.httpRealm ?: "").put("username", login.username).put("password", login.password)
+                .put("updatedAt", metadata.optLong(key)))
+        }
+        return JSONObject().put("schema", 2).put("credentials", credentials).put("deleted", readJsonPreference(TOMBSTONES_KEY))
+    }
+
+    @Synchronized fun importSyncBundle(bundle: JSONObject) {
+        val merged = mergeSyncBundles(exportSyncBundle(), bundle)
+        val credentials = merged.optJSONArray("credentials") ?: JSONArray()
+        require(credentials.length() <= 2000) { "Cloud password vault is unexpectedly large" }
+        val entries = mutableListOf<Autocomplete.LoginEntry>()
+        val metadata = JSONObject()
+        for (i in 0 until credentials.length()) {
+            val item = credentials.getJSONObject(i)
+            val origin = item.getString("origin")
+            require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
+            val username = item.getString("username")
+            val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
+                .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                .httpRealm(item.optString("httpRealm").ifBlank { null })
+                .username(username).password(item.getString("password")).build()
+            entries.add(entry)
+            metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
+        }
+        persist(entries)
+        prefs.edit().putString(META_KEY, metadata.toString())
+            .putString(TOMBSTONES_KEY, (merged.optJSONObject("deleted") ?: JSONObject()).toString()).apply()
     }
 
     @Synchronized fun importFromSync(array: JSONArray) {
@@ -78,7 +132,7 @@ class PasswordVault(context: Context) {
         persist(merged.values.toList())
     }
 
-    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).apply(); vaultFile.delete() }
+    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).apply(); vaultFile.delete() }
 
     private fun persist(entries: List<Autocomplete.LoginEntry>) {
         val json = JSONArray()
@@ -131,5 +185,42 @@ class PasswordVault(context: Context) {
         return generator.generateKey()
     }
 
-    companion object { private const val KEY_BLOB = "encrypted_entries_v1" }
+    private fun readJsonPreference(key: String): JSONObject = runCatching { JSONObject(prefs.getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
+    private fun credentialKey(origin: String, username: String) = "$origin|$username"
+
+    companion object {
+        private const val KEY_BLOB = "encrypted_entries_v1"
+        private const val META_KEY = "credential_updated_at_v1"
+        private const val TOMBSTONES_KEY = "credential_tombstones_v1"
+
+        /** Merges credentials and deletion markers from two devices; newer explicit deletes win. */
+        internal fun decodeSyncBundle(serialized: String): JSONObject {
+            val value = serialized.trim()
+            return if (value.startsWith("{")) JSONObject(value) else JSONObject().put("schema", 1)
+                .put("credentials", JSONArray(value)).put("deleted", JSONObject())
+        }
+
+        internal fun mergeSyncBundles(local: JSONObject, remote: JSONObject): JSONObject {
+            val tombstones = JSONObject()
+            for (source in listOf(remote.optJSONObject("deleted") ?: JSONObject(), local.optJSONObject("deleted") ?: JSONObject())) {
+                val keys = source.keys()
+                while (keys.hasNext()) { val key = keys.next(); tombstones.put(key, maxOf(tombstones.optLong(key), source.optLong(key))) }
+            }
+            val merged = linkedMapOf<String, JSONObject>()
+            for (source in listOf(remote.optJSONArray("credentials") ?: JSONArray(), local.optJSONArray("credentials") ?: JSONArray())) {
+                for (i in 0 until source.length()) {
+                    val item = source.getJSONObject(i)
+                    val key = item.optString("origin") + "|" + item.optString("username")
+                    val previous = merged[key]
+                    if (previous == null || item.optLong("updatedAt") >= previous.optLong("updatedAt")) merged[key] = item
+                }
+            }
+            val kept = JSONArray()
+            merged.forEach { (key, item) ->
+                val deletedAt = tombstones.optLong(key)
+                if (deletedAt == 0L || item.optLong("updatedAt") > deletedAt) kept.put(item)
+            }
+            return JSONObject().put("schema", 2).put("credentials", kept).put("deleted", tombstones)
+        }
+    }
 }

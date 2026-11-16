@@ -45,8 +45,10 @@ internal object NovaSyncSnapshotRepository {
             .put("desktop_sites", JSONArray(p.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
             .put("bookmark_folders", JSONArray(p.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
         val tombstones = runCatching { JSONObject(p.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
-        return JSONObject().put("schema", 2).put("bookmarks", safeBookmarks).put("history", history)
-            .put("bookmark_tombstones", tombstones).put("history_cleared_at", p.getLong("history_cleared_at", 0L))
+        val workspaceTombstones = runCatching { JSONObject(p.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        return JSONObject().put("schema", 3).put("bookmarks", safeBookmarks).put("history", history)
+            .put("bookmark_tombstones", tombstones).put("workspace_tombstones", workspaceTombstones)
+            .put("history_cleared_at", p.getLong("history_cleared_at", 0L))
             .put("workspaces", workspaces).put("settings", settings)
     }
 
@@ -72,6 +74,7 @@ internal object NovaSyncSnapshotRepository {
         val settings = snapshot.optJSONObject("settings") ?: JSONObject()
         val editor = p.edit().putString("bookmarks_v2", safeBookmarks.toString()).putStringSet("bookmarks", urls)
             .putString("bookmark_tombstones", (snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()).toString())
+            .putString("workspace_tombstones", (snapshot.optJSONObject("workspace_tombstones") ?: JSONObject()).toString())
             .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L))
             .putString("history_v2", historyArray.toString()).putStringSet("saved_workspaces", workspaceSet)
             .putString("search_engine", settings.optString("search_engine", "Google"))

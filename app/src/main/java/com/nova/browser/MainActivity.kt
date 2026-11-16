@@ -34,6 +34,8 @@ import org.json.JSONObject
 import java.util.UUID
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
+import android.widget.ArrayAdapter
+import android.widget.ListView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -760,7 +762,10 @@ class MainActivity : ComponentActivity() {
                 val urls = JSONArray()
                 tabs.filter { !it.isPrivate && !it.isGuest }.forEach { urls.put(JSONObject().put("url", it.lastUrl).put("group", it.group).put("title", it.title)) }
                 val snapshots = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
-                snapshots.add(JSONObject().put("name", name).put("tabs", urls).toString())
+                snapshots.removeAll { raw -> runCatching { JSONObject(raw).optString("name") == name }.getOrDefault(false) }
+                val workspaceTombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+                val createdAt = maxOf(System.currentTimeMillis(), workspaceTombstones.optLong(name) + 1L)
+                snapshots.add(JSONObject().put("name", name).put("createdAt", createdAt).put("tabs", urls).toString())
                 prefs.edit().putStringSet("saved_workspaces", snapshots).apply()
                 toast("Workspace saved")
             }.setNegativeButton("Cancel", null).show()
@@ -807,20 +812,48 @@ class MainActivity : ComponentActivity() {
     private fun showSavedWorkspaces() {
         val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
         if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
-        val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") }
-        AlertDialog.Builder(this).setTitle("Saved workspaces").setItems(labels.toTypedArray()) { _, which ->
-            runCatching {
-                val data = JSONObject(saved[which]).getJSONArray("tabs")
-                for (i in 0 until data.length()) {
-                    val item = data.getJSONObject(i)
-                    createTab(false, item.optString("url", HOME_URL))
-                    tabs.last().group = item.optString("group", "Ungrouped")
-                    tabs.last().title = item.optString("title", "New tab")
+        val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " · long-press to delete" }
+        val list = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels) }
+        val dialog = AlertDialog.Builder(this).setTitle("Saved workspaces").setView(list).setNegativeButton("Close", null).create()
+        list.setOnItemClickListener { _, _, which, _ ->
+            dialog.dismiss()
+            restoreWorkspace(saved[which])
+        }
+        list.setOnItemLongClickListener { _, _, which, _ ->
+            val raw = saved[which]
+            val name = runCatching { JSONObject(raw).optString("name", "Workspace") }.getOrDefault("Workspace")
+            AlertDialog.Builder(this).setTitle("Delete workspace?")
+                .setMessage("Delete '$name' from this device and synced devices?")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete") { _, _ -> deleteWorkspace(raw, name) }
+                .show()
+            true
+        }
+        dialog.show()
+    }
+
+    private fun restoreWorkspace(raw: String) {
+        runCatching {
+            val data = JSONObject(raw).getJSONArray("tabs")
+            for (i in 0 until data.length()) {
+                val item = data.getJSONObject(i)
+                createTab(false, item.optString("url", HOME_URL))
+                tabs.last().group = item.optString("group", "Ungrouped")
+                tabs.last().title = item.optString("title", "New tab")
                 tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
-                }
-                persistTabs(); toast("Workspace restored")
-            }.onFailure { toast("Could not restore workspace") }
-        }.setNegativeButton("Close", null).show()
+            }
+            persistTabs(); toast("Workspace restored")
+        }.onFailure { toast("Could not restore workspace") }
+    }
+
+    private fun deleteWorkspace(raw: String, name: String) {
+        val tombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val createdAt = runCatching { JSONObject(raw).optLong("createdAt") }.getOrDefault(0L)
+        tombstones.put(name, maxOf(System.currentTimeMillis(), createdAt + 1L))
+        val remaining = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
+        remaining.removeAll { candidate -> runCatching { JSONObject(candidate).optString("name") == name }.getOrDefault(false) }
+        prefs.edit().putStringSet("saved_workspaces", remaining).putString("workspace_tombstones", tombstones.toString()).apply()
+        toast("Workspace deleted and queued for cloud sync")
     }
 
     private fun closeCurrentTab() = closeTabAt(activeIndex)
@@ -1594,26 +1627,14 @@ class MainActivity : ComponentActivity() {
                 throw IllegalStateException("This device's local browser profile is linked to a different Nova Cloud account. Use that account or clear this app's local data before switching accounts.")
             }
             val local = buildSyncSnapshot()
-            val localVault = passwordVault.exportForSync()
+            val localVault = passwordVault.exportSyncBundle()
             val remote = cloudSync.downloadEncrypted()
             val remoteSnapshot = remote.first
             val remoteVaultPayload = remote.second
             val merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(local,
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
-            val mergedVault = JSONArray()
-            val vaultMap = linkedMapOf<String, JSONObject>()
-            if (remoteVaultPayload != null) {
-                val remoteVault = JSONArray(CloudCrypto.decrypt(remoteVaultPayload, passphrase))
-                for (i in 0 until remoteVault.length()) {
-                    val item = remoteVault.getJSONObject(i)
-                    vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
-                }
-            }
-            for (i in 0 until localVault.length()) {
-                val item = localVault.getJSONObject(i)
-                vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
-            }
-            vaultMap.values.forEach { mergedVault.put(it) }
+            val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
+            val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             if (prefs.getBoolean("cloud_sync_enabled", false)) {
@@ -1622,7 +1643,7 @@ class MainActivity : ComponentActivity() {
             }
             runOnUiThread {
                 applySyncSnapshot(merged)
-                passwordVault.importFromSync(mergedVault)
+                passwordVault.importSyncBundle(mergedVault)
                 prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
                 toast("Encrypted cloud sync completed")
             }
