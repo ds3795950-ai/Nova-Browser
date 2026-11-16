@@ -110,10 +110,14 @@ class MainActivity : Activity() {
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         runtime.setAutocompleteStorageDelegate(object : Autocomplete.StorageDelegate {
             override fun onLoginFetch(domain: String): GeckoResult<Array<Autocomplete.LoginEntry>> {
+                if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+                    return GeckoResult.fromValue(emptyArray<Autocomplete.LoginEntry>())
+                }
                 val matches = runCatching { passwordVault.all().filter { Uri.parse(it.origin).host.equals(domain, true) } }.getOrDefault(emptyList())
                 return GeckoResult.fromValue(matches.toTypedArray())
             }
             override fun onLoginSave(login: Autocomplete.LoginEntry) {
+                if (currentTab()?.let { it.isPrivate || it.isGuest } == true) return
                 runCatching { passwordVault.save(login) }.onFailure { runOnUiThread { toast("Could not save login securely: ${it?.localizedMessage ?: "Unknown error"}") } }
             }
         })

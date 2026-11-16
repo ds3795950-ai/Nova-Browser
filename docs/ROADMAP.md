@@ -30,7 +30,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 - Both tables have RLS enabled. SELECT/INSERT/UPDATE/DELETE policies are scoped to `auth.uid() = user_id`; UPDATE includes both USING and WITH CHECK.
 - Client encrypts the sync snapshot and password-vault payload separately with AES-256-GCM. Keys are derived from a user-chosen passphrase using PBKDF2-HMAC-SHA256 (310,000 iterations), with random per-payload salt and IV.
 - Passphrase is not stored or sent to Supabase. Losing it means the cloud backup cannot be decrypted.
-- Sync is user-initiated and merge-based. It includes bookmarks, normal browsing history, saved workspaces, selected preferences and saved passwords. Private/Guest tabs, private browsing state and Guest data are excluded.
+- Sync is user-initiated and merge-based. It includes bookmarks, normal browsing history, saved workspaces, selected preferences and saved passwords. Private/Guest tabs, private browsing state and Guest data are excluded. The current merge is additive: deleting an item on one device does not create a cloud tombstone, so that item may be restored from another device's backup on the next merge.
 - Supabase stores only encrypted envelopes. The existing password vault remains protected locally by Android Keystore.
 - Wrong passphrase/authentication-tag failure stops the sync rather than overwriting the cloud backup.
 
@@ -38,7 +38,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 
 ## Phase 10 — Automated QA, security checks and release builds
 
-- GitHub Actions runs Android lint, JVM unit tests, debug APK assembly and unsigned release APK assembly.
+- GitHub Actions runs JVM unit tests, debug APK assembly and unsigned release APK assembly. Android lint was removed from the blocking pipeline after the Gradle lint task stalled; it remains a separate follow-up check.
 - Unit tests cover cloud-encryption round trip, ciphertext not matching plaintext, wrong-passphrase rejection and weak-passphrase rejection, alongside existing URL, AI-routing and download-protocol tests.
 - CI uploads debug and unsigned release APK artifacts for inspection.
 - Supabase security advisors returned no findings at the time of implementation; table policies were independently inspected.
