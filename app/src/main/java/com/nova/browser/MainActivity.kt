@@ -61,6 +61,7 @@ class MainActivity : Activity() {
     private var guestContextId: String = ""
     private lateinit var novaDownloads: NovaDownloadManager
     private lateinit var passwordVault: PasswordVault
+    private lateinit var cloudSync: NovaCloudSync
     private var pendingHistoryExport: String? = null
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
@@ -105,6 +106,7 @@ class MainActivity : Activity() {
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
         passwordVault = PasswordVault(this)
+        cloudSync = NovaCloudSync(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         runtime.setAutocompleteStorageDelegate(object : Autocomplete.StorageDelegate {
             override fun onLoginFetch(domain: String): GeckoResult<Array<Autocomplete.LoginEntry>> {
@@ -1418,7 +1420,7 @@ class MainActivity : Activity() {
 
     private fun showSettings() {
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova")
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
@@ -1454,8 +1456,177 @@ class MainActivity : Activity() {
                 12 -> exportHistory()
                 13 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
                     .setPositiveButton("OK", null).show()
+                14 -> showCloudAccount()
             }
         }.show()
+    }
+
+
+    private fun showCloudAccount() {
+        val email = cloudSync.signedInEmail()
+        if (email.isNullOrBlank()) {
+            val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; isSingleLine = true }
+            AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
+                .setView(input).setPositiveButton("Send code") { _, _ ->
+                    val address = input.text.toString().trim()
+                    toast("Requesting sign-in code…")
+                    Thread {
+                        runCatching { cloudSync.sendEmailOtp(address) }
+                            .onSuccess { runOnUiThread { showCloudOtp(address) } }
+                            .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
+                    }.start()
+                }.setNegativeButton("Cancel", null).show()
+            return
+        }
+        val enabled = prefs.getBoolean("cloud_sync_enabled", false)
+        val check = CheckBox(this).apply { text = "Allow encrypted cloud sync from this device"; isChecked = enabled; setPadding(24, 12, 24, 12) }
+        AlertDialog.Builder(this).setTitle("Nova Cloud · $email").setMessage("Your sync data is encrypted on this device with a passphrase before upload. Nova cannot read the cloud backup. The passphrase is never stored.")
+            .setView(check).setPositiveButton("Save") { _, _ ->
+                prefs.edit().putBoolean("cloud_sync_enabled", check.isChecked).apply()
+                if (check.isChecked) showSyncPassphrase() else toast("Cloud sync paused; your cloud backup is unchanged")
+            }.setNeutralButton("Sign out") { _, _ ->
+                Thread { cloudSync.signOut(); runOnUiThread { toast("Signed out. Local browsing data is unchanged.") } }.start()
+            }.setNegativeButton("Close", null).show()
+    }
+
+    private fun showCloudOtp(email: String) {
+        val input = EditText(this).apply { hint = "6-digit email code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the one-time code sent to $email")
+            .setView(input).setPositiveButton("Verify") { _, _ ->
+                val code = input.text.toString().trim()
+                toast("Verifying code…")
+                Thread {
+                    runCatching { cloudSync.verifyEmailOtp(email, code) }
+                        .onSuccess { runOnUiThread { toast("Signed in to Nova Cloud"); showCloudAccount() } }
+                        .onFailure { runOnUiThread { toast("Sign-in failed: ${it.message ?: "Try again"}") } }
+                }.start()
+            }.setNeutralButton("Resend code") { _, _ ->
+                Thread { runCatching { cloudSync.sendEmailOtp(email) }
+                    .onSuccess { runOnUiThread { showCloudOtp(email); toast("A new code was requested") } }
+                    .onFailure { runOnUiThread { toast("Could not resend: ${it.message}") } }
+                }.start()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showSyncPassphrase() {
+        val input = EditText(this).apply { hint = "Sync passphrase (10+ characters)"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("Encrypt and sync").setMessage("Use the same passphrase on every device. If you lose it, the encrypted backup cannot be recovered. Passwords, bookmarks, history and saved workspaces are included; private and Guest data is excluded.")
+            .setView(input).setPositiveButton("Sync now") { _, _ ->
+                val passphrase = input.text.toString().toCharArray()
+                if (passphrase.size < 10) { passphrase.fill('\u0000'); toast("Passphrase must be at least 10 characters"); return@setPositiveButton }
+                toast("Downloading, merging and encrypting your data…")
+                Thread { performCloudSync(passphrase) }.start()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun performCloudSync(passphrase: CharArray) {
+        try {
+            val local = buildSyncSnapshot()
+            val localVault = passwordVault.exportForSync()
+            val remote = cloudSync.downloadEncrypted()
+            val merged = if (remote.first == null) local else mergeSyncSnapshots(local,
+                JSONObject(CloudCrypto.decrypt(remote.first, passphrase)))
+            val mergedVault = JSONArray()
+            val vaultMap = linkedMapOf<String, JSONObject>()
+            if (remote.second != null) {
+                val remoteVault = JSONArray(CloudCrypto.decrypt(remote.second, passphrase))
+                for (i in 0 until remoteVault.length()) {
+                    val item = remoteVault.getJSONObject(i)
+                    vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
+                }
+            }
+            for (i in 0 until localVault.length()) {
+                val item = localVault.getJSONObject(i)
+                vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
+            }
+            vaultMap.values.forEach { mergedVault.put(it) }
+            cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
+                CloudCrypto.encrypt(mergedVault.toString(), passphrase))
+            runOnUiThread {
+                applySyncSnapshot(merged)
+                passwordVault.importFromSync(mergedVault)
+                prefs.edit().putBoolean("cloud_sync_enabled", true).apply()
+                toast("Encrypted cloud sync completed")
+            }
+        } catch (error: Exception) {
+            runOnUiThread { toast("Cloud sync failed: ${error.message ?: "Check connection and passphrase"}") }
+        } finally { passphrase.fill('\u0000') }
+    }
+
+    private fun buildSyncSnapshot(): JSONObject {
+        val bookmarks = JSONArray()
+        readBookmarks().forEach { bookmarks.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
+        val history = JSONArray()
+        readHistory().forEach { history.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
+        val workspaces = JSONArray()
+        prefs.getStringSet("saved_workspaces", emptySet())?.forEach { raw -> runCatching { workspaces.put(JSONObject(raw)) } }
+        val settings = JSONObject().put("search_engine", searchEngine)
+            .put("shield_mode", prefs.getString("shield_mode", "STANDARD"))
+            .put("show_home_shortcuts", prefs.getBoolean("show_home_shortcuts", true))
+            .put("font_scale_index", prefs.getInt("font_scale_index", 2))
+            .put("desktop_sites", JSONArray(prefs.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
+            .put("bookmark_folders", JSONArray(prefs.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
+        return JSONObject().put("schema", 1).put("bookmarks", bookmarks).put("history", history)
+            .put("workspaces", workspaces).put("settings", settings)
+    }
+
+    private fun mergeSyncSnapshots(local: JSONObject, remote: JSONObject): JSONObject {
+        val result = JSONObject(remote.toString())
+        fun mergeArray(key: String, idField: String, maxField: String? = null) {
+            val merged = linkedMapOf<String, JSONObject>()
+            val old = remote.optJSONArray(key) ?: JSONArray()
+            val current = local.optJSONArray(key) ?: JSONArray()
+            for (i in 0 until old.length()) { val item = old.getJSONObject(i); merged[item.optString(idField)] = item }
+            for (i in 0 until current.length()) {
+                val item = current.getJSONObject(i); val id = item.optString(idField)
+                val prior = merged[id]
+                if (prior == null || maxField == null || item.optLong(maxField) >= prior.optLong(maxField)) merged[id] = item
+            }
+            result.put(key, JSONArray().also { array -> merged.values.forEach { array.put(it) } })
+        }
+        mergeArray("bookmarks", "url", "addedAt")
+        mergeArray("history", "url", "visitedAt")
+        mergeArray("workspaces", "name")
+        result.put("settings", local.optJSONObject("settings") ?: remote.optJSONObject("settings") ?: JSONObject())
+        result.put("schema", 1)
+        return result
+    }
+
+    private fun applySyncSnapshot(snapshot: JSONObject) {
+        val bookmarks = snapshot.optJSONArray("bookmarks") ?: JSONArray()
+        val bookmarkItems = mutableListOf<BookmarkEntry>()
+        for (i in 0 until bookmarks.length()) {
+            val item = bookmarks.getJSONObject(i); val url = item.optString("url")
+            if (url.startsWith("http://") || url.startsWith("https://")) bookmarkItems.add(BookmarkEntry(url,
+                item.optString("title", Uri.parse(url).host ?: url), item.optString("folder", "General"), item.optLong("addedAt")))
+        }
+        saveBookmarks(bookmarkItems)
+        val history = snapshot.optJSONArray("history") ?: JSONArray()
+        val historyItems = JSONArray()
+        for (i in 0 until history.length()) {
+            val item = history.getJSONObject(i); val url = item.optString("url")
+            if (url.startsWith("http://") || url.startsWith("https://")) historyItems.put(item)
+        }
+        prefs.edit().putString("history_v2", historyItems.toString()).apply()
+        val workspaces = snapshot.optJSONArray("workspaces") ?: JSONArray()
+        val workspaceSet = mutableSetOf<String>()
+        for (i in 0 until workspaces.length()) workspaceSet.add(workspaces.getJSONObject(i).toString())
+        prefs.edit().putStringSet("saved_workspaces", workspaceSet).apply()
+        val settings = snapshot.optJSONObject("settings") ?: return
+        searchEngine = settings.optString("search_engine", searchEngine)
+        prefs.edit().putString("search_engine", searchEngine)
+            .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
+            .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
+            .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
+            .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
+            .putStringSet("bookmark_folders", settings.optJSONArray("bookmark_folders").toStringSet()).apply()
+        NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
+        searchEngineButton.text = "$searchEngine ▾"
+    }
+
+    private fun JSONArray?.toStringSet(): Set<String> {
+        if (this == null) return emptySet()
+        return (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }.toSet()
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

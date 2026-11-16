@@ -14,9 +14,11 @@ android {
         applicationId = "com.nova.browser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0-core"
+        versionCode = 3
+        versionName = "0.3.0-auth-sync"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SUPABASE_URL", "\"https://ycgubmykjhikjyfbgycp.supabase.co\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTBZ2fV2A_XTM04aEP\"")
     }
 
     compileOptions {
@@ -30,6 +32,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+    buildFeatures { buildConfig = true }
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
@@ -46,4 +49,5 @@ dependencies {
     // GeckoView is the sole browser engine.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 }

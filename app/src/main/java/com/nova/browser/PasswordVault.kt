@@ -52,6 +52,32 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun delete(guid: String) = persist(all().filterNot { it.guid == guid })
 
+    @Synchronized fun exportForSync(): JSONArray {
+        val array = JSONArray()
+        all().forEach { login ->
+            array.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
+                .put("origin", login.origin).put("formActionOrigin", login.formActionOrigin ?: "")
+                .put("httpRealm", login.httpRealm ?: "").put("username", login.username).put("password", login.password))
+        }
+        return array
+    }
+
+    @Synchronized fun importFromSync(array: JSONArray) {
+        require(array.length() <= 2000) { "Cloud password vault is unexpectedly large" }
+        val merged = all().associateBy { it.origin + "|" + it.username }.toMutableMap()
+        for (i in 0 until array.length()) {
+            val item = array.getJSONObject(i)
+            val origin = item.getString("origin")
+            require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
+            val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
+                .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                .httpRealm(item.optString("httpRealm").ifBlank { null })
+                .username(item.getString("username")).password(item.getString("password")).build()
+            merged[entry.origin + "|" + entry.username] = entry
+        }
+        persist(merged.values.toList())
+    }
+
     @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).apply(); vaultFile.delete() }
 
     private fun persist(entries: List<Autocomplete.LoginEntry>) {
