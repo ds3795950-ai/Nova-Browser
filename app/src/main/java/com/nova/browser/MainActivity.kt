@@ -52,7 +52,6 @@ class MainActivity : Activity() {
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
     private lateinit var novaDownloads: NovaDownloadManager
-    private var readerOriginalUrl: String? = null
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
     private val uploadRequestCode = 4102
@@ -84,7 +83,8 @@ class MainActivity : Activity() {
         var canGoForward: Boolean = false,
         var lastAccess: Long = 0L,
         var needsReload: Boolean = false,
-        var desktopSite: Boolean = false
+        var desktopSite: Boolean = false,
+        var readerOriginalUrl: String? = null
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -400,7 +400,7 @@ class MainActivity : Activity() {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 val tab = tabs.firstOrNull { it.session === session }
                 val body = response.body
-                if (tab?.isPrivate == true || tab?.isGuest == true) {
+                if (tab == null || tab.isPrivate || tab.isGuest) {
                     runCatching { body?.close() }
                     toast("Downloads are disabled in private and Guest Mode")
                     return
@@ -427,7 +427,7 @@ class MainActivity : Activity() {
                 if (url.isNullOrBlank()) return
                 tab.lastUrl = url
                 tab.title = Uri.parse(url).host ?: url.take(48)
-                if (!tab.isPrivate && !tab.isGuest) { addHistory(url); persistTabs() }
+                if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
                 if (currentTab() === tab) {
                     addressBar.setText(url)
                     pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
@@ -666,9 +666,11 @@ class MainActivity : Activity() {
     private fun persistTabs() {
         val saved = JSONArray()
         tabs.filter { !it.isPrivate && !it.isGuest }.forEach { tab ->
-            saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title))
+            saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title)
+                .put("readerOriginalUrl", tab.readerOriginalUrl ?: ""))
         }
-        prefs.edit().putString("open_normal_tabs", saved.toString()).putInt("active_normal_tab", tabs.take(activeIndex + 1).count { !it.isPrivate } - 1).apply()
+        prefs.edit().putString("open_normal_tabs", saved.toString())
+            .putInt("active_normal_tab", (tabs.take(activeIndex + 1).count { !it.isPrivate && !it.isGuest } - 1).coerceAtLeast(0)).apply()
     }
 
     private fun restoreTabs() {
@@ -680,6 +682,7 @@ class MainActivity : Activity() {
                 createTab(false, item.optString("url", HOME_URL))
                 tabs.last().group = item.optString("group", "Ungrouped")
                 tabs.last().title = item.optString("title", "New tab")
+                tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
             }
             if (tabs.isNotEmpty()) {
                 val index = prefs.getInt("active_normal_tab", 0).coerceIn(tabs.indices)
@@ -702,6 +705,7 @@ class MainActivity : Activity() {
                     createTab(false, item.optString("url", HOME_URL))
                     tabs.last().group = item.optString("group", "Ungrouped")
                     tabs.last().title = item.optString("title", "New tab")
+                tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 }
                 persistTabs(); toast("Workspace restored")
             }.onFailure { toast("Could not restore workspace") }
@@ -982,7 +986,7 @@ class MainActivity : Activity() {
         val tab = currentTab() ?: return
         val url = tab.lastUrl
         if (!url.startsWith("http")) { toast("Open an article first"); return }
-        readerOriginalUrl = url
+        tab.readerOriginalUrl = url
         val readerUrl = "about:reader?url=${Uri.encode(url)}"
         tab.lastUrl = readerUrl
         addressBar.setText(readerUrl)
@@ -995,8 +999,10 @@ class MainActivity : Activity() {
     }
 
     private fun exitReaderMode() {
-        val original = readerOriginalUrl ?: return
-        readerOriginalUrl = null
+        val tab = currentTab() ?: return
+        val original = tab.readerOriginalUrl ?: return
+        tab.readerOriginalUrl = null
+        tab.lastUrl = original
         navigate(original)
     }
 
