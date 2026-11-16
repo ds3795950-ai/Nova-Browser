@@ -35,6 +35,14 @@ import android.widget.Toast
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.ContentBlocking
+import org.mozilla.geckoview.Autocomplete
+import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebExtensionController
+import org.mozilla.geckoview.StorageController
+import android.widget.CheckBox
+import android.content.ClipData
+import android.content.ClipboardManager
 import org.mozilla.geckoview.GeckoView
 
 /** Nova browser core. GeckoView is the only rendering engine. */
@@ -52,6 +60,9 @@ class MainActivity : Activity() {
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
     private lateinit var novaDownloads: NovaDownloadManager
+    private lateinit var passwordVault: PasswordVault
+    private var pendingHistoryExport: String? = null
+    private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
     private val uploadRequestCode = 4102
@@ -84,13 +95,28 @@ class MainActivity : Activity() {
         var lastAccess: Long = 0L,
         var needsReload: Boolean = false,
         var desktopSite: Boolean = false,
-        var readerOriginalUrl: String? = null
+        var readerOriginalUrl: String? = null,
+        var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
+        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList()
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
+        passwordVault = PasswordVault(this)
+        NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
+        runtime.setAutocompleteStorageDelegate(object : Autocomplete.StorageDelegate {
+            override fun onLoginFetch(domain: String): GeckoResult<Array<Autocomplete.LoginEntry>> {
+                val matches = runCatching { passwordVault.all().filter { Uri.parse(it.origin).host.equals(domain, true) } }.getOrDefault(emptyList())
+                return GeckoResult.fromValue(matches.toTypedArray())
+            }
+            override fun onLoginSave(login: Autocomplete.LoginEntry) {
+                runCatching { passwordVault.save(login) }.onFailure { runOnUiThread { toast("Could not save login securely: ${it.localizedMessage}") } }
+            }
+        })
+        runtime.settings.setLoginAutofillEnabled(false)
+        configureExtensionPermissions()
         novaDownloads = NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
         val previousGuestContext = prefs.getString("guest_context_id", null)
         if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
@@ -164,6 +190,16 @@ class MainActivity : Activity() {
         tools.addView(actionButton("Share") { sharePage() })
         tools.addView(actionButton("Settings") { showSettings() })
         top.addView(tools)
+        val advancedTools = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        advancedTools.addView(actionButton("Shield") { showShieldSettings() })
+        advancedTools.addView(actionButton("AI") { showAiAssistant() })
+        advancedTools.addView(actionButton("Add-ons") { showExtensions() })
+        advancedTools.addView(actionButton("Passwords") { showPasswordVault() })
+        advancedTools.addView(actionButton("Site") { showSiteControls() })
+        top.addView(advancedTools)
 
         tabLabel = TextView(this).apply {
             text = "Nova Browser"
@@ -368,6 +404,44 @@ class MainActivity : Activity() {
                 return result
             }
 
+            override fun onLoginSave(session: GeckoSession, request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSaveOption>): GeckoResult<PromptResponse> {
+                val tab = tabs.firstOrNull { it.session === session }
+                val option = request.options.firstOrNull()
+                val result = GeckoResult<PromptResponse>()
+                if (tab == null || tab.isPrivate || tab.isGuest || option == null) {
+                    result.complete(request.dismiss())
+                    return result
+                }
+                val login = option.value
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Save password?")
+                        .setMessage("Save the login for ${Uri.parse(login.origin).host ?: login.origin} in Nova's encrypted on-device vault? The password stays on this device.")
+                        .setPositiveButton("Save securely") { _, _ -> result.complete(request.confirm(option)) }
+                        .setNegativeButton("Not now") { _, _ -> result.complete(request.dismiss()) }
+                        .setOnCancelListener { result.complete(request.dismiss()) }
+                        .show()
+                }
+                return result
+            }
+
+            override fun onLoginSelect(session: GeckoSession, request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>): GeckoResult<PromptResponse> {
+                val tab = tabs.firstOrNull { it.session === session }
+                val result = GeckoResult<PromptResponse>()
+                if (tab == null || tab.isPrivate || tab.isGuest || request.options.isEmpty()) {
+                    result.complete(request.dismiss())
+                    return result
+                }
+                val choices = request.options.map { it.value.username.ifBlank { Uri.parse(it.value.origin).host ?: "Saved login" } }.toTypedArray()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle("Choose saved login")
+                        .setItems(choices) { _, which -> result.complete(request.confirm(request.options[which])) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(request.dismiss()) }
+                        .setOnCancelListener { result.complete(request.dismiss()) }.show()
+                }
+                return result
+            }
+
             override fun onFolderUploadPrompt(session: GeckoSession, prompt: FolderUploadPrompt): GeckoResult<PromptResponse> {
                 val result = GeckoResult<PromptResponse>()
                 runOnUiThread {
@@ -426,6 +500,8 @@ class MainActivity : Activity() {
             override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                 if (url.isNullOrBlank()) return
                 tab.lastUrl = url
+                tab.contentPermissions = perms
+                tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 tab.title = Uri.parse(url).host ?: url.take(48)
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
                 if (currentTab() === tab) {
@@ -1104,9 +1180,244 @@ class MainActivity : Activity() {
         }, "Share page"))
     }
 
+    private fun configureExtensionPermissions() {
+        runtime.getWebExtensionController().setPromptDelegate(object : WebExtensionController.PromptDelegate {
+            override fun onInstallPromptRequest(
+                extension: WebExtension,
+                permissions: Array<out String>,
+                origins: Array<out String>,
+                dataCollectionPermissions: Array<out String>
+            ): GeckoResult<WebExtension.PermissionPromptResponse> {
+                val result = GeckoResult<WebExtension.PermissionPromptResponse>()
+                val detail = buildString {
+                    append("Extension ID: ").append(extension.id)
+                    if (permissions.isNotEmpty()) append("\\n\\nPermissions:\\n• ").append(permissions.joinToString("\\n• "))
+                    if (origins.isNotEmpty()) append("\\n\\nWebsite access:\\n• ").append(origins.joinToString("\\n• "))
+                    if (dataCollectionPermissions.isNotEmpty()) append("\\n\\nData collection requested:\\n• ").append(dataCollectionPermissions.joinToString("\\n• "))
+                    append("\\n\\nPrivate browsing access and optional data collection remain disabled.")
+                }
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle("Install extension?")
+                        .setMessage(detail)
+                        .setPositiveButton("Grant listed permissions") { _, _ -> result.complete(WebExtension.PermissionPromptResponse(true, false, false)) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(WebExtension.PermissionPromptResponse(false, false, false)) }
+                        .setOnCancelListener { result.complete(WebExtension.PermissionPromptResponse(false, false, false)) }
+                        .show()
+                }
+                return result
+            }
+
+            override fun onOptionalPrompt(extension: WebExtension, permissions: Array<out String>, origins: Array<out String>, dataCollectionPermissions: Array<out String>): GeckoResult<AllowOrDeny> = GeckoResult.deny()
+            override fun onUpdatePrompt(extension: WebExtension, newPermissions: Array<out String>, newOrigins: Array<out String>, newDataCollectionPermissions: Array<out String>): GeckoResult<AllowOrDeny> = GeckoResult.deny()
+        })
+    }
+
+    private fun showShieldSettings() {
+        val modes = ShieldMode.values()
+        val current = NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD"))
+        val tab = currentTab()
+        val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log")
+        AlertDialog.Builder(this).setTitle("Nova Shield · ${current.name}")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0, 1, 2 -> {
+                        val mode = modes[which]
+                        prefs.edit().putString("shield_mode", mode.name).apply()
+                        NovaShield.apply(runtime, mode)
+                        toast("Nova Shield: ${mode.name.lowercase().replaceFirstChar { it.uppercase() }}")
+                    }
+                    3 -> {
+                        val permission = tab?.trackingPermission
+                        if (permission == null) { toast("Open a website first; site tracking controls are not available on this page"); return@setItems }
+                        val allow = permission.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                        runtime.storageController.setPermission(permission, if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                        toast(if (allow) "Trackers allowed for $host · reload the page" else "Tracking protection restored for $host · reload the page")
+                        tab.session?.reload()
+                    }
+                    4 -> {
+                        val session = tab?.session
+                        if (session == null) { toast("Open a page first"); return@setItems }
+                        runtime.getContentBlockingController().getLog(session).accept({ entries ->
+                            runOnUiThread { AlertDialog.Builder(this).setTitle("Nova Shield · $host")
+                                .setMessage("${entries.size} content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
+                                .setPositiveButton("OK", null).show() }
+                        }, { error -> runOnUiThread { toast("Protection log unavailable: ${error.localizedMessage}") } })
+                    }
+                }
+            }.setNegativeButton("Close", null).show()
+    }
+
+    private fun showAiAssistant() {
+        val providers = AiAssistantRouter.Provider.values()
+        AlertDialog.Builder(this).setTitle("Choose browser AI")
+            .setItems(providers.map { it.label }.toTypedArray()) { _, selected ->
+                val provider = providers[selected]
+                val prompt = EditText(this).apply { hint = "Ask ${provider.label} anything…"; minLines = 2; setSingleLine(false) }
+                val includePage = CheckBox(this).apply { text = "Include current page URL in the prompt"; isChecked = false }
+                val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 0); addView(prompt); addView(includePage) }
+                AlertDialog.Builder(this).setTitle("Ask ${provider.label}")
+                    .setMessage("Your prompt${if (includePage.isChecked) " and current page URL" else ""} will be sent to ${provider.label} only when you press Send. Nova does not send page content automatically.")
+                    .setView(content)
+                    .setPositiveButton("Send") { _, _ ->
+                        val question = prompt.text.toString().trim()
+                        if (question.isBlank()) { toast("Enter a question first"); return@setPositiveButton }
+                        val tab = currentTab()
+                        val page = if (includePage.isChecked) tab?.lastUrl else null
+                        val url = AiAssistantRouter.buildUrl(provider, question, page)
+                        createTab(isPrivate = tab?.isPrivate == true, url = url, isGuest = tab?.isGuest == true)
+                    }.setNegativeButton("Cancel", null).show()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showExtensions() {
+        val controller = runtime.getWebExtensionController()
+        controller.list().accept({ extensions ->
+            runOnUiThread {
+                val rows = extensions.map { "${it.metaData.name ?: it.id} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${extensions.size}")
+                    .setItems(rows) { _, which ->
+                        val extension = extensions[which]
+                        val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
+                        AlertDialog.Builder(this).setTitle(extension.metaData.name ?: extension.id)
+                            .setItems(actions) { _, action ->
+                                when (actions[action]) {
+                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it.localizedMessage}") })
+                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension enabled") }, { toast("Could not enable: ${it.localizedMessage}") })
+                                    "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this extension and its data?")
+                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ toast("Extension removed") }, { toast("Could not uninstall: ${it.localizedMessage}") }) }
+                                        .setNegativeButton("Cancel", null).show()
+                                }
+                            }.setNegativeButton("Close", null).show()
+                    }
+                    .setPositiveButton("Install signed XPI URL") { _, _ -> installExtensionPrompt() }
+                    .setNeutralButton("Browse add-ons") { _, _ -> createTab(false, "https://addons.mozilla.org/android/") }
+                    .setNegativeButton("Close", null).show()
+            }
+        }, { error -> runOnUiThread { toast("Could not list extensions: ${error.localizedMessage}") } })
+    }
+
+    private fun installExtensionPrompt() {
+        val input = EditText(this).apply { hint = "https://…/extension.xpi"; setSingleLine(true) }
+        AlertDialog.Builder(this).setTitle("Install signed extension")
+            .setMessage("Enter an HTTPS .xpi URL. GeckoView verifies Mozilla signing and asks before granting permissions.")
+            .setView(input).setPositiveButton("Install") { _, _ ->
+                val url = input.text.toString().trim()
+                if (!url.startsWith("https://") || !url.substringBefore('?').endsWith(".xpi", true)) { toast("Use a direct HTTPS .xpi URL"); return@setPositiveButton }
+                runtime.getWebExtensionController().install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
+                    .accept({ toast("Extension installed: ${it.metaData.name ?: it.id}") }, { toast("Extension install failed: ${it.localizedMessage}") })
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showPasswordVault() {
+        val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it.localizedMessage}"); return }
+        val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} · ${it.username}" }.toTypedArray()
+        val labels = rows + "Add login manually"
+        AlertDialog.Builder(this).setTitle("Encrypted password vault · ${entries.size}")
+            .setItems(labels) { _, which ->
+                if (which == entries.size) { addManualLogin(); return@setItems }
+                val entry = entries[which]
+                AlertDialog.Builder(this).setTitle(entry.username)
+                    .setItems(arrayOf("Copy username", "Copy password", "Delete saved login")) { _, action ->
+                        when (action) {
+                            0 -> copyToClipboard("Username", entry.username)
+                            1 -> copyToClipboard("Password", entry.password)
+                            2 -> AlertDialog.Builder(this).setMessage("Delete this saved login from the encrypted vault?")
+                                .setPositiveButton("Delete") { _, _ -> passwordVault.delete(entry.guid ?: ""); toast("Login deleted") }
+                                .setNegativeButton("Cancel", null).show()
+                        }
+                    }.setNegativeButton("Close", null).show()
+            }.setPositiveButton("Close", null)
+            .setNeutralButton("Add login") { _, _ -> addManualLogin() }.show()
+    }
+
+    private fun addManualLogin() {
+        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 0) }
+        val origin = EditText(this).apply { hint = "https://example.com"; setSingleLine(true) }
+        val username = EditText(this).apply { hint = "Username"; setSingleLine(true) }
+        val password = EditText(this).apply { hint = "Password"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        form.addView(origin); form.addView(username); form.addView(password)
+        AlertDialog.Builder(this).setTitle("Add encrypted login").setView(form)
+            .setPositiveButton("Save") { _, _ ->
+                val raw = origin.text.toString().trim()
+                val url = if (raw.startsWith("https://") || raw.startsWith("http://")) raw else "https://$raw"
+                if (Uri.parse(url).host.isNullOrBlank() || username.text.isBlank() || password.text.isBlank()) { toast("Enter a valid site, username and password"); return@setPositiveButton }
+                runCatching { passwordVault.save(Autocomplete.LoginEntry.Builder().guid(UUID.randomUUID().toString()).origin("${Uri.parse(url).scheme}://${Uri.parse(url).host}").username(username.text.toString()).password(password.text.toString()).build()) }
+                    .onSuccess { toast("Login saved encrypted on this device") }
+                    .onFailure { toast("Could not save login: ${it.localizedMessage}") }
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun copyToClipboard(label: String, value: String) {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
+        toast("$label copied · clear your clipboard when finished")
+    }
+
+    private fun showSiteControls() {
+        val tab = currentTab() ?: return
+        val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
+        if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
+        val perms = tab.contentPermissions.filter { it.permission != GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
+        val permissionNames = mapOf(
+            GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION to "Location",
+            GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION to "Notifications",
+            GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE to "Persistent storage",
+            GeckoSession.PermissionDelegate.PERMISSION_XR to "XR",
+            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE to "Audible autoplay",
+            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE to "Silent autoplay",
+            GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS to "DRM media",
+            GeckoSession.PermissionDelegate.PERMISSION_LOCAL_NETWORK_ACCESS to "Local network",
+            GeckoSession.PermissionDelegate.PERMISSION_LOCAL_DEVICE_ACCESS to "Local device"
+        )
+        val rows = perms.map { "${permissionNames[it.permission] ?: "Permission ${it.permission}"} · ${when (it.value) { GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"; GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"; else -> "Ask" }}" }.toTypedArray()
+        val options = rows + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
+        AlertDialog.Builder(this).setTitle("Site controls · $host")
+            .setItems(options) { _, which ->
+                when {
+                    which < perms.size -> {
+                        val perm = perms[which]
+                        val next = if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY else GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                        runtime.storageController.setPermission(perm, next)
+                        toast("Site permission updated · reload the page")
+                    }
+                    which == perms.size -> showShieldSettings()
+                    else -> AlertDialog.Builder(this).setMessage("Clear cookies, caches, and site storage for $host? Other sites are not affected.")
+                        .setPositiveButton("Clear site data") { _, _ ->
+                            runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)
+                                .accept({ runOnUiThread { toast("Site data cleared for $host") } }, { error -> runOnUiThread { toast("Could not clear site data: ${error.localizedMessage}") } })
+                        }.setNegativeButton("Cancel", null).show()
+                }
+            }.setNegativeButton("Close", null).show()
+    }
+
+    private fun showAccessibilitySettings() {
+        val factors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
+        val labels = arrayOf("90%", "100%", "115%", "130%", "150%")
+        val selected = prefs.getInt("font_scale_index", 1).coerceIn(factors.indices)
+        AlertDialog.Builder(this).setTitle("Accessibility · page text size")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                prefs.edit().putInt("font_scale_index", which).apply()
+                runtime.settings.setFontSizeFactor(factors[which])
+                runtime.settings.setForceUserScalableEnabled(true)
+                toast("Page text size set to ${labels[which]}")
+                dialog.dismiss()
+            }.setNegativeButton("Close", null).show()
+    }
+
+    private fun exportHistory() {
+        val array = JSONArray()
+        readHistory().sortedByDescending { it.visitedAt }.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
+        pendingHistoryExport = array.toString(2)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-history.json")
+        }
+        startActivityForResult(intent, historyExportRequestCode)
+    }
+
     private fun showSettings() {
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "About Nova")
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
@@ -1133,7 +1444,14 @@ class MainActivity : Activity() {
                 }
                 4 -> closeGuestTabs()
                 5 -> exitReaderMode()
-                6 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
+                6 -> showShieldSettings()
+                7 -> showAiAssistant()
+                8 -> showExtensions()
+                9 -> showPasswordVault()
+                10 -> showSiteControls()
+                11 -> showAccessibilitySettings()
+                12 -> exportHistory()
+                13 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
                     .setPositiveButton("OK", null).show()
             }
         }.show()
@@ -1166,6 +1484,19 @@ class MainActivity : Activity() {
                         result.complete(response)
                     } else result.complete(prompt.dismiss())
                 } else result.complete(prompt.dismiss())
+            }
+            return
+        }
+        if (requestCode == historyExportRequestCode) {
+            val payload = pendingHistoryExport
+            pendingHistoryExport = null
+            val uri = data?.data
+            if (resultCode == RESULT_OK && uri != null && payload != null) {
+                runCatching {
+                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(payload) }
+                        ?: throw IllegalStateException("Could not open export destination")
+                    toast("Browsing history exported")
+                }.onFailure { toast("History export failed: ${it.localizedMessage}") }
             }
             return
         }

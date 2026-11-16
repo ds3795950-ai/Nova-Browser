@@ -50,3 +50,30 @@ Never describe Guest Mode as Tor anonymity unless traffic is actually routed thr
 - True split-screen with two simultaneously visible GeckoViews is not implemented yet.
 - Fine-grained automatic tab sleeping/memory eviction is not implemented; current behavior only deactivates unfocused sessions.
 - Group management currently assigns a shared group/workspace label; richer collapsed group management remains future work.
+
+
+## Phase 5 — Nova Shield implementation (2026-11-16)
+- Added Off, Standard and Aggressive modes backed by GeckoView native anti-tracking, cookie isolation, ETP, query-parameter stripping and Safe Browsing settings.
+- Safe Browsing remains enabled in every mode; turning Shield Off only disables the extra tracking protections.
+- Enabled Global Privacy Control and native fingerprinting protection in Aggressive mode (and private browsing).
+- Added per-site tracking-protection exception control using GeckoView's permission object and a per-page protection log view.
+- Added site permission inspection/change and site-data clearing controls.
+- Note: exact tracker coverage depends on GeckoView's shipped protection lists; this is not a DNS firewall or a claim that every ad is blocked.
+
+## Phase 6 — Browser AI integrations (2026-11-16)
+- Added ChatGPT, Claude and Perplexity browser handoff through their official web apps.
+- Prompts are user-entered; page URL context is opt-in and only sent after the user presses Send. Page contents are not scraped or transmitted by Nova.
+- No API keys or provider credentials are embedded in the APK.
+
+## Phase 7 — Extensions and advanced tools (2026-11-16)
+- Added GeckoView WebExtension manager: list, enable, disable, uninstall and install a direct HTTPS XPI. GeckoView validates signed add-ons.
+- Required extension permissions require an explicit prompt; private-browsing access and data-collection consent are denied by default; optional permission requests are denied.
+- Added encrypted password storage using AES-GCM with a non-exportable Android Keystore key, GeckoView login fetch/save/select delegates, and a local vault UI. Automatic one-entry autofill is intentionally off; user selection is required. Password saving/autocomplete is disabled in private and Guest tabs.
+- Added per-site permission controls, site-data clearing, adjustable page text scaling and JSON history export. Bookmark JSON import/export already exists.
+- No raw passwords are exported.
+
+### Verification caveats
+- This implementation requires CI compilation and regression tests before build-verified status.
+- Extension availability depends on Mozilla-signed XPI compatibility with the embedded GeckoView version.
+- AI services run in their official websites and require the user to sign in with each provider.
+- Physical-device testing remains required for permission prompts, Android Keystore behavior, extension installs and password form flows.
