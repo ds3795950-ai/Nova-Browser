@@ -174,9 +174,17 @@ class MainActivity : ComponentActivity() {
             imeOptions = EditorInfo.IME_ACTION_GO
             setBackgroundColor(0xFF30243D.toInt())
             setPadding(12, 0, 12, 0)
-            setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_GO) {
-                    navigate(text.toString())
+            contentDescription = "Nova address bar"
+            setOnEditorActionListener { _, actionId, event ->
+                val enterKey = event?.let {
+                    it.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
+                        it.action == android.view.KeyEvent.ACTION_DOWN
+                } == true
+                if (actionId == EditorInfo.IME_ACTION_GO ||
+                    actionId == EditorInfo.IME_ACTION_SEARCH || enterKey
+                ) {
+                    val query = text.toString()
+                    if (query.isNotBlank()) navigate(query)
                     true
                 } else false
             }
