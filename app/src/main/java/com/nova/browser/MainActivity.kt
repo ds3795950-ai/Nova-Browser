@@ -29,6 +29,12 @@ import org.mozilla.geckoview.GeckoView
 class MainActivity : Activity() {
     private lateinit var runtime: GeckoRuntime
     private lateinit var browserView: GeckoView
+    private lateinit var secondaryBrowserView: GeckoView
+    private lateinit var secondaryPane: LinearLayout
+    private lateinit var secondaryAddressBar: EditText
+    private lateinit var browserPane: LinearLayout
+    private var splitTabId: String? = null
+    private val collapsedGroups = mutableSetOf<String>()
     private lateinit var addressBar: EditText
     private lateinit var tabLabel: TextView
     private lateinit var pageStatus: TextView
@@ -42,14 +48,16 @@ class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
 
     private data class BrowserTab(
-        val session: GeckoSession,
+        var session: GeckoSession?,
         val isPrivate: Boolean,
         val id: String = UUID.randomUUID().toString(),
         var lastUrl: String = HOME_URL,
         var group: String = "Ungrouped",
         var title: String = "New tab",
         var canGoBack: Boolean = false,
-        var canGoForward: Boolean = false
+        var canGoForward: Boolean = false,
+        var lastAccess: Long = 0L,
+        var needsReload: Boolean = false
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,6 +113,7 @@ class MainActivity : Activity() {
         controls.addView(actionButton("Home") { goHome() })
         controls.addView(actionButton("＋") { createTab(false, HOME_URL) })
         controls.addView(actionButton("Tabs") { showTabs() })
+        controls.addView(actionButton("Split") { chooseSplitTab() })
         controls.addView(actionButton("Private") { createTab(true, HOME_URL) })
         top.addView(controls)
 
@@ -135,14 +144,40 @@ class MainActivity : Activity() {
         top.addView(pageStatus)
 
         browserView = GeckoView(this)
+        secondaryBrowserView = GeckoView(this)
+        secondaryAddressBar = EditText(this).apply {
+            hint = "Second pane address"
+            singleLine = true
+            textSize = 12f
+            setTextColor(0xFFFFFFFF.toInt())
+            setHintTextColor(0xFFB9AEC8.toInt())
+            setBackgroundColor(0xFF30243D.toInt())
+        }
+        val secondaryControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(secondaryAddressBar, LinearLayout.LayoutParams(0, 42, 1f))
+            addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
+            addView(actionButton("Close split") { exitSplitScreen() })
+        }
+        secondaryPane = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(secondaryControls, LinearLayout.LayoutParams(-1, -2))
+            addView(secondaryBrowserView, LinearLayout.LayoutParams(-1, 0, 1f))
+            visibility = View.GONE
+        }
+        browserPane = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(browserView, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(secondaryPane, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
         homePanel = createHomePanel()
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xFF100D15.toInt())
             addView(top, LinearLayout.LayoutParams(-1, -2))
             addView(homePanel, LinearLayout.LayoutParams(-1, 0, 1f))
-            addView(browserView, LinearLayout.LayoutParams(-1, 0, 1f))
-            browserView.visibility = View.GONE
+            addView(browserPane, LinearLayout.LayoutParams(-1, 0, 1f))
+            browserPane.visibility = View.GONE
         }
         setContentView(root)
     }
@@ -206,7 +241,8 @@ class MainActivity : Activity() {
 
     private fun showHomeScreen() {
         homePanel.visibility = View.VISIBLE
-        browserView.visibility = View.GONE
+        if (splitTabId != null) exitSplitScreen()
+        browserPane.visibility = View.GONE
         addressBar.setText("")
         tabLabel.text = "Nova Browser · Home"
         pageStatus.text = "Ready · $searchEngine"
@@ -222,7 +258,7 @@ class MainActivity : Activity() {
 
     private fun showBrowserPage() {
         homePanel.visibility = View.GONE
-        browserView.visibility = View.VISIBLE
+        browserPane.visibility = View.VISIBLE
     }
 
     private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
@@ -237,24 +273,31 @@ class MainActivity : Activity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String) {
-        val settings = GeckoSessionSettings.Builder().usePrivateMode(isPrivate).build()
-        val session = GeckoSession(settings)
-        session.open(runtime)
-        val tab = BrowserTab(session, isPrivate, lastUrl = url)
+        currentTab()?.session?.setActive(false)
+        currentTab()?.session?.setFocused(false)
+        val tab = BrowserTab(null, isPrivate, lastUrl = url)
         tabs.add(tab)
+        activeIndex = tabs.lastIndex
+        val session = ensureSession(tab)
+        browserView.setSession(session)
+        session.setActive(true)
+        session.setFocused(true)
+        tab.lastAccess = System.nanoTime()
+        addressBar.setText(url)
+        tabLabel.text = if (isPrivate) "Private tab · ${tabs.size} total" else "Tab ${tabs.size}"
+        if (!isPrivate) persistTabs()
+        if (url == HOME_URL) showHomeScreen() else navigate(url)
+        enforceSessionBudget()
+    }
+
+    private fun ensureSession(tab: BrowserTab): GeckoSession {
+        tab.session?.let { return it }
+        val session = GeckoSession(GeckoSessionSettings.Builder().usePrivateMode(tab.isPrivate).build())
+        session.open(runtime)
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                tab.canGoBack = canGoBack
-            }
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                tab.canGoForward = canGoForward
-            }
-            override fun onLocationChange(
-                session: GeckoSession,
-                url: String?,
-                perms: List<GeckoSession.PermissionDelegate.ContentPermission>,
-                hasUserGesture: Boolean
-            ) {
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) { tab.canGoBack = canGoBack }
+            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) { tab.canGoForward = canGoForward }
+            override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                 if (url.isNullOrBlank()) return
                 tab.lastUrl = url
                 tab.title = Uri.parse(url).host ?: url.take(48)
@@ -265,16 +308,27 @@ class MainActivity : Activity() {
                 }
             }
         }
-        currentTab()?.session?.setActive(false)
-        currentTab()?.session?.setFocused(false)
-        activeIndex = tabs.lastIndex
-        browserView.setSession(session)
-        session.setActive(true)
-        session.setFocused(true)
-        addressBar.setText(url)
-        tabLabel.text = if (isPrivate) "Private tab · ${tabs.size} total" else "Tab ${tabs.size}"
-        if (!isPrivate) persistTabs()
-        if (url == HOME_URL) showHomeScreen() else navigate(url)
+        tab.session = session
+        if (tab.needsReload && tab.lastUrl != HOME_URL) {
+            session.loadUri(tab.lastUrl)
+            tab.needsReload = false
+        }
+        return session
+    }
+
+    private fun enforceSessionBudget() {
+        val keep = tabs.sortedByDescending { if (it === currentTab()) Long.MAX_VALUE else it.lastAccess }
+            .take(4).toSet()
+        tabs.forEach { tab ->
+            if (tab !in keep && tab.session != null && tab.id != splitTabId) {
+                tab.session?.setActive(false)
+                tab.session?.setFocused(false)
+                tab.session?.close()
+                tab.session = null
+                tab.needsReload = true
+            }
+        }
+        pageStatus.text = "Memory saver · up to 4 live tabs; sleeping tabs reload when reopened"
     }
 
     private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
@@ -285,14 +339,57 @@ class MainActivity : Activity() {
         currentTab()?.session?.setFocused(false)
         activeIndex = index
         val tab = tabs[index]
-        browserView.setSession(tab.session)
-        tab.session.setActive(true)
-        tab.session.setFocused(true)
+        tab.lastAccess = System.nanoTime()
+        if (splitTabId == tab.id) exitSplitScreen()
+        val session = ensureSession(tab)
+        browserView.setSession(session)
+        session.setActive(true)
+        session.setFocused(true)
         addressBar.setText(tab.lastUrl)
         tabLabel.text = (if (tab.isPrivate) "Private tab" else "Tab") + " · ${index + 1}/${tabs.size}"
         pageStatus.text = if (tab.isPrivate) "Private session" else "Normal session · ${tab.group}"
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
+        enforceSessionBudget()
         persistTabs()
+    }
+
+    private fun chooseSplitTab() {
+        val candidates = tabs.filter { !it.isPrivate && it !== currentTab() }
+        if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
+        AlertDialog.Builder(this).setTitle("Open second pane")
+            .setItems(candidates.map { it.title.ifBlank { it.lastUrl } }.toTypedArray()) { _, which ->
+                val tab = candidates[which]
+                if (splitTabId != null) exitSplitScreen()
+                val session = ensureSession(tab)
+                secondaryBrowserView.setSession(session)
+                secondaryAddressBar.setText(tab.lastUrl)
+                secondaryPane.visibility = View.VISIBLE
+                browserPane.visibility = View.VISIBLE
+                homePanel.visibility = View.GONE
+                session.setActive(true)
+                session.setFocused(false)
+                splitTabId = tab.id
+                toast("Split screen enabled")
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun exitSplitScreen() {
+        val second = tabs.firstOrNull { it.id == splitTabId }
+        second?.session?.setFocused(false)
+        second?.session?.setActive(false)
+        secondaryPane.visibility = View.GONE
+        splitTabId = null
+        enforceSessionBudget()
+    }
+
+    private fun navigateSecondary(input: String) {
+        val tab = tabs.firstOrNull { it.id == splitTabId } ?: return
+        val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        tab.lastUrl = target
+        tab.title = Uri.parse(target).host ?: target.take(48)
+        ensureSession(tab).loadUri(target)
+        secondaryAddressBar.setText(target)
+        if (!tab.isPrivate) persistTabs()
     }
 
     private fun navigate(input: String) {
@@ -305,7 +402,7 @@ class MainActivity : Activity() {
         addressBar.setText(target)
         pageStatus.text = if (tab.isPrivate) "Private browsing · history disabled" else "Loading…"
         try {
-            tab.session.loadUri(target)
+            ensureSession(tab).loadUri(target)
             if (!tab.isPrivate) addHistory(target)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
@@ -315,27 +412,29 @@ class MainActivity : Activity() {
 
     private fun goBack() {
         val tab = currentTab() ?: return
-        if (tab.canGoBack) tab.session.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
+        if (tab.canGoBack) tab.session?.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
     }
 
     private fun goForward() {
         val tab = currentTab() ?: return
-        if (tab.canGoForward) tab.session.goForward() else toast("No next page")
+        if (tab.canGoForward) tab.session?.goForward() else toast("No next page")
     }
 
-    private fun reloadPage() { currentTab()?.session?.reload() }
+    private fun reloadPage() { currentTab()?.let { ensureSession(it).reload() } }
 
     private fun showTabs() {
         if (tabs.isEmpty()) return
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
+        var tabDialog: AlertDialog? = null
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         actions.addView(actionButton("＋ Normal") { createTab(false, HOME_URL) })
         actions.addView(actionButton("＋ Private") { createTab(true, HOME_URL) })
         actions.addView(actionButton("Save session") { saveNamedSession() })
         actions.addView(actionButton("Workspaces") { showSavedWorkspaces() })
+        actions.addView(actionButton("Expand all") { collapsedGroups.clear(); tabDialog?.dismiss(); showTabs() })
+        actions.addView(actionButton("Collapse all") { tabs.map { it.group }.distinct().forEach { collapsedGroups.add("NORMAL TABS::$it"); collapsedGroups.add("PRIVATE TABS::$it") }; tabDialog?.dismiss(); showTabs() })
         content.addView(actions)
         val scroll = ScrollView(this)
-        var tabDialog: AlertDialog? = null
         val grid = GridLayout(this).apply { columnCount = 2; useDefaultMargins = true }
         val normal = tabs.indices.filter { !tabs[it].isPrivate }
         val private = tabs.indices.filter { tabs[it].isPrivate }
@@ -343,21 +442,30 @@ class MainActivity : Activity() {
             if (indices.isEmpty()) return
             val heading = TextView(this).apply { text = "$label (${indices.size})"; textSize = 13f; setTextColor(0xFFD8CBE8.toInt()); setPadding(8, 14, 8, 6) }
             grid.addView(heading, GridLayout.LayoutParams().apply { columnSpec = GridLayout.spec(0, 2); width = -1 })
-            indices.forEach { index ->
-                val tab = tabs[index]
-                val card = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(12, 12, 12, 12)
-                    background = GradientDrawable().apply { setColor(0xFF241B30.toInt()); cornerRadius = 18f; setStroke(1, 0xFF6D4C83.toInt()) }
+            val grouped = indices.groupBy { tabs[it].group.ifBlank { "Ungrouped" } }.toSortedMap()
+            grouped.forEach { (groupName, groupIndices) ->
+                val groupKey = "$label::$groupName"
+                val groupHeading = TextView(this).apply {
+                    text = (if (groupKey in collapsedGroups) "▸ " else "▾ ") + "$groupName (${groupIndices.size})"
+                    textSize = 12f; typeface = Typeface.DEFAULT_BOLD; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 12, 8, 10)
+                    setOnClickListener { if (!collapsedGroups.add(groupKey)) collapsedGroups.remove(groupKey); tabDialog?.dismiss(); showTabs() }
                 }
-                val headingText = TextView(this).apply { text = tab.title.ifBlank { "New tab" }; textSize = 14f; setTextColor(0xFFFFFFFF.toInt()); maxLines = 2 }
-                val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(0xFFB9AEC8.toInt()); maxLines = 2; setPadding(0, 5, 0, 5) }
-                val groupText = TextView(this).apply { text = "Group: ${tab.group}"; textSize = 10f; setTextColor(0xFFD8CBE8.toInt()) }
-                card.addView(headingText); card.addView(urlText); card.addView(groupText)
-                card.addView(actionButton("Open") { tabDialog?.dismiss(); switchTab(index) })
-                card.addView(actionButton("Group / rename") { tabDialog?.dismiss(); editTabGroup(index) })
-                card.addView(actionButton("Close") { tabDialog?.dismiss(); closeTabAt(index) })
-                grid.addView(card, GridLayout.LayoutParams().apply { width = 0; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); setMargins(5, 5, 5, 5) })
+                grid.addView(groupHeading, GridLayout.LayoutParams().apply { columnSpec = GridLayout.spec(0, 2); width = -1 })
+                if (groupKey in collapsedGroups) return@forEach
+                groupIndices.forEach { index ->
+                    val tab = tabs[index]
+                    val card = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL; setPadding(12, 12, 12, 12)
+                        background = GradientDrawable().apply { setColor(0xFF241B30.toInt()); cornerRadius = 18f; setStroke(1, 0xFF6D4C83.toInt()) }
+                    }
+                    val headingText = TextView(this).apply { text = tab.title.ifBlank { "New tab" }; textSize = 14f; setTextColor(0xFFFFFFFF.toInt()); maxLines = 2 }
+                    val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(0xFFB9AEC8.toInt()); maxLines = 2; setPadding(0, 5, 0, 5) }
+                    card.addView(headingText); card.addView(urlText)
+                    card.addView(actionButton("Open") { tabDialog?.dismiss(); switchTab(index) })
+                    card.addView(actionButton("Group / rename") { tabDialog?.dismiss(); editTabGroup(index) })
+                    card.addView(actionButton("Close") { tabDialog?.dismiss(); closeTabAt(index) })
+                    grid.addView(card, GridLayout.LayoutParams().apply { width = 0; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); setMargins(5, 5, 5, 5) })
+                }
             }
         }
         addSection("NORMAL TABS", normal)
@@ -394,7 +502,9 @@ class MainActivity : Activity() {
     private fun closeTabAt(index: Int) {
         if (index !in tabs.indices) return
         val wasActive = index == activeIndex
-        tabs.removeAt(index).session.close()
+        val removed = tabs.removeAt(index)
+        if (removed.id == splitTabId) exitSplitScreen()
+        removed.session?.close()
         if (tabs.isEmpty()) {
             activeIndex = 0
             createTab(false, HOME_URL)
@@ -540,7 +650,9 @@ class MainActivity : Activity() {
                 3 -> {
                     val privateTabs = tabs.indices.filter { tabs[it].isPrivate }.reversed()
                     privateTabs.forEach { index ->
-                        tabs.removeAt(index).session.close()
+                        val removed = tabs.removeAt(index)
+                        if (removed.id == splitTabId) exitSplitScreen()
+                        removed.session?.close()
                         if (index <= activeIndex) activeIndex = (activeIndex - 1).coerceAtLeast(0)
                     }
                     if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
@@ -561,12 +673,12 @@ class MainActivity : Activity() {
 
     override fun onBackPressed() {
         val tab = currentTab()
-        if (tab?.canGoBack == true) tab.session.goBack() else super.onBackPressed()
+        if (tab?.canGoBack == true) tab.session?.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
         persistTabs()
-        tabs.forEach { it.session.close() }
+        tabs.forEach { it.session?.close() }
         tabs.clear()
         if (::runtime.isInitialized) runtime.shutdown()
         super.onDestroy()
