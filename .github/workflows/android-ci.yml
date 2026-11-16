@@ -25,13 +25,20 @@ jobs:
         run: gradle :app:testDebugUnitTest
       - name: Assemble debug APK
         run: gradle :app:assembleDebug
-      - name: Decode release keystore
-        if: ${{ secrets.NOVA_RELEASE_KEYSTORE_BASE64 != '' && secrets.NOVA_RELEASE_STORE_PASSWORD != '' && secrets.NOVA_RELEASE_KEY_ALIAS != '' && secrets.NOVA_RELEASE_KEY_PASSWORD != '' }}
+      - name: Decode release keystore when all signing secrets are configured
         env:
           KEYSTORE_BASE64: ${{ secrets.NOVA_RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.NOVA_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.NOVA_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.NOVA_RELEASE_KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/nova-release.jks"
-          echo "NOVA_RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/nova-release.jks" >> "$GITHUB_ENV"
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/nova-release.jks"
+            echo "NOVA_RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/nova-release.jks" >> "$GITHUB_ENV"
+            echo "Release signing is configured."
+          else
+            echo "Release signing secrets are incomplete; CI will build an unsigned APK."
+          fi
       - name: Assemble release APK (signed when release secrets are configured)
         env:
           NOVA_RELEASE_STORE_PASSWORD: ${{ secrets.NOVA_RELEASE_STORE_PASSWORD }}
