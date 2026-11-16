@@ -10,7 +10,6 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.mozilla.geckoview.GeckoRuntime
@@ -18,11 +17,7 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 
-/**
- * Nova's first usable browser-core slice. GeckoView is the only rendering engine.
- * Browser data is local; private tabs use GeckoView private sessions and are not
- * added to the normal history/bookmark store.
- */
+/** Nova browser core. GeckoView is the only rendering engine. */
 class MainActivity : Activity() {
     private lateinit var runtime: GeckoRuntime
     private lateinit var browserView: GeckoView
@@ -38,14 +33,17 @@ class MainActivity : Activity() {
     private data class BrowserTab(
         val session: GeckoSession,
         val isPrivate: Boolean,
-        var lastUrl: String = HOME_URL
+        var lastUrl: String = HOME_URL,
+        var canGoBack: Boolean = false,
+        var canGoForward: Boolean = false
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
         buildBrowserUi()
-        createTab(isPrivate = false, url = HOME_URL)
+        createTab(false, HOME_URL)
     }
 
     private fun buildBrowserUi() {
@@ -140,14 +138,37 @@ class MainActivity : Activity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String) {
-        val settings = GeckoSessionSettings.Builder()
-            .usePrivateMode(isPrivate)
-            .build()
+        val settings = GeckoSessionSettings.Builder().usePrivateMode(isPrivate).build()
         val session = GeckoSession(settings)
         session.open(runtime)
-        tabs.add(BrowserTab(session, isPrivate, url))
+        val tab = BrowserTab(session, isPrivate, url)
+        tabs.add(tab)
+        session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                tab.canGoBack = canGoBack
+            }
+            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                tab.canGoForward = canGoForward
+            }
+            override fun onLocationChange(
+                session: GeckoSession,
+                url: String?,
+                perms: List<GeckoSession.PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean
+            ) {
+                if (url.isNullOrBlank()) return
+                tab.lastUrl = url
+                if (!tab.isPrivate) addHistory(url)
+                if (currentTab() === tab) {
+                    addressBar.setText(url)
+                    pageStatus.text = if (tab.isPrivate) "Private session" else "Secure browsing session"
+                }
+            }
+        }
         activeIndex = tabs.lastIndex
         browserView.setSession(session)
+        session.setActive(true)
+        session.setFocused(true)
         addressBar.setText(url)
         tabLabel.text = if (isPrivate) "Private tab · ${tabs.size} total" else "Tab ${tabs.size}"
         navigate(url)
@@ -157,22 +178,19 @@ class MainActivity : Activity() {
 
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
+        currentTab()?.session?.setActive(false)
         activeIndex = index
         val tab = tabs[index]
         browserView.setSession(tab.session)
+        tab.session.setActive(true)
+        tab.session.setFocused(true)
         addressBar.setText(tab.lastUrl)
         tabLabel.text = (if (tab.isPrivate) "Private tab" else "Tab") + " · ${index + 1}/${tabs.size}"
         pageStatus.text = if (tab.isPrivate) "Private session" else "Normal session"
     }
 
     private fun navigate(input: String) {
-        val value = input.trim()
-        if (value.isEmpty()) return
-        val target = when {
-            value.startsWith("https://", true) || value.startsWith("http://", true) -> value
-            value.contains('.') && !value.contains(' ') -> "https://$value"
-            else -> searchUrl(value)
-        }
+        val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         val tab = currentTab() ?: return
         tab.lastUrl = target
         addressBar.setText(target)
@@ -182,35 +200,21 @@ class MainActivity : Activity() {
             if (!tab.isPrivate) addHistory(target)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
-            Toast.makeText(this, "Could not open page: ${error.localizedMessage}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun searchUrl(query: String): String {
-        val encoded = Uri.encode(query)
-        return when (searchEngine) {
-            "Bing" -> "https://www.bing.com/search?q=$encoded"
-            "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
-            "Brave Search" -> "https://search.brave.com/search?q=$encoded"
-            else -> "https://www.google.com/search?q=$encoded"
+            toast("Could not open page: ${error.localizedMessage}")
         }
     }
 
     private fun goBack() {
-        val session = currentTab()?.session ?: return
-        if (session.navigationController.canGoBack) session.navigationController.goBack()
-        else toast("No previous page")
+        val tab = currentTab() ?: return
+        if (tab.canGoBack) tab.session.goBack() else toast("No previous page")
     }
 
     private fun goForward() {
-        val session = currentTab()?.session ?: return
-        if (session.navigationController.canGoForward) session.navigationController.goForward()
-        else toast("No next page")
+        val tab = currentTab() ?: return
+        if (tab.canGoForward) tab.session.goForward() else toast("No next page")
     }
 
-    private fun reloadPage() {
-        currentTab()?.session?.reload()
-    }
+    private fun reloadPage() { currentTab()?.session?.reload() }
 
     private fun showTabs() {
         if (tabs.isEmpty()) return
@@ -219,17 +223,14 @@ class MainActivity : Activity() {
         }.toMutableList()
         labels.add("＋ New normal tab")
         labels.add("＋ New private tab")
-        AlertDialog.Builder(this)
-            .setTitle("Open tabs")
+        AlertDialog.Builder(this).setTitle("Open tabs")
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     tabs.size -> createTab(false, HOME_URL)
                     tabs.size + 1 -> createTab(true, HOME_URL)
                     else -> switchTab(which)
                 }
-            }
-            .setNeutralButton("Close current") { _, _ -> closeCurrentTab() }
-            .show()
+            }.setNeutralButton("Close current") { _, _ -> closeCurrentTab() }.show()
     }
 
     private fun closeCurrentTab() {
@@ -242,25 +243,18 @@ class MainActivity : Activity() {
 
     private fun toggleBookmark() {
         val tab = currentTab() ?: return
-        if (tab.isPrivate) {
-            toast("Private tabs cannot save bookmarks")
-            return
-        }
+        if (tab.isPrivate) { toast("Private tabs cannot save bookmarks"); return }
         val saved = prefs.getStringSet("bookmarks", emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (saved.remove(tab.lastUrl)) toast("Bookmark removed")
-        else {
-            saved.add(tab.lastUrl)
-            toast("Bookmark saved")
+        val message = if (saved.remove(tab.lastUrl)) "Bookmark removed" else {
+            saved.add(tab.lastUrl); "Bookmark saved"
         }
         prefs.edit().putStringSet("bookmarks", saved).apply()
+        toast(message)
     }
 
     private fun showBookmarks() {
         val saved = prefs.getStringSet("bookmarks", emptySet())?.toList().orEmpty()
-        if (saved.isEmpty()) {
-            toast("No bookmarks yet")
-            return
-        }
+        if (saved.isEmpty()) { toast("No bookmarks yet"); return }
         AlertDialog.Builder(this).setTitle("Bookmarks")
             .setItems(saved.toTypedArray()) { _, which -> navigate(saved[which]) }
             .setNegativeButton("Close", null).show()
@@ -274,20 +268,13 @@ class MainActivity : Activity() {
     }
 
     private fun showHistory() {
-        if (currentTab()?.isPrivate == true) {
-            toast("History is unavailable in a private tab")
-            return
-        }
+        if (currentTab()?.isPrivate == true) { toast("History is unavailable in a private tab"); return }
         val history = prefs.getStringSet("history", emptySet())?.toList()?.reversed().orEmpty()
-        if (history.isEmpty()) {
-            toast("No history yet")
-            return
-        }
+        if (history.isEmpty()) { toast("No history yet"); return }
         AlertDialog.Builder(this).setTitle("History")
             .setItems(history.toTypedArray()) { _, which -> navigate(history[which]) }
             .setNeutralButton("Clear history") { _, _ ->
-                prefs.edit().remove("history").apply()
-                toast("History cleared")
+                prefs.edit().remove("history").apply(); toast("History cleared")
             }.show()
     }
 
@@ -297,50 +284,43 @@ class MainActivity : Activity() {
             .setSingleChoiceItems(engines, engines.indexOf(searchEngine)) { dialog, which ->
                 searchEngine = engines[which]
                 prefs.edit().putString("search_engine", searchEngine).apply()
-                dialog.dismiss()
-                toast("$searchEngine selected")
+                dialog.dismiss(); toast("$searchEngine selected")
             }.setNegativeButton("Cancel", null).show()
     }
 
     private fun sharePage() {
         val url = currentTab()?.lastUrl ?: return
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, url)
+            type = "text/plain"; putExtra(Intent.EXTRA_TEXT, url)
         }, "Share page"))
     }
 
     private fun showSettings() {
         val items = arrayOf("Choose search engine", "Clear browsing history", "Close private tabs", "About Nova")
-        AlertDialog.Builder(this).setTitle("Nova Settings")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> chooseSearchEngine()
-                    1 -> {
-                        prefs.edit().remove("history").apply()
-                        toast("Browsing history cleared")
+        AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
+            when (which) {
+                0 -> chooseSearchEngine()
+                1 -> { prefs.edit().remove("history").apply(); toast("Browsing history cleared") }
+                2 -> {
+                    val privateTabs = tabs.indices.filter { tabs[it].isPrivate }.reversed()
+                    privateTabs.forEach { index ->
+                        tabs.removeAt(index).session.close()
+                        if (index <= activeIndex) activeIndex = (activeIndex - 1).coerceAtLeast(0)
                     }
-                    2 -> {
-                        val privateTabs = tabs.indices.filter { tabs[it].isPrivate }.reversed()
-                        privateTabs.forEach { index ->
-                            tabs.removeAt(index).session.close()
-                            if (index <= activeIndex) activeIndex = (activeIndex - 1).coerceAtLeast(0)
-                        }
-                        if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
-                        toast("Private tabs closed")
-                    }
-                    3 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
-                        .setPositiveButton("OK", null).show()
+                    if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
+                    toast("Private tabs closed")
                 }
-            }.show()
+                3 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
+                    .setPositiveButton("OK", null).show()
+            }
+        }.show()
     }
 
-    private fun toast(message: String) =
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
     override fun onBackPressed() {
-        val session = currentTab()?.session
-        if (session?.navigationController?.canGoBack == true) goBack() else super.onBackPressed()
+        val tab = currentTab()
+        if (tab?.canGoBack == true) tab.session.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
@@ -350,7 +330,5 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    companion object {
-        private const val HOME_URL = "https://www.google.com"
-    }
+    companion object { private const val HOME_URL = "https://www.google.com" }
 }
