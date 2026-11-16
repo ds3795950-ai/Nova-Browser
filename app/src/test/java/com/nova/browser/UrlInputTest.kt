@@ -33,6 +33,18 @@ class UrlInputTest {
         assertEquals("https://search.brave.com/search?q=nova", BrowserUrlResolver.resolve("nova", "Brave Search"))
     }
 
+    @Test fun preservesAboutBlank() {
+        assertEquals("about:blank", BrowserUrlResolver.resolve("about:blank"))
+    }
+
+    @Test fun encodesReservedCharactersInSearch() {
+        assertEquals("https://www.google.com/search?q=hello%20%26%20nova%3F", BrowserUrlResolver.resolve("hello & nova?"))
+    }
+
+    @Test fun unknownEngineFallsBackToGoogle() {
+        assertEquals("https://www.google.com/search?q=nova", BrowserUrlResolver.resolve("nova", "Unknown"))
+    }
+
     @Test fun trimsInput() {
         assertEquals("https://example.com", BrowserUrlResolver.resolve("  example.com  "))
     }

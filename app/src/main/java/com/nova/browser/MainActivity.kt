@@ -5,7 +5,10 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
@@ -25,6 +28,9 @@ class MainActivity : Activity() {
     private lateinit var tabLabel: TextView
     private lateinit var pageStatus: TextView
     private lateinit var root: LinearLayout
+    private lateinit var homePanel: LinearLayout
+    private lateinit var homeShortcuts: LinearLayout
+    private lateinit var searchEngineButton: Button
     private val tabs = mutableListOf<BrowserTab>()
     private var activeIndex = 0
     private var searchEngine = "Google"
@@ -74,6 +80,9 @@ class MainActivity : Activity() {
             }
         }
         addressRow.addView(addressBar, LinearLayout.LayoutParams(0, 48, 1f))
+        searchEngineButton = actionButton("$searchEngine ▾") { chooseSearchEngine() }
+        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+        addressRow.addView(searchEngineButton)
         addressRow.addView(actionButton("Go") { navigate(addressBar.text.toString()) })
         top.addView(addressRow)
 
@@ -97,7 +106,6 @@ class MainActivity : Activity() {
         tools.addView(actionButton("☆") { toggleBookmark() })
         tools.addView(actionButton("Bookmarks") { showBookmarks() })
         tools.addView(actionButton("History") { showHistory() })
-        tools.addView(actionButton("Search") { chooseSearchEngine() })
         tools.addView(actionButton("Share") { sharePage() })
         tools.addView(actionButton("Settings") { showSettings() })
         top.addView(tools)
@@ -118,17 +126,94 @@ class MainActivity : Activity() {
         top.addView(pageStatus)
 
         browserView = GeckoView(this)
+        homePanel = createHomePanel()
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xFF100D15.toInt())
             addView(top, LinearLayout.LayoutParams(-1, -2))
+            addView(homePanel, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(browserView, LinearLayout.LayoutParams(-1, 0, 1f))
+            browserView.visibility = View.GONE
         }
         setContentView(root)
     }
 
+    private fun createHomePanel(): LinearLayout {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(20, 28, 20, 20)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
+            )
+        }
+        val dragon = TextView(this).apply {
+            text = "🐉"
+            textSize = 58f
+            gravity = Gravity.CENTER
+            contentDescription = "Nova dragon emblem"
+            setPadding(0, 0, 0, 8)
+        }
+        val title = TextView(this).apply {
+            text = "NOVA"
+            textSize = 32f
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.18f
+            setTextColor(0xFFF1E9FA.toInt())
+            gravity = Gravity.CENTER
+        }
+        val subtitle = TextView(this).apply {
+            text = "Your browser. Your space."
+            textSize = 13f
+            setTextColor(0xFFB9AEC8.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, 4, 0, 24)
+        }
+        val shortcutTitle = TextView(this).apply {
+            text = "QUICK ACCESS"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+            setTextColor(0xFFD8CBE8.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, 8, 0, 8)
+        }
+        homeShortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        homeShortcuts.addView(actionButton("Google") { navigate("https://www.google.com") })
+        homeShortcuts.addView(actionButton("YouTube") { navigate("https://m.youtube.com") })
+        homeShortcuts.addView(actionButton("Wikipedia") { navigate("https://www.wikipedia.org") })
+        homeShortcuts.addView(actionButton("GitHub") { navigate("https://github.com") })
+        panel.addView(dragon)
+        panel.addView(title)
+        panel.addView(subtitle)
+        panel.addView(shortcutTitle)
+        panel.addView(homeShortcuts)
+        return panel
+    }
+
+    private fun showHomeScreen() {
+        homePanel.visibility = View.VISIBLE
+        browserView.visibility = View.GONE
+        addressBar.setText("")
+        tabLabel.text = "Nova Browser · Home"
+        pageStatus.text = "Ready · $searchEngine"
+        searchEngineButton.text = "$searchEngine ▾"
+        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+        homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
+    }
+
+    private fun showBrowserPage() {
+        homePanel.visibility = View.GONE
+        browserView.visibility = View.VISIBLE
+    }
+
     private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
         text = label
+        contentDescription = label
         textSize = 11f
         isAllCaps = false
         minWidth = 0
@@ -171,7 +256,7 @@ class MainActivity : Activity() {
         session.setFocused(true)
         addressBar.setText(url)
         tabLabel.text = if (isPrivate) "Private tab · ${tabs.size} total" else "Tab ${tabs.size}"
-        navigate(url)
+        if (url == HOME_URL) showHomeScreen() else navigate(url)
     }
 
     private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
@@ -187,12 +272,14 @@ class MainActivity : Activity() {
         addressBar.setText(tab.lastUrl)
         tabLabel.text = (if (tab.isPrivate) "Private tab" else "Tab") + " · ${index + 1}/${tabs.size}"
         pageStatus.text = if (tab.isPrivate) "Private session" else "Normal session"
+        if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
     }
 
     private fun navigate(input: String) {
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         val tab = currentTab() ?: return
         tab.lastUrl = target
+        showBrowserPage()
         addressBar.setText(target)
         pageStatus.text = if (tab.isPrivate) "Private browsing · history disabled" else "Loading…"
         try {
@@ -206,7 +293,7 @@ class MainActivity : Activity() {
 
     private fun goBack() {
         val tab = currentTab() ?: return
-        if (tab.canGoBack) tab.session.goBack() else toast("No previous page")
+        if (tab.canGoBack) tab.session.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
     }
 
     private fun goForward() {
@@ -283,6 +370,8 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Default search engine")
             .setSingleChoiceItems(engines, engines.indexOf(searchEngine)) { dialog, which ->
                 searchEngine = engines[which]
+                searchEngineButton.text = "$searchEngine ▾"
+                searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
                 prefs.edit().putString("search_engine", searchEngine).apply()
                 dialog.dismiss(); toast("$searchEngine selected")
             }.setNegativeButton("Cancel", null).show()
@@ -290,18 +379,26 @@ class MainActivity : Activity() {
 
     private fun sharePage() {
         val url = currentTab()?.lastUrl ?: return
+        if (url == HOME_URL) { toast("Nothing to share on the home screen"); return }
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"; putExtra(Intent.EXTRA_TEXT, url)
         }, "Share page"))
     }
 
     private fun showSettings() {
-        val items = arrayOf("Choose search engine", "Clear browsing history", "Close private tabs", "About Nova")
+        val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private tabs", "About Nova")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
-                1 -> { prefs.edit().remove("history").apply(); toast("Browsing history cleared") }
-                2 -> {
+                1 -> {
+                    val show = !prefs.getBoolean("show_home_shortcuts", true)
+                    prefs.edit().putBoolean("show_home_shortcuts", show).apply()
+                    homeShortcuts.visibility = if (show) View.VISIBLE else View.GONE
+                    toast(if (show) "Home shortcuts shown" else "Home shortcuts hidden")
+                }
+                2 -> { prefs.edit().remove("history").apply(); toast("Browsing history cleared") }
+                3 -> {
                     val privateTabs = tabs.indices.filter { tabs[it].isPrivate }.reversed()
                     privateTabs.forEach { index ->
                         tabs.removeAt(index).session.close()
@@ -310,7 +407,7 @@ class MainActivity : Activity() {
                     if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
                     toast("Private tabs closed")
                 }
-                3 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
+                4 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
                     .setPositiveButton("OK", null).show()
             }
         }.show()
@@ -330,5 +427,5 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    companion object { private const val HOME_URL = "https://www.google.com" }
+    companion object { private const val HOME_URL = "about:blank" }
 }
