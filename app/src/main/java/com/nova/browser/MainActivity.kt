@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
         runtime = GeckoRuntime.create(this)
         passwordVault = PasswordVault(this)
         cloudSync = NovaCloudSync(this)
+        if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         runtime.setAutocompleteStorageDelegate(object : Autocomplete.StorageDelegate {
             override fun onLoginFetch(domain: String): GeckoResult<Array<Autocomplete.LoginEntry>> {
@@ -1511,13 +1512,27 @@ class MainActivity : ComponentActivity() {
             return
         }
         val enabled = prefs.getBoolean("cloud_sync_enabled", false)
+        val lastSync = prefs.getLong("cloud_sync_last_success_at", 0L)
+        val lastSyncText = if (lastSync > 0L) SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(lastSync)) else "Not synced yet"
+        val syncError = prefs.getString("cloud_sync_last_error", null)
         val check = CheckBox(this).apply { text = "Allow encrypted cloud sync from this device"; isChecked = enabled; setPadding(24, 12, 24, 12) }
-        AlertDialog.Builder(this).setTitle("Nova Cloud · $email").setMessage("Your sync data is encrypted on this device with a passphrase before upload. Nova cannot read the cloud backup. The passphrase is never stored.")
+        val syncMessage = "Your sync data is encrypted before upload. The passphrase is never sent to Nova or Supabase and is stored only as Android-Keystore-protected ciphertext on this device after the first successful sync. Passwords, bookmarks, history and saved workspaces are included; private and Guest data is excluded.\n\nAutomatic sync: every 6 hours when a network is available.\nLast successful sync: $lastSyncText" + if (!syncError.isNullOrBlank()) "\nLast sync issue: $syncError" else ""
+        AlertDialog.Builder(this).setTitle("Nova Cloud · $email").setMessage(syncMessage)
             .setView(check).setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("cloud_sync_enabled", check.isChecked).apply()
-                if (check.isChecked) showSyncPassphrase() else toast("Cloud sync paused; your cloud backup is unchanged")
+                if (check.isChecked) showSyncPassphrase() else {
+                    NovaAutoSync.cancel(this)
+                    AutoSyncPassphraseStore.clear(this)
+                    toast("Cloud sync paused; the local sync key was cleared and your cloud backup is unchanged")
+                }
             }.setNeutralButton("Sign out") { _, _ ->
-                Thread { cloudSync.signOut(); runOnUiThread { toast("Signed out. Local browsing data is unchanged.") } }.start()
+                Thread {
+                    cloudSync.signOut()
+                    NovaAutoSync.cancel(this@MainActivity)
+                    AutoSyncPassphraseStore.clear(this@MainActivity)
+                    prefs.edit().putBoolean("cloud_sync_enabled", false).apply()
+                    runOnUiThread { toast("Signed out. Local browsing data is unchanged.") }
+                }.start()
             }.setNegativeButton("Close", null).show()
     }
 
@@ -1581,6 +1596,10 @@ class MainActivity : ComponentActivity() {
             vaultMap.values.forEach { mergedVault.put(it) }
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
+            if (prefs.getBoolean("cloud_sync_enabled", false)) {
+                AutoSyncPassphraseStore.save(this, passphrase)
+                NovaAutoSync.schedule(this)
+            }
             runOnUiThread {
                 applySyncSnapshot(merged)
                 passwordVault.importFromSync(mergedVault)
@@ -1592,59 +1611,13 @@ class MainActivity : ComponentActivity() {
         } finally { passphrase.fill('\u0000') }
     }
 
-    private fun buildSyncSnapshot(): JSONObject {
-        val bookmarks = JSONArray()
-        readBookmarks().forEach { bookmarks.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-        val history = JSONArray()
-        readHistory().forEach { history.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
-        val workspaces = JSONArray()
-        prefs.getStringSet("saved_workspaces", emptySet())?.forEach { raw -> runCatching { workspaces.put(JSONObject(raw)) } }
-        val settings = JSONObject().put("search_engine", searchEngine)
-            .put("shield_mode", prefs.getString("shield_mode", "STANDARD"))
-            .put("show_home_shortcuts", prefs.getBoolean("show_home_shortcuts", true))
-            .put("font_scale_index", prefs.getInt("font_scale_index", 2))
-            .put("desktop_sites", JSONArray(prefs.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
-            .put("bookmark_folders", JSONArray(prefs.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
-        val tombstones = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
-        return JSONObject().put("schema", 2).put("bookmarks", bookmarks).put("history", history)
-            .put("bookmark_tombstones", tombstones)
-            .put("history_cleared_at", prefs.getLong("history_cleared_at", 0L))
-            .put("workspaces", workspaces).put("settings", settings)
-    }
+    private fun buildSyncSnapshot(): JSONObject = NovaSyncSnapshotRepository.build(this, searchEngine)
 
     private fun mergeSyncSnapshots(local: JSONObject, remote: JSONObject): JSONObject = NovaSyncMerge.merge(local, remote)
 
     private fun applySyncSnapshot(snapshot: JSONObject) {
-        val bookmarks = snapshot.optJSONArray("bookmarks") ?: JSONArray()
-        val bookmarkItems = mutableListOf<BookmarkEntry>()
-        for (i in 0 until bookmarks.length()) {
-            val item = bookmarks.getJSONObject(i); val url = item.optString("url")
-            if (url.startsWith("http://") || url.startsWith("https://")) bookmarkItems.add(BookmarkEntry(url,
-                item.optString("title", Uri.parse(url).host ?: url), item.optString("folder", "General"), item.optLong("addedAt")))
-        }
-        val tombstones = snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()
-        prefs.edit().putString("bookmark_tombstones", tombstones.toString())
-            .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L)).apply()
-        saveBookmarks(bookmarkItems, trackDeletes = false)
-        val history = snapshot.optJSONArray("history") ?: JSONArray()
-        val historyItems = JSONArray()
-        val safeHistory = (0 until history.length()).map { history.getJSONObject(it) }
-            .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && it.optLong("visitedAt") > snapshot.optLong("history_cleared_at", 0L) }
-            .sortedByDescending { it.optLong("visitedAt") }.take(500)
-        safeHistory.forEach { historyItems.put(it) }
-        prefs.edit().putString("history_v2", historyItems.toString()).apply()
-        val workspaces = snapshot.optJSONArray("workspaces") ?: JSONArray()
-        val workspaceSet = mutableSetOf<String>()
-        for (i in 0 until workspaces.length()) workspaceSet.add(workspaces.getJSONObject(i).toString())
-        prefs.edit().putStringSet("saved_workspaces", workspaceSet).apply()
-        val settings = snapshot.optJSONObject("settings") ?: return
-        searchEngine = settings.optString("search_engine", searchEngine)
-        prefs.edit().putString("search_engine", searchEngine)
-            .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
-            .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
-            .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
-            .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
-            .putStringSet("bookmark_folders", settings.optJSONArray("bookmark_folders").toStringSet()).apply()
+        NovaSyncSnapshotRepository.apply(this, snapshot)
+        searchEngine = prefs.getString("search_engine", searchEngine) ?: searchEngine
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         searchEngineButton.text = "$searchEngine ▾"
     }

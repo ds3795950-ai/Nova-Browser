@@ -65,6 +65,7 @@ configurations.configureEach {
 
 dependencies {
     implementation("androidx.activity:activity:1.10.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.2.20")
     // GeckoView is the sole browser engine.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
