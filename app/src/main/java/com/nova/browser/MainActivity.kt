@@ -1524,12 +1524,14 @@ class MainActivity : Activity() {
             val local = buildSyncSnapshot()
             val localVault = passwordVault.exportForSync()
             val remote = cloudSync.downloadEncrypted()
-            val merged = if (remote.first == null) local else mergeSyncSnapshots(local,
-                JSONObject(CloudCrypto.decrypt(remote.first, passphrase)))
+            val remoteSnapshot = remote.first
+            val remoteVaultPayload = remote.second
+            val merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(local,
+                JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val mergedVault = JSONArray()
             val vaultMap = linkedMapOf<String, JSONObject>()
-            if (remote.second != null) {
-                val remoteVault = JSONArray(CloudCrypto.decrypt(remote.second, passphrase))
+            if (remoteVaultPayload != null) {
+                val remoteVault = JSONArray(CloudCrypto.decrypt(remoteVaultPayload, passphrase))
                 for (i in 0 until remoteVault.length()) {
                     val item = remoteVault.getJSONObject(i)
                     vaultMap[item.optString("origin") + "|" + item.optString("username")] = item
@@ -1603,10 +1605,10 @@ class MainActivity : Activity() {
         saveBookmarks(bookmarkItems)
         val history = snapshot.optJSONArray("history") ?: JSONArray()
         val historyItems = JSONArray()
-        for (i in 0 until history.length()) {
-            val item = history.getJSONObject(i); val url = item.optString("url")
-            if (url.startsWith("http://") || url.startsWith("https://")) historyItems.put(item)
-        }
+        val safeHistory = (0 until history.length()).map { history.getJSONObject(it) }
+            .filter { it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://") }
+            .sortedByDescending { it.optLong("visitedAt") }.take(500)
+        safeHistory.forEach { historyItems.put(it) }
         prefs.edit().putString("history_v2", historyItems.toString()).apply()
         val workspaces = snapshot.optJSONArray("workspaces") ?: JSONArray()
         val workspaceSet = mutableSetOf<String>()
