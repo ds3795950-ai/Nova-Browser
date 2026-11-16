@@ -21,11 +21,21 @@ android {
         applicationId = "com.nova.browser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0-auth-sync"
+        versionCode = 4
+        versionName = "0.4.0-performance"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", "\"https://ycgubmykjhikjyfbgycp.supabase.co\"")
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTBZ2fV2A_XTM04aEP\"")
+    }
+
+    // Produce device-specific APKs instead of bundling every GeckoView native ABI in one file.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
     }
 
     compileOptions {
@@ -47,7 +57,8 @@ android {
     buildTypes {
         release {
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

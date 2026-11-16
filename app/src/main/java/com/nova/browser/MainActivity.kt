@@ -69,9 +69,12 @@ class MainActivity : ComponentActivity() {
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
-    private lateinit var novaDownloads: NovaDownloadManager
-    private lateinit var passwordVault: PasswordVault
-    private lateinit var cloudSync: NovaCloudSync
+    private val novaDownloads: NovaDownloadManager by lazy {
+        NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
+            .also { it.resumeInterrupted() }
+    }
+    private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
+    private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
@@ -125,8 +128,6 @@ class MainActivity : ComponentActivity() {
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
-        passwordVault = PasswordVault(this)
-        cloudSync = NovaCloudSync(this)
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         runtime.setAutocompleteStorageDelegate(object : Autocomplete.StorageDelegate {
@@ -144,8 +145,6 @@ class MainActivity : ComponentActivity() {
         })
         runtime.settings.setLoginAutofillEnabled(false)
         configureExtensionPermissions()
-        novaDownloads = NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
-        novaDownloads.resumeInterrupted()
         val previousGuestContext = prefs.getString("guest_context_id", null)
         if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
         guestContextId = "nova-guest-${UUID.randomUUID()}"
