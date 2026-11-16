@@ -44,7 +44,8 @@ class NovaDownloadManager(
         @Volatile var item: Item,
         val pause: AtomicBoolean = AtomicBoolean(false),
         val cancel: AtomicBoolean = AtomicBoolean(false),
-        @Volatile var connection: HttpURLConnection? = null
+        @Volatile var connection: HttpURLConnection? = null,
+        @Volatile var input: InputStream? = null
     )
 
     private val prefs = context.getSharedPreferences("nova_downloads", Context.MODE_PRIVATE)
@@ -60,6 +61,7 @@ class NovaDownloadManager(
         records[item.id] = item
         persist()
         changed(items())
+        NovaDownloadService.update(context, running.size)
     }
 
     @Synchronized private fun persist() {
@@ -122,9 +124,10 @@ class NovaDownloadManager(
         val worker = running[id]
         worker?.cancel?.set(true)
         worker?.connection?.disconnect()
-        running.remove(id)
-        partial(id).delete()
+        runCatching { worker?.input?.close() }
+        if (worker == null) partial(id).delete()
         synchronized(this) { records.remove(id); persist(); changed(items()) }
+        NovaDownloadService.update(context, running.size)
     }
 
     private fun transfer(worker: Running) {
@@ -147,14 +150,23 @@ class NovaDownloadManager(
             connection.connect()
             var code = connection.responseCode
             if (code !in 200..299) throw IllegalStateException("Server returned HTTP $code")
-            if (offset > 0 && code != HttpURLConnection.HTTP_PARTIAL) {
+            val contentRange = DownloadProtocol.parseContentRange(connection.getHeaderField("Content-Range"))
+            if (code == HttpURLConnection.HTTP_PARTIAL) {
+                if (contentRange == null || contentRange.start != offset) {
+                    throw IllegalStateException("Server returned an invalid byte range; partial file was preserved")
+                }
+            } else if (offset > 0) {
                 part.delete()
                 offset = 0
             }
             val etag = connection.getHeaderField("ETag") ?: worker.item.etag
             val modified = connection.getHeaderField("Last-Modified") ?: worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
-            val total = if (length >= 0) offset + length else worker.item.total
+            val total = when {
+                contentRange?.total != null -> contentRange.total
+                length >= 0 -> offset + length
+                else -> worker.item.total
+            }
             worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified)
             put(worker.item)
             connection.inputStream.use { input ->
@@ -183,6 +195,9 @@ class NovaDownloadManager(
                 worker.item = worker.item.copy(downloaded = part.length(), state = "PAUSED")
                 put(worker.item)
             } else {
+                if (worker.item.total > 0 && part.length() != worker.item.total) {
+                    throw IllegalStateException("Download incomplete: received ${part.length()} of ${worker.item.total} bytes")
+                }
                 worker.item = worker.item.copy(downloaded = part.length(), state = "FINALIZING")
                 put(worker.item)
                 val uri = publish(part, worker.item.fileName, worker.item.mimeType)
@@ -200,14 +215,16 @@ class NovaDownloadManager(
             if (!worker.cancel.get()) put(worker.item)
         } finally {
             worker.connection?.disconnect()
+            if (worker.cancel.get()) partial(id).delete()
             running.remove(id)
+            NovaDownloadService.update(context, running.size)
         }
     }
 
     fun saveExternalStream(stream: InputStream, fileName: String, mimeType: String) {
         val id = UUID.randomUUID().toString()
         val item = Item(id, "", sanitize(fileName), mimeType, 0, 0, "SAVING")
-        val worker = Running(item)
+        val worker = Running(item, input = stream)
         running[id] = worker
         put(item)
         executor.execute {
@@ -243,8 +260,10 @@ class NovaDownloadManager(
                 runCatching { stream.close() }
                 if (!worker.cancel.get()) put(worker.item.copy(state = "FAILED", error = error.message ?: "Could not save browser download"))
             } finally {
+                runCatching { stream.close() }
                 part.delete()
                 running.remove(id)
+                NovaDownloadService.update(context, running.size)
             }
         }
     }
@@ -278,8 +297,7 @@ class NovaDownloadManager(
         return Uri.fromFile(target)
     }
 
-    private fun sanitize(value: String): String = value.substringAfterLast('/').substringAfterLast('\\')
-        .replace(Regex("[^A-Za-z0-9._ -]"), "_").take(120).ifBlank { "nova-download.bin" }
+    private fun sanitize(value: String): String = DownloadProtocol.safeFileName(value)
 
     companion object {
         fun formatBytes(bytes: Long): String = when {
