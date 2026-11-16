@@ -31,3 +31,5 @@
 ## Follow-up build fix
 
 - Translation failure callback now handles GeckoResult nullable Throwable safely.
+
+- Folder input now opens Android's actual directory picker and returns the chosen tree URI to GeckoView before the separate folder-upload consent prompt.

@@ -350,18 +350,18 @@ class MainActivity : Activity() {
         val session = GeckoSession(settings)
         session.promptDelegate = object : GeckoSession.PromptDelegate {
             override fun onFilePrompt(session: GeckoSession, prompt: FilePrompt): GeckoResult<PromptResponse> {
-                if (prompt.type == FilePrompt.Type.FOLDER) {
-                    toast("Folder selection is handled by the page's folder-upload confirmation")
-                    return GeckoResult.fromValue(prompt.dismiss())
-                }
                 pendingFilePrompt = prompt
                 val result = GeckoResult<PromptResponse>()
                 pendingFileResult = result
-                val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = prompt.mimeTypes?.firstOrNull() ?: "*/*"
-                    if (!prompt.mimeTypes.isNullOrEmpty()) putExtra(Intent.EXTRA_MIME_TYPES, prompt.mimeTypes)
-                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, prompt.type == FilePrompt.Type.MULTIPLE)
+                val picker = if (prompt.type == FilePrompt.Type.FOLDER) {
+                    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                } else {
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = prompt.mimeTypes?.firstOrNull() ?: "*/*"
+                        if (!prompt.mimeTypes.isNullOrEmpty()) putExtra(Intent.EXTRA_MIME_TYPES, prompt.mimeTypes)
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, prompt.type == FilePrompt.Type.MULTIPLE)
+                    }
                 }
                 try { startActivityForResult(picker, uploadRequestCode) }
                 catch (error: Exception) { pendingFilePrompt = null; pendingFileResult = null; result.complete(prompt.dismiss()); toast("Could not open file picker") }
@@ -1140,7 +1140,10 @@ class MainActivity : Activity() {
                     val uris = mutableListOf<Uri>()
                     data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri) }
                     if (uris.isEmpty()) data.data?.let { uris.add(it) }
-                    if (uris.isNotEmpty()) {
+                    if (prompt.type == FilePrompt.Type.FOLDER) {
+                        val folderUri = data.data
+                        if (folderUri != null) result.complete(prompt.confirm(this, folderUri)) else result.complete(prompt.dismiss())
+                    } else if (uris.isNotEmpty()) {
                         val response = if (prompt.type == FilePrompt.Type.MULTIPLE) prompt.confirm(this, uris.toTypedArray()) else prompt.confirm(this, uris.first())
                         result.complete(response)
                     } else result.complete(prompt.dismiss())
