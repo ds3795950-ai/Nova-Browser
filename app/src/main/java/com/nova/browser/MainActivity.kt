@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private var guestContextId: String = ""
     private lateinit var novaDownloads: NovaDownloadManager
     private var readerOriginalUrl: String? = null
+    private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
     private val uploadRequestCode = 4102
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -336,6 +337,8 @@ class MainActivity : Activity() {
         return host in desktopSites
     }
 
+    private fun tabKey(session: GeckoSession): String = tabs.firstOrNull { it.session === session }?.id ?: ""
+
     private fun ensureSession(tab: BrowserTab): GeckoSession {
         tab.session?.let { return it }
         val settings = GeckoSessionSettings.Builder()
@@ -379,9 +382,29 @@ class MainActivity : Activity() {
                 return result
             }
         }
+        session.setTranslationsSessionDelegate(object : TranslationsController.SessionTranslation.Delegate {
+            override fun onOfferTranslate(session: GeckoSession) {
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                if (currentTab() === tab) runOnUiThread { toast("This page may be available in another language · tap Translate") }
+            }
+            override fun onExpectedTranslate(session: GeckoSession) {
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                if (currentTab() === tab) runOnUiThread { pageStatus.text = "Translation available" }
+            }
+            override fun onTranslationStateChange(session: GeckoSession, translationState: TranslationsController.SessionTranslation.TranslationState?) {
+                val language = translationState?.detectedLanguages?.docLangTag
+                if (!language.isNullOrBlank()) detectedPageLanguages[tabKey(session)] = language
+            }
+        })
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                val tab = tabs.firstOrNull { it.session === session }
                 val body = response.body
+                if (tab?.isPrivate == true || tab?.isGuest == true) {
+                    runCatching { body?.close() }
+                    toast("Downloads are disabled in private and Guest Mode")
+                    return
+                }
                 if (body == null) { toast("This download has no readable response body"); return }
                 val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
@@ -980,14 +1003,15 @@ class MainActivity : Activity() {
         val tab = currentTab() ?: return
         if (!tab.lastUrl.startsWith("http")) { toast("Open a webpage first"); return }
         val languages = arrayOf(
-            "English" to "en", "Hindi" to "hi", "Bengali" to "bn", "Assamese" to "as",
+            "English" to "en", "Hindi" to "hi", "Bengali" to "bn",
             "Japanese" to "ja", "Chinese" to "zh", "Spanish" to "es", "French" to "fr",
             "German" to "de", "Arabic" to "ar", "Portuguese" to "pt", "Russian" to "ru"
         )
-        var source = "en"
-        AlertDialog.Builder(this).setTitle("Translate from")
-            .setItems(languages.map { it.first }.toTypedArray()) { _, fromIndex ->
-                source = languages[fromIndex].second
+        var source = detectedPageLanguages[tab.id] ?: "en"
+        val sourceIndex = languages.indexOfFirst { it.second == source }.let { if (it >= 0) it else 0 }
+        AlertDialog.Builder(this).setTitle("Translate from · detected ${source}")
+            .setItems((listOf("Use detected ($source)") + languages.map { it.first }).toTypedArray()) { _, fromIndex ->
+                if (fromIndex > 0) source = languages[fromIndex - 1].second
                 AlertDialog.Builder(this).setTitle("Translate to")
                     .setItems(languages.map { it.first }.toTypedArray()) { _, toIndex ->
                         val target = languages[toIndex].second
