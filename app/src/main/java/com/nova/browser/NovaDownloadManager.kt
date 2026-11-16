@@ -85,7 +85,11 @@ class NovaDownloadManager(
                     o.optString("mimeType", "application/octet-stream"), o.optLong("downloaded"),
                     o.optLong("total"), o.optString("state", "PAUSED"), o.optString("etag"),
                     o.optString("lastModified"), o.optString("savedUri"), o.optString("error"))
-                records[item.id] = if (item.state == "RUNNING") item.copy(state = "PAUSED") else item
+                records[item.id] = when (item.state) {
+                    "RUNNING" -> item.copy(state = "PAUSED")
+                    "SAVING", "FINALIZING" -> item.copy(state = "INTERRUPTED", error = "This transfer was interrupted. Start it again from the page if needed.")
+                    else -> item
+                }
             }
         }
     }
@@ -103,6 +107,10 @@ class NovaDownloadManager(
     fun resume(id: String) {
         val item = synchronized(this) { records[id] } ?: return
         if (item.state == "COMPLETE" || running.containsKey(id)) return
+        if (item.url.isBlank()) {
+            put(item.copy(state = "INTERRUPTED", error = "This browser response cannot be resumed. Download it again from the page."))
+            return
+        }
         val worker = Running(item.copy(state = "RUNNING", error = ""))
         if (running.putIfAbsent(id, worker) != null) return
         put(worker.item)
@@ -258,7 +266,10 @@ class NovaDownloadManager(
                 }
             } catch (error: Exception) {
                 runCatching { stream.close() }
-                if (!worker.cancel.get()) put(worker.item.copy(state = "FAILED", error = error.message ?: "Could not save browser download"))
+                if (!worker.cancel.get()) put(worker.item.copy(
+                    state = if (worker.item.url.isBlank()) "INTERRUPTED" else "FAILED",
+                    error = error.message ?: "Could not save browser download"
+                ))
             } finally {
                 runCatching { stream.close() }
                 part.delete()

@@ -669,14 +669,22 @@ class MainActivity : Activity() {
             saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title)
                 .put("readerOriginalUrl", tab.readerOriginalUrl ?: ""))
         }
+        val normalTabs = tabs.filter { !it.isPrivate && !it.isGuest }
+        val active = currentTab()
+        val selectedNormalIndex = if (active != null && !active.isPrivate && !active.isGuest) {
+            normalTabs.indexOf(active).coerceAtLeast(0)
+        } else {
+            prefs.getInt("active_normal_tab", 0).coerceIn(0, (normalTabs.size - 1).coerceAtLeast(0))
+        }
         prefs.edit().putString("open_normal_tabs", saved.toString())
-            .putInt("active_normal_tab", (tabs.take(activeIndex + 1).count { !it.isPrivate && !it.isGuest } - 1).coerceAtLeast(0)).apply()
+            .putInt("active_normal_tab", selectedNormalIndex).apply()
     }
 
     private fun restoreTabs() {
         val raw = prefs.getString("open_normal_tabs", null) ?: return
         try {
             val saved = JSONArray(raw)
+            val savedActiveIndex = prefs.getInt("active_normal_tab", 0)
             for (i in 0 until saved.length()) {
                 val item = saved.getJSONObject(i)
                 createTab(false, item.optString("url", HOME_URL))
@@ -685,7 +693,7 @@ class MainActivity : Activity() {
                 tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
             }
             if (tabs.isNotEmpty()) {
-                val index = prefs.getInt("active_normal_tab", 0).coerceIn(tabs.indices)
+                val index = savedActiveIndex.coerceIn(tabs.indices)
                 switchTab(index)
             }
         } catch (_: Exception) {
@@ -915,6 +923,7 @@ class MainActivity : Activity() {
                 "QUEUED" -> "Queued"
                 "PAUSED" -> "Paused · ${item.progressLabel()}"
                 "FINALIZING", "SAVING" -> "Saving to Downloads… · ${item.progressLabel()}"
+                "INTERRUPTED" -> "Interrupted · download again from the page"
                 "COMPLETE" -> "Complete · ${item.progressLabel()}"
                 "FAILED" -> "Failed · ${item.error}"
                 else -> item.state
@@ -930,9 +939,11 @@ class MainActivity : Activity() {
 
     private fun showDownloadActions(item: NovaDownloadManager.Item) {
         val actions = when (item.state) {
-            "RUNNING", "QUEUED", "FINALIZING" -> arrayOf("Pause", "Cancel")
+            "RUNNING", "QUEUED" -> arrayOf("Pause", "Cancel")
+            "FINALIZING" -> arrayOf("Close")
             "SAVING" -> arrayOf("Cancel")
             "PAUSED", "FAILED" -> arrayOf("Resume", "Cancel")
+            "INTERRUPTED" -> arrayOf("Remove from list")
             "COMPLETE" -> arrayOf("Open file", "Remove from list")
             else -> arrayOf("Resume", "Cancel")
         }
@@ -943,6 +954,7 @@ class MainActivity : Activity() {
                 "Cancel" -> { novaDownloads.cancel(item.id); toast("Download cancelled") }
                 "Open file" -> openDownloadedFile(item)
                 "Remove from list" -> novaDownloads.cancel(item.id)
+                "Close" -> Unit
             }
         }.show()
     }
