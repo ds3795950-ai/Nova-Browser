@@ -9,6 +9,11 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
+import android.widget.GridLayout
+import android.widget.ScrollView
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
@@ -39,7 +44,10 @@ class MainActivity : Activity() {
     private data class BrowserTab(
         val session: GeckoSession,
         val isPrivate: Boolean,
+        val id: String = UUID.randomUUID().toString(),
         var lastUrl: String = HOME_URL,
+        var group: String = "Ungrouped",
+        var title: String = "New tab",
         var canGoBack: Boolean = false,
         var canGoForward: Boolean = false
     )
@@ -49,7 +57,8 @@ class MainActivity : Activity() {
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
         buildBrowserUi()
-        createTab(false, HOME_URL)
+        restoreTabs()
+        if (tabs.isEmpty()) createTab(false, HOME_URL)
     }
 
     private fun buildBrowserUi() {
@@ -231,7 +240,7 @@ class MainActivity : Activity() {
         val settings = GeckoSessionSettings.Builder().usePrivateMode(isPrivate).build()
         val session = GeckoSession(settings)
         session.open(runtime)
-        val tab = BrowserTab(session, isPrivate, url)
+        val tab = BrowserTab(session, isPrivate, lastUrl = url)
         tabs.add(tab)
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
@@ -248,19 +257,23 @@ class MainActivity : Activity() {
             ) {
                 if (url.isNullOrBlank()) return
                 tab.lastUrl = url
-                if (!tab.isPrivate) addHistory(url)
+                tab.title = Uri.parse(url).host ?: url.take(48)
+                if (!tab.isPrivate) { addHistory(url); persistTabs() }
                 if (currentTab() === tab) {
                     addressBar.setText(url)
                     pageStatus.text = if (tab.isPrivate) "Private session" else "Secure browsing session"
                 }
             }
         }
+        currentTab()?.session?.setActive(false)
+        currentTab()?.session?.setFocused(false)
         activeIndex = tabs.lastIndex
         browserView.setSession(session)
         session.setActive(true)
         session.setFocused(true)
         addressBar.setText(url)
         tabLabel.text = if (isPrivate) "Private tab · ${tabs.size} total" else "Tab ${tabs.size}"
+        if (!isPrivate) persistTabs()
         if (url == HOME_URL) showHomeScreen() else navigate(url)
     }
 
@@ -269,6 +282,7 @@ class MainActivity : Activity() {
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
         currentTab()?.session?.setActive(false)
+        currentTab()?.session?.setFocused(false)
         activeIndex = index
         val tab = tabs[index]
         browserView.setSession(tab.session)
@@ -276,7 +290,7 @@ class MainActivity : Activity() {
         tab.session.setFocused(true)
         addressBar.setText(tab.lastUrl)
         tabLabel.text = (if (tab.isPrivate) "Private tab" else "Tab") + " · ${index + 1}/${tabs.size}"
-        pageStatus.text = if (tab.isPrivate) "Private session" else "Normal session"
+        pageStatus.text = if (tab.isPrivate) "Private session" else "Normal session · ${tab.group}"
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
     }
 
@@ -284,6 +298,8 @@ class MainActivity : Activity() {
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         val tab = currentTab() ?: return
         tab.lastUrl = target
+        tab.title = Uri.parse(target).host ?: target.take(48)
+        if (!tab.isPrivate) persistTabs()
         showBrowserPage()
         addressBar.setText(target)
         pageStatus.text = if (tab.isPrivate) "Private browsing · history disabled" else "Loading…"
@@ -310,28 +326,141 @@ class MainActivity : Activity() {
 
     private fun showTabs() {
         if (tabs.isEmpty()) return
-        val labels = tabs.mapIndexed { index, tab ->
-            "${index + 1}. ${if (tab.isPrivate) "Private" else "Normal"} — ${tab.lastUrl}"
-        }.toMutableList()
-        labels.add("＋ New normal tab")
-        labels.add("＋ New private tab")
-        AlertDialog.Builder(this).setTitle("Open tabs")
-            .setItems(labels.toTypedArray()) { _, which ->
-                when (which) {
-                    tabs.size -> createTab(false, HOME_URL)
-                    tabs.size + 1 -> createTab(true, HOME_URL)
-                    else -> switchTab(which)
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        actions.addView(actionButton("＋ Normal") { createTab(false, HOME_URL) })
+        actions.addView(actionButton("＋ Private") { createTab(true, HOME_URL) })
+        actions.addView(actionButton("Save session") { saveNamedSession() })
+        actions.addView(actionButton("Workspaces") { showSavedWorkspaces() })
+        content.addView(actions)
+        val scroll = ScrollView(this)
+        val grid = GridLayout(this).apply { columnCount = 2; useDefaultMargins = true }
+        val normal = tabs.indices.filter { !tabs[it].isPrivate }
+        val private = tabs.indices.filter { tabs[it].isPrivate }
+        fun addSection(label: String, indices: List<Int>) {
+            if (indices.isEmpty()) return
+            val heading = TextView(this).apply { text = "$label (${indices.size})"; textSize = 13f; setTextColor(0xFFD8CBE8.toInt()); setPadding(8, 14, 8, 6) }
+            grid.addView(heading, GridLayout.LayoutParams().apply { columnSpec = GridLayout.spec(0, 2); width = -1 })
+            indices.forEach { index ->
+                val tab = tabs[index]
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(12, 12, 12, 12)
+                    background = GradientDrawable().apply { setColor(0xFF241B30.toInt()); cornerRadius = 18f; setStroke(1, 0xFF6D4C83.toInt()) }
                 }
-            }.setNeutralButton("Close current") { _, _ -> closeCurrentTab() }.show()
+                val headingText = TextView(this).apply { text = tab.title.ifBlank { "New tab" }; textSize = 14f; setTextColor(0xFFFFFFFF.toInt()); maxLines = 2 }
+                val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(0xFFB9AEC8.toInt()); maxLines = 2; setPadding(0, 5, 0, 5) }
+                val groupText = TextView(this).apply { text = "Group: ${tab.group}"; textSize = 10f; setTextColor(0xFFD8CBE8.toInt()) }
+                card.addView(headingText); card.addView(urlText); card.addView(groupText)
+                card.addView(actionButton("Open") { switchTab(index) })
+                card.addView(actionButton("Group / rename") { editTabGroup(index) })
+                card.addView(actionButton("Close") { closeTabAt(index) })
+                grid.addView(card, GridLayout.LayoutParams().apply { width = 0; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); setMargins(5, 5, 5, 5) })
+            }
+        }
+        addSection("NORMAL TABS", normal)
+        addSection("PRIVATE TABS", private)
+        scroll.addView(grid)
+        content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        AlertDialog.Builder(this).setTitle("Tabs · ${tabs.size}")
+            .setView(content).setNegativeButton("Done", null).show()
     }
 
-    private fun closeCurrentTab() {
-        if (tabs.isEmpty()) return
-        val removed = tabs.removeAt(activeIndex)
-        removed.session.close()
-        if (tabs.isEmpty()) createTab(false, HOME_URL)
-        else switchTab((activeIndex - 1).coerceAtLeast(0))
+    private fun editTabGroup(index: Int) {
+        if (index !in tabs.indices) return
+        val tab = tabs[index]
+        val input = EditText(this).apply { setText(tab.group); hint = "Group or workspace name"; setSingleLine(true) }
+        AlertDialog.Builder(this).setTitle("Tab group / workspace")
+            .setMessage("Give this tab a group name. Tabs with the same name stay together.")
+            .setView(input).setPositiveButton("Save") { _, _ ->
+                tab.group = input.text.toString().trim().ifBlank { "Ungrouped" }
+                persistTabs(); toast("Tab group updated")
+            }.setNeutralButton("Rename tab") { _, _ -> renameTab(index) }
+            .setNegativeButton("Cancel", null).show()
     }
+
+    private fun renameTab(index: Int) {
+        if (index !in tabs.indices) return
+        val tab = tabs[index]
+        val input = EditText(this).apply { setText(tab.title); hint = "Tab name"; setSingleLine(true) }
+        AlertDialog.Builder(this).setTitle("Rename tab").setView(input)
+            .setPositiveButton("Save") { _, _ -> tab.title = input.text.toString().trim().ifBlank { "New tab" }; persistTabs(); toast("Tab renamed") }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun closeTabAt(index: Int) {
+        if (index !in tabs.indices) return
+        val wasActive = index == activeIndex
+        tabs.removeAt(index).session.close()
+        persistTabs()
+        if (tabs.isEmpty()) createTab(false, HOME_URL)
+        else {
+            if (index < activeIndex) activeIndex--
+            if (wasActive) switchTab(activeIndex.coerceIn(tabs.indices))
+            else persistTabs()
+        }
+    }
+
+    private fun saveNamedSession() {
+        val input = EditText(this).apply { hint = "Session name"; setSingleLine(true) }
+        AlertDialog.Builder(this).setTitle("Save workspace").setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val name = input.text.toString().trim().ifBlank { "Saved workspace" }
+                val urls = JSONArray()
+                tabs.filter { !it.isPrivate }.forEach { urls.put(JSONObject().put("url", it.lastUrl).put("group", it.group).put("title", it.title)) }
+                val snapshots = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
+                snapshots.add(JSONObject().put("name", name).put("tabs", urls).toString())
+                prefs.edit().putStringSet("saved_workspaces", snapshots).apply()
+                toast("Workspace saved")
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun persistTabs() {
+        val saved = JSONArray()
+        tabs.filter { !it.isPrivate }.forEach { tab ->
+            saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title))
+        }
+        prefs.edit().putString("open_normal_tabs", saved.toString()).putInt("active_normal_tab", tabs.take(activeIndex + 1).count { !it.isPrivate } - 1).apply()
+    }
+
+    private fun restoreTabs() {
+        val raw = prefs.getString("open_normal_tabs", null) ?: return
+        try {
+            val saved = JSONArray(raw)
+            for (i in 0 until saved.length()) {
+                val item = saved.getJSONObject(i)
+                createTab(false, item.optString("url", HOME_URL))
+                tabs.last().group = item.optString("group", "Ungrouped")
+                tabs.last().title = item.optString("title", "New tab")
+            }
+            if (tabs.isNotEmpty()) {
+                val index = prefs.getInt("active_normal_tab", 0).coerceIn(tabs.indices)
+                switchTab(index)
+            }
+        } catch (_: Exception) {
+            prefs.edit().remove("open_normal_tabs").apply()
+        }
+    }
+
+    private fun showSavedWorkspaces() {
+        val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
+        if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
+        val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") }
+        AlertDialog.Builder(this).setTitle("Saved workspaces").setItems(labels.toTypedArray()) { _, which ->
+            runCatching {
+                val data = JSONObject(saved[which]).getJSONArray("tabs")
+                for (i in 0 until data.length()) {
+                    val item = data.getJSONObject(i)
+                    createTab(false, item.optString("url", HOME_URL))
+                    tabs.last().group = item.optString("group", "Ungrouped")
+                    tabs.last().title = item.optString("title", "New tab")
+                }
+                persistTabs(); toast("Workspace restored")
+            }.onFailure { toast("Could not restore workspace") }
+        }.setNegativeButton("Close", null).show()
+    }
+
+    private fun closeCurrentTab() = closeTabAt(activeIndex)
 
     private fun toggleBookmark() {
         val tab = currentTab() ?: return
@@ -420,12 +549,18 @@ class MainActivity : Activity() {
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
+    override fun onPause() {
+        persistTabs()
+        super.onPause()
+    }
+
     override fun onBackPressed() {
         val tab = currentTab()
         if (tab?.canGoBack == true) tab.session.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
+        persistTabs()
         tabs.forEach { it.session.close() }
         tabs.clear()
         if (::runtime.isInitialized) runtime.shutdown()

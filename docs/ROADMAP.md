@@ -33,3 +33,20 @@ Status key: DONE = implemented in this repository; NEEDS VERIFICATION = code exi
 5. Add authentication and encrypted opt-in sync only after local data models are stable.
 
 Never describe Guest Mode as Tor anonymity unless traffic is actually routed through Tor and independently verified.
+
+
+## Phase 2 implementation progress (2026-11-16)
+- Added a two-column visual tab grid with distinct Normal Tabs and Private Tabs sections.
+- Added per-tab open, close, rename, and group/workspace assignment actions.
+- Added named workspace snapshots and a workspace restore flow.
+- Added normal-tab session persistence across activity pause/recreation and app restarts.
+- Private tabs are deliberately excluded from session persistence and saved workspaces.
+- Inactive GeckoSession instances are deactivated and unfocused when switching tabs; active tab is reactivated on selection.
+- Added close-current and close-private-tabs paths that maintain an available normal tab.
+
+### Phase 2 verification and remaining work
+- CI build and tests are pending for this batch.
+- Physical-device testing of tab grid layout, session restore, and memory behavior remains pending.
+- True split-screen with two simultaneously visible GeckoViews is not implemented yet.
+- Fine-grained automatic tab sleeping/memory eviction is not implemented; current behavior only deactivates unfocused sessions.
+- Group management currently assigns a shared group/workspace label; richer collapsed group management remains future work.
