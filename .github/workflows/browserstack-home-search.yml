@@ -49,8 +49,23 @@ jobs:
           # (some mobile password managers paste escaped newlines into secret fields).
           NORMALIZED_SECRET="${ROHANSAHA_NGXOSY//\\n/$'\n'}"
           mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
-          if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ]; then
-            echo "Expected exactly two non-empty credential lines (username then access key); found ${#CREDENTIAL_LINES[@]}."
+          if [ "${#CREDENTIAL_LINES[@]}" -eq 1 ]; then
+            # Mobile editors sometimes flatten a pasted line break. Accept a single
+            # whitespace- or punctuation-separated pair, without logging its contents.
+            SINGLE_LINE="${CREDENTIAL_LINES[0]}"
+            if [[ "$SINGLE_LINE" == *[[:space:]]* ]]; then
+              read -r -a CREDENTIAL_LINES <<< "$SINGLE_LINE"
+            else
+              for SEPARATOR in ':' ',' ';' '|'; do
+                if [[ "$SINGLE_LINE" == *"$SEPARATOR"* ]]; then
+                  CREDENTIAL_LINES=("${SINGLE_LINE%%"$SEPARATOR"*}" "${SINGLE_LINE#*"$SEPARATOR"}")
+                  break
+                fi
+              done
+            fi
+          fi
+          if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ] || [ -z "${CREDENTIAL_LINES[0]}" ] || [ -z "${CREDENTIAL_LINES[1]}" ]; then
+            echo "Could not parse two non-empty BrowserStack credentials from the combined secret. Store username and access key on separate lines, or separate them with one space, colon, comma, semicolon, or pipe."
             exit 1
           fi
           BROWSERSTACK_USERNAME="${CREDENTIAL_LINES[0]}"
