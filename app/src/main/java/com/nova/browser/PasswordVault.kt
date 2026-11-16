@@ -4,6 +4,9 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.system.Os
+import java.io.File
+import java.io.FileOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import org.mozilla.geckoview.Autocomplete
@@ -16,11 +19,12 @@ import javax.crypto.spec.GCMParameterSpec
 /** AES-GCM encrypted local login vault. The AES key never leaves Android Keystore. */
 class PasswordVault(context: Context) {
     private val prefs = context.getSharedPreferences("nova_password_vault", Context.MODE_PRIVATE)
+    // noBackupFilesDir prevents Android Auto Backup from restoring ciphertext without its Keystore key.
+    private val vaultFile = File(context.noBackupFilesDir, "nova-password-vault.bin")
     private val alias = "nova.password.vault.aes.v1"
 
     @Synchronized fun all(): List<Autocomplete.LoginEntry> {
-        val packed = prefs.getString(KEY_BLOB, null) ?: return emptyList()
-        val bytes = Base64.decode(packed, Base64.NO_WRAP)
+        val bytes = readEncryptedBlob() ?: return emptyList()
         require(bytes.size > 12) { "Password vault data is invalid" }
         val iv = bytes.copyOfRange(0, 12)
         val encrypted = bytes.copyOfRange(12, bytes.size)
@@ -48,7 +52,7 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun delete(guid: String) = persist(all().filterNot { it.guid == guid })
 
-    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).apply() }
+    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).apply(); vaultFile.delete() }
 
     private fun persist(entries: List<Autocomplete.LoginEntry>) {
         val json = JSONArray()
@@ -61,7 +65,32 @@ class PasswordVault(context: Context) {
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
         val packed = cipher.iv + encrypted
-        prefs.edit().putString(KEY_BLOB, Base64.encodeToString(packed, Base64.NO_WRAP)).apply()
+        val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")
+        FileOutputStream(temporary).use { it.write(packed); it.fd.sync() }
+        try {
+            Os.rename(temporary.absolutePath, vaultFile.absolutePath)
+        } catch (error: Exception) {
+            temporary.delete()
+            throw IllegalStateException("Could not securely write password vault", error)
+        }
+        prefs.edit().remove(KEY_BLOB).apply()
+    }
+
+    private fun readEncryptedBlob(): ByteArray? {
+        if (vaultFile.exists()) return vaultFile.readBytes()
+        val legacy = prefs.getString(KEY_BLOB, null) ?: return null
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (store.getKey(alias, null) !is SecretKey) {
+            // An OS backup may have restored preferences without the non-exportable Keystore key.
+            // The ciphertext cannot be decrypted, so do not invent a replacement key and overwrite it silently.
+            throw IllegalStateException("This password vault was restored without its Android Keystore key and cannot be decrypted. Create a new vault on this device.")
+        }
+        val bytes = Base64.decode(legacy, Base64.NO_WRAP)
+        val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")
+        FileOutputStream(temporary).use { it.write(bytes); it.fd.sync() }
+        if (!temporary.renameTo(vaultFile)) throw IllegalStateException("Could not migrate password vault to protected storage")
+        prefs.edit().remove(KEY_BLOB).apply()
+        return bytes
     }
 
     private fun secretKey(): SecretKey {

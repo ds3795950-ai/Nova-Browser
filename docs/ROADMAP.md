@@ -68,7 +68,7 @@ Never describe Guest Mode as Tor anonymity unless traffic is actually routed thr
 ## Phase 7 — Extensions and advanced tools (2026-11-16)
 - Added GeckoView WebExtension manager: list, enable, disable, uninstall and install a direct HTTPS XPI. GeckoView validates signed add-ons.
 - Required extension permissions require an explicit prompt; private-browsing access and data-collection consent are denied by default; optional permission requests are denied.
-- Added encrypted password storage using AES-GCM with a non-exportable Android Keystore key, GeckoView login fetch/save/select delegates, and a local vault UI. Automatic one-entry autofill is intentionally off; user selection is required. Password saving/autocomplete is disabled in private and Guest tabs.
+- Added encrypted password storage using AES-GCM with a non-exportable Android Keystore key, stored in Android no-backup app storage with atomic writes, GeckoView login fetch/save/select delegates, and a local vault UI. Automatic one-entry autofill is intentionally off; user selection is required. Password saving/autocomplete is disabled in private and Guest tabs.
 - Added per-site permission controls, site-data clearing, adjustable page text scaling and JSON history export. Bookmark JSON import/export already exists.
 - No raw passwords are exported.
 

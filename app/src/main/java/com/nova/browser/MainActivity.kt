@@ -1257,7 +1257,7 @@ class MainActivity : Activity() {
                 val includePage = CheckBox(this).apply { text = "Include current page URL in the prompt"; isChecked = false }
                 val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 0); addView(prompt); addView(includePage) }
                 AlertDialog.Builder(this).setTitle("Ask ${provider.label}")
-                    .setMessage("Your prompt${if (includePage.isChecked) " and current page URL" else ""} will be sent to ${provider.label} only when you press Send. Nova does not send page content automatically.")
+                    .setMessage("Your prompt will be sent to ${provider.label} when you press Send. If you enable the checkbox, Nova also includes only the current page URL—not the page contents.")
                     .setView(content)
                     .setPositiveButton("Send") { _, _ ->
                         val question = prompt.text.toString().trim()
