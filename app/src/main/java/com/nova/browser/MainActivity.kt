@@ -408,7 +408,7 @@ class MainActivity : ComponentActivity() {
         android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             isFillViewport = false
-            addView(row, android.widget.HorizontalScrollView.LayoutParams(-2, dp(48)))
+            addView(row, android.view.ViewGroup.LayoutParams(-2, dp(48)))
         }
 
     private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
