@@ -163,7 +163,8 @@ try {
   record('Normal browsing history is recorded', true, 'Normal marker appears in History');
 
   await tapToolbar('Private', 0);
-  await byTextContains('Private tab').waitForDisplayed({ timeout: 10000 });
+  await byTextContains('Private session').waitForDisplayed({ timeout: 10000 });
+  record('Private mode indicator appears on home', true, 'Private session status is visible immediately after opening a Private tab');
   await navigateTo('https://example.com/?' + privateMarker + '=1', privateMarker);
   await tapToolbar('History', 1);
   await driver.pause(1000);
@@ -190,7 +191,8 @@ try {
   // Verify Guest Mode is isolated from normal history and bookmarks.
   const guestMarker = 'nova_guest_privacy_marker';
   await tapToolbar('Guest', 0);
-  await byTextContains('Guest tab').waitForDisplayed({ timeout: 10000 });
+  await byTextContains('Guest Mode · temporary data').waitForDisplayed({ timeout: 10000 });
+  record('Guest mode indicator appears on home', true, 'Guest Mode status is visible immediately after opening a Guest tab');
   await navigateTo('https://example.com/?' + guestMarker + '=1', guestMarker);
   await tapToolbar('History', 1);
   await driver.pause(1000);

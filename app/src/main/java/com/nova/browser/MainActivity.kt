@@ -372,7 +372,12 @@ class MainActivity : ComponentActivity() {
         addressBar.setText("")
         dismissAddressBarInput()
         tabLabel.text = "Nova Browser · Home"
-        pageStatus.text = "Ready · $searchEngine"
+        val activeTab = currentTab()
+        pageStatus.text = when {
+            activeTab?.isGuest == true -> "Guest Mode · temporary data"
+            activeTab?.isPrivate == true -> "Private session"
+            else -> "Ready · $searchEngine"
+        }
         searchEngineButton.text = "$searchEngine ▾"
         searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
@@ -609,7 +614,12 @@ class MainActivity : ComponentActivity() {
                 tab.needsReload = true
             }
         }
-        pageStatus.text = "Memory saver · up to 4 live tabs; sleeping tabs reload when reopened"
+        val activeTab = currentTab()
+        pageStatus.text = when {
+            activeTab?.isGuest == true -> "Guest Mode · temporary data"
+            activeTab?.isPrivate == true -> "Private session"
+            else -> "Memory saver · up to 4 live tabs; sleeping tabs reload when reopened"
+        }
     }
 
     private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
