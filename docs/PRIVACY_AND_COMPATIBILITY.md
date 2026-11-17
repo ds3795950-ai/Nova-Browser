@@ -12,7 +12,11 @@ Nova does not implement an in-app VPN service or a VPN kill switch. The Shield m
 
 ## Guest Mode and Tor
 
-Guest Mode is an isolated, ephemeral GeckoView private session. It clears its session context when closed/restarted, but it does **not** route traffic through Tor and does not provide Tor's multi-hop anonymity. Nova's current GeckoView integration has no supported first-party proxy controller for a Tor SOCKS route. The Shield dialog now offers an Orbot launcher; the user must enable Orbot VPN mode and include Nova in Orbot's app list. Android Always-on VPN plus Block connections without VPN can provide fail-closed system routing. Nova cannot independently verify the Tor circuit or enforce the VPN. Do not describe Guest Mode as Tor-level browsing.
+Nova exposes its Orbot handoff only from Guest Mode settings. The Tor launcher checks that the active tab is a Guest tab before opening Orbot; it is not offered in normal or Private Mode. This is a user-interface and launch restriction, not a per-tab network isolation guarantee: Orbot's Android VPN routing is device/profile-level and can affect other apps unless Orbot's own app-selection mode is configured to include only Nova. Guest Mode remains an isolated, ephemeral GeckoView private session; it does not itself create a Tor circuit. The user must install and configure Orbot, enable its VPN mode, and select Nova in Orbot. Nova cannot verify the Tor circuit or guarantee fail-closed routing. Android Always-on VPN plus Block connections without VPN can provide OS-level fail-closed behavior, but should be configured and tested on-device.
+
+## Guardian VPN status
+
+Nova does not yet contain a production Guardian VPN tunnel or an operational VPN on/off switch. GuardianConnect is an integration SDK, not a free VPN server network. A production integration requires Guardian's authorization, app credentials, and an approved subscriber/entitlement flow. Do not display a connected state until the SDK confirms an active tunnel. Guardian VPN and Orbot both use Android's VPN service slot and therefore cannot be active simultaneously for the same Android user/profile; switching modes must first disconnect the active tunnel and obtain user confirmation.
 
 ## Extensions
 
