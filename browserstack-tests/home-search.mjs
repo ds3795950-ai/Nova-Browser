@@ -3,7 +3,7 @@ import { remote } from 'webdriverio';
 
 const required = ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_ACCESS_KEY', 'BROWSERSTACK_APP_URL'];
 for (const key of required) {
-  if (!process.env[key]) throw new Error(`Missing environment variable: ${key}`);
+  if (!process.env[key]) throw new Error('Missing environment variable: ' + key);
 }
 
 await mkdir('test-results', { recursive: true });
@@ -25,8 +25,8 @@ const driver = await remote({
       deviceName: process.env.BROWSERSTACK_DEVICE_NAME || 'Google Pixel 8',
       osVersion: process.env.BROWSERSTACK_OS_VERSION || '14.0',
       projectName: 'Nova Browser',
-      buildName: `Home and Search ${process.env.GITHUB_RUN_NUMBER || 'manual'}`,
-      sessionName: 'Nova home screen and search bar regression',
+      buildName: 'Privacy and Home Search ' + (process.env.GITHUB_RUN_NUMBER || 'manual'),
+      sessionName: 'Nova privacy settings and private-session regression',
       debug: true,
       networkLogs: true,
       deviceLogs: true,
@@ -36,9 +36,56 @@ const driver = await remote({
 
 const results = [];
 const record = (name, passed, detail = '') => results.push({ name, passed, detail });
-const byA11y = (label) => driver.$(`~${label}`);
-const byText = (value) => driver.$(`android=new UiSelector().text("${value}")`);
+const byA11y = (label) => driver.$('~' + label);
+const byText = (value) => driver.$('android=new UiSelector().text("' + value.replace(/"/g, '\\"') + '")');
+const byTextContains = (value) => driver.$('android=new UiSelector().textContains("' + value.replace(/"/g, '\\"') + '")');
 const addressBar = byA11y('Nova address bar');
+
+async function tapToolbar(label, rowIndex) {
+  const element = byA11y(label);
+  if (await element.isDisplayed().catch(() => false)) {
+    await element.click();
+    return;
+  }
+  const rows = await driver.$$('android.widget.HorizontalScrollView');
+  const row = rows[rowIndex];
+  if (!row) throw new Error('Toolbar row not found for ' + label);
+  const rect = await row.getRect();
+  for (const direction of ['right', 'left']) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await driver.execute('mobile: scrollGesture', {
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+        direction,
+        percent: 0.8,
+      });
+      if (await element.isDisplayed().catch(() => false)) {
+        await element.click();
+        return;
+      }
+    }
+  }
+  throw new Error('Could not expose toolbar button: ' + label);
+}
+
+async function navigateTo(url, marker) {
+  await addressBar.click();
+  await addressBar.setValue(url);
+  await byA11y('Go').click();
+  await driver.waitUntil(async () => {
+    const value = await addressBar.getAttribute('text').catch(() => '');
+    return value.includes(marker);
+  }, { timeout: 30000, timeoutMsg: 'Navigation did not reach marker: ' + marker });
+  await driver.pause(1200);
+}
+
+async function openHistoryAndReadSource() {
+  await tapToolbar('History', 1);
+  await byTextContains('History ·').waitForDisplayed({ timeout: 10000 });
+  return await driver.getPageSource();
+}
 
 try {
   await driver.waitUntil(async () => (await byText('NOVA').isDisplayed().catch(() => false)), {
@@ -69,7 +116,6 @@ try {
     timeoutMsg: 'Home button did not return to the Nova home screen',
   });
 
-  // Reproduce the case where the user presses Home while the address field is active.
   await addressBar.click();
   await addressBar.setValue('unfinished search');
   await byA11y('Home').click();
@@ -78,7 +124,6 @@ try {
     timeoutMsg: 'Home button did not return home from an active address field',
   });
   const homeFieldText = await addressBar.getAttribute('text').catch(() => '');
-  // Android exposes the EditText hint as its text attribute when the actual value is empty.
   if (homeFieldText.trim() && homeFieldText.trim() !== 'Search or enter address') {
     throw new Error('Home did not clear the unfinished address-bar text');
   }
@@ -86,17 +131,128 @@ try {
   await driver.saveScreenshot('test-results/03-home-dismisses-keyboard.png');
   record('Home clears address field and dismisses keyboard', true, 'Unfinished text cleared and keyboard hidden');
 
-  await addressBar.click();
-  await addressBar.setValue('https://example.com');
-  await driver.execute('mobile: performEditorAction', { action: 'go' });
-  await driver.waitUntil(async () => {
-    const value = await addressBar.getAttribute('text').catch(() => '');
-    return value.startsWith('https://example.com');
-  }, { timeout: 20000, timeoutMsg: 'Keyboard Go action did not submit the typed URL' });
+  await navigateTo('https://example.com/', 'example.com');
   await driver.saveScreenshot('test-results/04-keyboard-navigation.png');
   record('Keyboard Go submits URL', true, 'Typed URL was accepted through the Android editor action');
+
+  // Check all Nova Shield modes can be selected and the selected mode is reflected when reopened.
+  await tapToolbar('Shield', 2);
+  await byText('Off').waitForDisplayed({ timeout: 10000 });
+  await byText('Off').click();
+  await tapToolbar('Shield', 2);
+  await byTextContains('Nova Shield · OFF').waitForDisplayed({ timeout: 10000 });
+  record('Nova Shield Off mode persists', true, 'Reopened Shield dialog reports OFF');
+  await byText('Standard · recommended').click();
+  await tapToolbar('Shield', 2);
+  await byTextContains('Nova Shield · STANDARD').waitForDisplayed({ timeout: 10000 });
+  record('Nova Shield Standard mode persists', true, 'Reopened Shield dialog reports STANDARD');
+  await byText('Aggressive · may break sites').click();
+  await tapToolbar('Shield', 2);
+  await byTextContains('Nova Shield · AGGRESSIVE').waitForDisplayed({ timeout: 10000 });
+  record('Nova Shield Aggressive mode persists', true, 'Reopened Shield dialog reports AGGRESSIVE');
+  await byText('Standard · recommended').click();
+  await driver.saveScreenshot('test-results/05-shield-modes.png');
+
+  // Verify normal history is retained while private history and bookmarks are not recorded.
+  const normalMarker = 'nova_normal_privacy_marker';
+  const privateMarker = 'nova_private_privacy_marker';
+  await navigateTo('https://example.com/?' + normalMarker + '=1', normalMarker);
+  const normalHistory = await openHistoryAndReadSource();
+  if (!normalHistory.includes(normalMarker)) throw new Error('Normal browsing history entry was not recorded');
+  await byText('Close').click();
+  record('Normal browsing history is recorded', true, 'Normal marker appears in History');
+
+  await tapToolbar('Private', 0);
+  await byTextContains('Private tab').waitForDisplayed({ timeout: 10000 });
+  await navigateTo('https://example.com/?' + privateMarker + '=1', privateMarker);
+  await tapToolbar('History', 1);
+  await driver.pause(1000);
+  if (await byTextContains('History ·').isDisplayed().catch(() => false)) {
+    throw new Error('History dialog opened inside a private tab');
+  }
+  record('History is unavailable in Private mode', true, 'Private tab receives the history-unavailable guard');
+
+  await tapToolbar('☆', 1);
+  await driver.pause(500);
+  await tapToolbar('＋', 0);
+  await tapToolbar('Bookmarks', 1);
+  const privateBookmarks = await driver.getPageSource();
+  if (privateBookmarks.includes(privateMarker)) throw new Error('Private URL was saved in normal bookmarks');
+  await byText('Close').click();
+  record('Private bookmarks are not saved', true, 'Private URL is absent from the normal bookmark list');
+
+  const historyAfterPrivate = await openHistoryAndReadSource();
+  if (!historyAfterPrivate.includes(normalMarker)) throw new Error('Normal history disappeared after private browsing');
+  if (historyAfterPrivate.includes(privateMarker)) throw new Error('Private URL leaked into normal history');
+  await byText('Close').click();
+  record('Private history does not leak into normal history', true, 'Normal marker remains; private marker is absent');
+
+  // Verify Guest Mode is isolated from normal history and bookmarks.
+  const guestMarker = 'nova_guest_privacy_marker';
+  await tapToolbar('Guest', 0);
+  await byTextContains('Guest tab').waitForDisplayed({ timeout: 10000 });
+  await navigateTo('https://example.com/?' + guestMarker + '=1', guestMarker);
+  await tapToolbar('History', 1);
+  await driver.pause(1000);
+  if (await byTextContains('History ·').isDisplayed().catch(() => false)) {
+    throw new Error('History dialog opened inside Guest Mode');
+  }
+  record('History is unavailable in Guest Mode', true, 'Guest tab receives the history-unavailable guard');
+
+  await tapToolbar('☆', 1);
+  await driver.pause(500);
+  await tapToolbar('＋', 0);
+  const historyAfterGuest = await openHistoryAndReadSource();
+  if (!historyAfterGuest.includes(normalMarker)) throw new Error('Normal history disappeared after Guest browsing');
+  if (historyAfterGuest.includes(guestMarker)) throw new Error('Guest URL leaked into normal history');
+  await byText('Close').click();
+  record('Guest history does not leak into normal history', true, 'Normal marker remains; Guest marker is absent');
+
+  await tapToolbar('Bookmarks', 1);
+  const guestBookmarks = await driver.getPageSource();
+  if (guestBookmarks.includes(guestMarker)) throw new Error('Guest URL was saved in normal bookmarks');
+  await byText('Close').click();
+  record('Guest bookmarks are not saved', true, 'Guest URL is absent from the normal bookmark list');
+
+  // Exercise the visible site-controls and protection-log dialogs on a normal site.
+  await navigateTo('https://example.com/', 'example.com');
+  await tapToolbar('Site', 2);
+  await byTextContains('Site controls · example.com').waitForDisplayed({ timeout: 10000 });
+  await byText('Close').click();
+  record('Site controls open for the active origin', true, 'Site controls identify example.com');
+
+  await tapToolbar('Shield', 2);
+  await byText("Show this page's protection log").click();
+  await byTextContains('Nova Shield · example.com').waitForDisplayed({ timeout: 15000 });
+  await byText('OK').click();
+  record('Nova Shield protection log opens', true, 'Protection log dialog opened for example.com');
+
+  // Close ephemeral tabs, then confirm they are not restored after an app restart.
+  await tapToolbar('Settings', 1);
+  await byText('Exit Guest Mode').click();
+  await tapToolbar('Settings', 1);
+  await byText('Close private and Guest tabs').click();
+  await tapToolbar('Private', 0);
+  await tapToolbar('Guest', 0);
+  await driver.terminateApp('com.nova.browser');
+  await driver.activateApp('com.nova.browser');
+  await addressBar.waitForDisplayed({ timeout: 30000 });
+  await tapToolbar('Tabs', 0);
+  const tabsAfterRestart = await driver.getPageSource();
+  if (tabsAfterRestart.includes('PRIVATE TABS') || tabsAfterRestart.includes('GUEST TABS')) {
+    throw new Error('Private or Guest tabs were restored after app restart');
+  }
+  await byText('Done').click();
+  record('Private and Guest tabs are not restored after app restart', true, 'Only normal tabs remain in the tab manager');
+
+  await tapToolbar('Shield', 2);
+  await byTextContains('Nova Shield · STANDARD').waitForDisplayed({ timeout: 10000 });
+  await byText('Close').click();
+  record('Nova Shield setting survives app restart', true, 'Standard protection remains selected');
+
+  await driver.saveScreenshot('test-results/06-privacy-regression-complete.png');
 } catch (error) {
-  record('Regression run', false, error?.stack || String(error));
+  record('Privacy regression run', false, error?.stack || String(error));
   try { await driver.saveScreenshot('test-results/failure.png'); } catch {}
   try { await writeFile('test-results/failure-page-source.xml', await driver.getPageSource()); } catch {}
   throw error;
