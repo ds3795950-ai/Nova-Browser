@@ -47,34 +47,26 @@ async function tapToolbar(label, rowIndex) {
     await element.click();
     return;
   }
+  const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const rows = await driver.$$('android.widget.HorizontalScrollView');
-  const row = rows[rowIndex];
-  if (!row) throw new Error('Toolbar row not found for ' + label);
-  const bounds = await row.getAttribute('bounds').catch(() => null);
-  const match = String(bounds || '').match(/\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/);
-  let rect;
-  if (match) {
-    rect = { x: Number(match[1]), y: Number(match[2]), width: Number(match[3]) - Number(match[1]), height: Number(match[4]) - Number(match[2]) };
-  } else {
-    const location = await row.getLocation();
-    const size = await row.getSize();
-    rect = { x: location.x, y: location.y, width: size.width, height: size.height };
+  const indices = [rowIndex, ...rows.map((_, i) => i).filter(i => i !== rowIndex)];
+  for (const i of indices) {
+    try {
+      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`;
+      const target = driver.$(selector);
+      await target.waitForDisplayed({ timeout: 3000 });
+      await target.click();
+      return;
+    } catch (_) {}
   }
-  for (const direction of ['right', 'left']) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await driver.execute('mobile: scrollGesture', {
-        left: rect.x,
-        top: rect.y,
-        width: rect.width,
-        height: rect.height,
-        direction,
-        percent: 0.8,
-      });
-      if (await element.isDisplayed().catch(() => false)) {
-        await element.click();
-        return;
-      }
-    }
+  for (const i of indices) {
+    try {
+      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
+      const target = driver.$(selector);
+      await target.waitForDisplayed({ timeout: 3000 });
+      await target.click();
+      return;
+    } catch (_) {}
   }
   throw new Error('Could not expose toolbar button: ' + label);
 }
@@ -250,19 +242,23 @@ try {
   if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Guest Mode created a separate Private tab');
   record('Guest mode blocks Private tab creation', true, 'Private tabs cannot be opened from Guest Mode');
 
-  await tapToolbar('＋', 0);
-  await byTextContains('Guest Mode · temporary data').waitForDisplayed({ timeout: 10000 });
-  record('New tabs remain inside Guest Mode', true, 'The new-tab button creates another Guest tab, not a normal tab');
-
   await tapToolbar('Settings', 1);
   const guestSettingsSource = await driver.getPageSource();
   for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
     if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
   }
-  await byText('Exit Guest Mode').click();
+  await byText('Close').click();
+  record('Guest settings hide owner data', true, 'Only Exit Guest Mode is offered; owner exports and account controls are hidden');
+
+  await tapToolbar('＋', 0);
+  await byTextContains('Guest Mode · temporary data').waitForDisplayed({ timeout: 10000 });
+  record('New tabs remain inside Guest Mode', true, 'The new-tab button creates another Guest tab, not a normal tab');
+
+  await tapToolbar('Tabs', 0);
+  await byText('Exit Guest').click();
   await byText('Exit Guest').click();
   await driver.waitUntil(async () => !(await byTextContains('Guest Mode · temporary data').isDisplayed().catch(() => false)), { timeout: 10000, timeoutMsg: 'Guest Mode did not exit after confirmation' });
-  record('Guest settings hide owner data and confirm exit', true, 'Only Exit Guest Mode is offered; leaving Guest Mode requires confirmation');
+  record('Guest exit requires confirmation', true, 'The tab manager warns before returning to owner tabs');
 
   const historyAfterGuest = await openHistoryAndReadSource();
   if (historyAfterGuest.includes(guestMarker)) throw new Error('Guest URL leaked into normal history');
