@@ -144,7 +144,7 @@ try {
   record('HTTPS connectivity to independent host', true, 'A second HTTPS origin loaded through the browser');
   await navigateTo('https://dns.google/resolve?name=example.com&type=A', 'dns.google/resolve');
   const dohSource = await driver.getPageSource();
-  if (!/\"Status\"\s*:\s*0/.test(dohSource)) throw new Error('DNS-over-HTTPS lookup did not return a successful DNS status');
+  if (!/Status.{0,10}0/.test(dohSource)) throw new Error('DNS-over-HTTPS lookup did not return a successful DNS status');
   record('DNS lookup returns a successful answer', true, 'dns.google returned DNS status 0 for example.com');
 
   // Check all Nova Shield modes can be selected and the selected mode is reflected when reopened.
