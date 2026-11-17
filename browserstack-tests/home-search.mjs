@@ -236,7 +236,7 @@ try {
   await tapToolbar('Guest', 0);
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
-  await addressBar.waitForDisplayed({ timeout: 30000 });
+  await byA11y('Nova address bar').waitForDisplayed({ timeout: 30000 });
   await tapToolbar('Tabs', 0);
   const tabsAfterRestart = await driver.getPageSource();
   if (tabsAfterRestart.includes('PRIVATE TABS') || tabsAfterRestart.includes('GUEST TABS')) {
