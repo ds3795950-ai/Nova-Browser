@@ -159,7 +159,7 @@ class MainActivity : ComponentActivity() {
     private fun buildBrowserUi() {
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(8, 8, 8, 4)
+            setPadding(dp(8), dp(8), dp(8), dp(4))
             setBackgroundColor(0xFF171020.toInt())
         }
         val addressRow = LinearLayout(this).apply {
@@ -175,7 +175,7 @@ class MainActivity : ComponentActivity() {
             setSelectAllOnFocus(true)
             imeOptions = EditorInfo.IME_ACTION_GO
             setBackgroundColor(0xFF30243D.toInt())
-            setPadding(12, 0, 12, 0)
+            setPadding(dp(12), 0, dp(12), 0)
             contentDescription = "Nova address bar"
             setOnEditorActionListener { _, actionId, event ->
                 val enterKey = event?.let {
@@ -196,12 +196,19 @@ class MainActivity : ComponentActivity() {
             minWidth = 40
             minimumWidth = 40
         }
-        addressRow.addView(homeButton, LinearLayout.LayoutParams(40, 48))
-        addressRow.addView(addressBar, LinearLayout.LayoutParams(0, 48, 1f))
+        homeButton.minimumWidth = dp(48)
+        homeButton.minimumHeight = dp(48)
+        addressRow.addView(homeButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addressRow.addView(addressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
         searchEngineButton = actionButton("$searchEngine ▾") { chooseSearchEngine() }
         searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
-        addressRow.addView(searchEngineButton)
-        addressRow.addView(actionButton("Go") { submitAddressBar() })
+        searchEngineButton.minWidth = dp(64)
+        searchEngineButton.minimumWidth = dp(64)
+        addressRow.addView(searchEngineButton, LinearLayout.LayoutParams(dp(72), dp(48)))
+        val goButton = actionButton("Go") { submitAddressBar() }
+        goButton.minWidth = dp(48)
+        goButton.minimumWidth = dp(48)
+        addressRow.addView(goButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         top.addView(addressRow)
 
         val controls = LinearLayout(this).apply {
@@ -247,13 +254,13 @@ class MainActivity : ComponentActivity() {
             text = "Nova Browser"
             textSize = 12f
             setTextColor(0xFFD8CBE8.toInt())
-            setPadding(4, 5, 4, 5)
+            setPadding(dp(4), dp(5), dp(4), dp(5))
         }
         pageStatus = TextView(this).apply {
             text = "Ready"
             textSize = 11f
             setTextColor(0xFFB9AEC8.toInt())
-            setPadding(4, 0, 4, 4)
+            setPadding(dp(4), 0, dp(4), dp(4))
         }
         top.addView(tabLabel)
         top.addView(pageStatus)
@@ -267,10 +274,11 @@ class MainActivity : ComponentActivity() {
             setTextColor(0xFFFFFFFF.toInt())
             setHintTextColor(0xFFB9AEC8.toInt())
             setBackgroundColor(0xFF30243D.toInt())
+            setPadding(dp(12), 0, dp(12), 0)
         }
         val secondaryControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(secondaryAddressBar, LinearLayout.LayoutParams(0, 42, 1f))
+            addView(secondaryAddressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
             addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
             addView(actionButton("Close split") { exitSplitScreen() })
         }
@@ -294,14 +302,17 @@ class MainActivity : ComponentActivity() {
             addView(browserPane, LinearLayout.LayoutParams(-1, 0, 1f))
             browserPane.visibility = View.GONE
         }
+        root.isFocusableInTouchMode = true
         setContentView(root)
+        root.requestFocus()
+        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
     }
 
     private fun createHomePanel(): LinearLayout {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(20, 28, 20, 20)
+            setPadding(dp(20), dp(28), dp(20), dp(20))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
@@ -312,7 +323,7 @@ class MainActivity : ComponentActivity() {
             textSize = 58f
             gravity = Gravity.CENTER
             contentDescription = "Nova dragon emblem"
-            setPadding(0, 0, 0, 8)
+            setPadding(0, 0, 0, dp(8))
         }
         val title = TextView(this).apply {
             text = "NOVA"
@@ -327,7 +338,7 @@ class MainActivity : ComponentActivity() {
             textSize = 13f
             setTextColor(0xFFB9AEC8.toInt())
             gravity = Gravity.CENTER
-            setPadding(0, 4, 0, 24)
+            setPadding(0, dp(4), 0, dp(24))
         }
         val shortcutTitle = TextView(this).apply {
             text = "QUICK ACCESS"
@@ -336,7 +347,7 @@ class MainActivity : ComponentActivity() {
             letterSpacing = 0.12f
             setTextColor(0xFFD8CBE8.toInt())
             gravity = Gravity.CENTER
-            setPadding(0, 8, 0, 8)
+            setPadding(0, dp(8), 0, dp(8))
         }
         homeShortcuts = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -369,6 +380,7 @@ class MainActivity : ComponentActivity() {
 
     private fun dismissAddressBarInput() {
         addressBar.clearFocus()
+        root.requestFocus()
         val inputMethodManager = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
             as? android.view.inputmethod.InputMethodManager
         inputMethodManager?.hideSoftInputFromWindow(addressBar.windowToken, 0)
@@ -389,6 +401,9 @@ class MainActivity : ComponentActivity() {
         browserPane.visibility = View.VISIBLE
     }
 
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density + 0.5f).toInt()
+
     private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
         text = label
         contentDescription = label
@@ -396,7 +411,7 @@ class MainActivity : ComponentActivity() {
         isAllCaps = false
         minWidth = 0
         minimumWidth = 0
-        setPadding(7, 0, 7, 0)
+        setPadding(dp(7), 0, dp(7), 0)
         setOnClickListener { action() }
     }
 
