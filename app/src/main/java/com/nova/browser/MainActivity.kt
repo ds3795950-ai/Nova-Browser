@@ -41,6 +41,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.ContentBlocking
@@ -130,6 +131,7 @@ class MainActivity : ComponentActivity() {
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
+        applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
@@ -1468,6 +1470,37 @@ class MainActivity : ComponentActivity() {
             }.setNegativeButton("Close", null).show()
     }
 
+    private fun applyProtectedDns(enabled: Boolean) {
+        if (!::runtime.isInitialized) return
+        if (enabled) {
+            runtime.settings.setTrustedRecursiveResolverUri(ADGUARD_DOH_ENDPOINT)
+            // ONLY mode intentionally has no system-DNS fallback if the encrypted resolver fails.
+            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TR...)
+        } else {
+            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TR...)
+        }
+    }
+
+    private fun showProtectedDnsSettings() {
+        val enabled = prefs.getBoolean("protected_dns_enabled", false)
+        val check = CheckBox(this).apply {
+            text = "Use AdGuard encrypted DNS for Nova browsing"
+            isChecked = enabled
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Protected DNS · AdGuard DNS")
+            .setMessage("When enabled, Nova's GeckoView browser engine sends DNS lookups to AdGuard over DNS-over-HTTPS. Strict mode does not fall back to unencrypted DNS if the resolver is unavailable.\n\nThis protects DNS lookups made by Nova only. It is not a VPN, does not hide your IP address, and does not change DNS for other apps or Android itself.")
+            .setView(check)
+            .setPositiveButton("Save") { _, _ ->
+                prefs.edit().putBoolean("protected_dns_enabled", check.isChecked).apply()
+                applyProtectedDns(check.isChecked)
+                toast(if (check.isChecked) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun openOrbotTorRouting() {
         if (currentTab()?.isGuest != true) { toast("Tor routing is available only in Guest Mode"); return }
         val launch = packageManager.getLaunchIntentForPackage("org.torproject.android")
@@ -1478,7 +1511,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
-            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
+            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
             .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
             .setNegativeButton("Cancel", null).show()
     }
@@ -1664,7 +1697,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync")
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
@@ -1701,6 +1734,7 @@ class MainActivity : ComponentActivity() {
                 13 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
                     .setPositiveButton("OK", null).show()
                 14 -> showCloudAccount()
+                15 -> showProtectedDnsSettings()
             }
         }.show()
     }
@@ -1917,5 +1951,8 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    companion object { private const val HOME_URL = "about:blank" }
+    companion object {
+        private const val HOME_URL = "about:blank"
+        private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
+    }
 }
