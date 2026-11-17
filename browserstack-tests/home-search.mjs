@@ -250,6 +250,8 @@ try {
   for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
     if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
   }
+  await byText('Guest Mode settings').waitForDisplayed({ timeout: 10000 });
+  await byText('Close').waitForDisplayed({ timeout: 10000 });
   await byText('Close').click();
   record('Guest settings hide owner data', true, 'Only Exit Guest Mode is offered; owner exports and account controls are hidden');
 
