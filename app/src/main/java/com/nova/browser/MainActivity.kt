@@ -1437,7 +1437,7 @@ class MainActivity : ComponentActivity() {
         val current = NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD"))
         val tab = currentTab()
         val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log", "Open Orbot · system VPN routing")
+        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log")
         AlertDialog.Builder(this).setTitle("Nova Shield · ${current.name}")
             .setItems(items) { _, which ->
                 when (which) {
@@ -1464,12 +1464,12 @@ class MainActivity : ComponentActivity() {
                                 .setPositiveButton("OK", null).show() }
                         }, { error -> runOnUiThread { toast("Protection log unavailable: ${error?.localizedMessage ?: "Unknown error"}") } })
                     }
-                    5 -> openOrbotTorRouting()
                 }
             }.setNegativeButton("Close", null).show()
     }
 
     private fun openOrbotTorRouting() {
+        if (currentTab()?.isGuest != true) { toast("Tor routing is available only in Guest Mode"); return }
         val launch = packageManager.getLaunchIntentForPackage("org.torproject.android")
         if (launch == null) {
             AlertDialog.Builder(this).setTitle("Orbot is not installed")
@@ -1478,7 +1478,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
-            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Guest Mode remains isolated private browsing, not Tor.")
+            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
             .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
             .setNegativeButton("Cancel", null).show()
     }
@@ -1659,7 +1659,7 @@ class MainActivity : ComponentActivity() {
         if (currentTab()?.isGuest == true) {
             AlertDialog.Builder(this).setTitle("Guest Mode settings")
                 .setMessage("Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden while Guest Mode is active.")
-                .setItems(arrayOf("Exit Guest Mode")) { _, _ -> confirmExitGuestMode() }
+                .setItems(arrayOf("Tor routing · Orbot", "Exit Guest Mode")) { _, which -> if (which == 0) openOrbotTorRouting() else confirmExitGuestMode() }
                 .setNegativeButton("Close", null).show()
             return
         }
