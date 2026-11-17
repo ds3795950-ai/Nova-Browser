@@ -218,10 +218,14 @@ class MainActivity : ComponentActivity() {
         controls.addView(actionButton("←") { goBack() })
         controls.addView(actionButton("→") { goForward() })
         controls.addView(actionButton("↻") { reloadPage() })
-        controls.addView(actionButton("＋") { createTab(false, HOME_URL) })
+        controls.addView(actionButton("＋") {
+            if (currentTab()?.isGuest == true) createGuestTab() else createTab(false, HOME_URL)
+        })
         controls.addView(actionButton("Tabs") { showTabs() })
         controls.addView(actionButton("Split") { chooseSplitTab() })
-        controls.addView(actionButton("Private") { createTab(true, HOME_URL) })
+        controls.addView(actionButton("Private") {
+            if (currentTab()?.isGuest == true) toast("Private tabs are unavailable in Guest Mode") else createTab(true, HOME_URL)
+        })
         controls.addView(actionButton("Guest") { createGuestTab() })
         top.addView(toolbarScroll(controls), LinearLayout.LayoutParams(-1, dp(48)))
 
@@ -429,6 +433,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
+        if (currentTab()?.isGuest == true && !isGuest) {
+            toast("Normal and Private tabs are unavailable in Guest Mode")
+            return
+        }
         currentTab()?.session?.setActive(false)
         currentTab()?.session?.setFocused(false)
         val tab = BrowserTab(null, isPrivate, isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
@@ -624,8 +632,18 @@ class MainActivity : ComponentActivity() {
 
     private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
 
+    private fun denyGuestAccess(feature: String): Boolean {
+        if (currentTab()?.isGuest != true) return false
+        toast("$feature is unavailable in Guest Mode")
+        return true
+    }
+
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
+        if (currentTab()?.isGuest == true && !tabs[index].isGuest) {
+            toast("Normal tabs are hidden in Guest Mode")
+            return
+        }
         currentTab()?.session?.setActive(false)
         currentTab()?.session?.setFocused(false)
         activeIndex = index
@@ -645,6 +663,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun chooseSplitTab() {
+        if (denyGuestAccess("Split screen")) return
         val candidates = tabs.filter { !it.isPrivate && !it.isGuest && it !== currentTab() }
         if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
         AlertDialog.Builder(this).setTitle("Open second pane")
@@ -726,15 +745,21 @@ class MainActivity : ComponentActivity() {
         if (tabs.isEmpty()) return
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
         var tabDialog: AlertDialog? = null
+        val guestMode = currentTab()?.isGuest == true
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        actions.addView(actionButton("＋ Normal") { createTab(false, HOME_URL) })
-        actions.addView(actionButton("＋ Private") { createTab(true, HOME_URL) })
-        actions.addView(actionButton("＋ Guest") { createGuestTab() })
-        actions.addView(actionButton("Exit Guest") { closeGuestTabs() })
-        actions.addView(actionButton("Save session") { saveNamedSession() })
-        actions.addView(actionButton("Workspaces") { showSavedWorkspaces() })
-        actions.addView(actionButton("Expand all") { collapsedGroups.clear(); tabDialog?.dismiss(); showTabs() })
-        actions.addView(actionButton("Collapse all") { tabs.map { it.group }.distinct().forEach { collapsedGroups.add("NORMAL TABS::$it"); collapsedGroups.add("PRIVATE TABS::$it") }; tabDialog?.dismiss(); showTabs() })
+        if (guestMode) {
+            actions.addView(actionButton("＋ Guest") { createGuestTab() })
+            actions.addView(actionButton("Exit Guest") { confirmExitGuestMode() })
+        } else {
+            actions.addView(actionButton("＋ Normal") { createTab(false, HOME_URL) })
+            actions.addView(actionButton("＋ Private") { createTab(true, HOME_URL) })
+            actions.addView(actionButton("＋ Guest") { createGuestTab() })
+            actions.addView(actionButton("Exit Guest") { closeGuestTabs() })
+            actions.addView(actionButton("Save session") { saveNamedSession() })
+            actions.addView(actionButton("Workspaces") { showSavedWorkspaces() })
+            actions.addView(actionButton("Expand all") { collapsedGroups.clear(); tabDialog?.dismiss(); showTabs() })
+            actions.addView(actionButton("Collapse all") { tabs.map { it.group }.distinct().forEach { collapsedGroups.add("NORMAL TABS::$it"); collapsedGroups.add("PRIVATE TABS::$it") }; tabDialog?.dismiss(); showTabs() })
+        }
         content.addView(actions)
         val scroll = ScrollView(this)
         val grid = GridLayout(this).apply { columnCount = 2; useDefaultMargins = true }
@@ -771,12 +796,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        addSection("NORMAL TABS", normal)
-        addSection("PRIVATE TABS", privateIndices)
+        if (!guestMode) addSection("NORMAL TABS", normal)
+        if (!guestMode) addSection("PRIVATE TABS", privateIndices)
         addSection("GUEST TABS", guestIndices)
         scroll.addView(grid)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        tabDialog = AlertDialog.Builder(this).setTitle("Tabs · ${tabs.size}")
+        tabDialog = AlertDialog.Builder(this).setTitle(if (guestMode) "Guest tabs · ${guestIndices.size}" else "Tabs · ${tabs.size}")
             .setView(content).setNegativeButton("Done", null).create()
         tabDialog?.show()
     }
@@ -806,10 +831,15 @@ class MainActivity : ComponentActivity() {
     private fun closeTabAt(index: Int) {
         if (index !in tabs.indices) return
         val wasActive = index == activeIndex
+        val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
         if (removed.id == splitTabId) exitSplitScreen()
         removed.session?.close()
         cleanupGuestContextIfIdle()
+        if (removed.isGuest && wasGuestActive && tabs.none { it.isGuest }) {
+            createGuestTab()
+            return
+        }
         if (tabs.isEmpty()) {
             activeIndex = 0
             createTab(false, HOME_URL)
@@ -822,6 +852,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveNamedSession() {
+        if (denyGuestAccess("Saving workspaces")) return
         val input = EditText(this).apply { hint = "Session name"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Save workspace").setView(input)
             .setPositiveButton("Save") { _, _ ->
@@ -888,6 +919,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSavedWorkspaces() {
+        if (denyGuestAccess("Saved workspaces")) return
         val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
         if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
         val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " · long-press to delete" }
@@ -911,6 +943,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreWorkspace(raw: String) {
+        if (denyGuestAccess("Restoring workspaces")) return
         runCatching {
             val data = JSONObject(raw).getJSONArray("tabs")
             for (i in 0 until data.length()) {
@@ -1058,6 +1091,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exportBookmarks() {
+        if (denyGuestAccess("Bookmark export")) return
         bookmarkTransferMode = "export"
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-bookmarks.json")
@@ -1066,12 +1100,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importBookmarks() {
+        if (denyGuestAccess("Bookmark import")) return
         bookmarkTransferMode = "import"
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/json" }
         startActivityForResult(intent, bookmarkRequestCode)
     }
 
     private fun clearBrowsingHistory() {
+        if (denyGuestAccess("Clearing owner history")) return
         prefs.edit().putLong("history_cleared_at", System.currentTimeMillis()).remove("history").remove("history_v2").apply()
     }
 
@@ -1157,6 +1193,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDownloads() {
+        if (denyGuestAccess("Downloads")) return
         val items = novaDownloads.items()
         if (items.isEmpty()) { downloadPrompt(); return }
         val rows = items.map { item ->
@@ -1311,6 +1348,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun confirmExitGuestMode() {
+        if (currentTab()?.isGuest != true) {
+            closeGuestTabs()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Exit Guest Mode?")
+            .setMessage("Exiting Guest Mode returns to the owner's normal tabs and saved data. Only the device owner should continue.")
+            .setPositiveButton("Exit Guest") { _, _ -> closeGuestTabs() }
+            .setNegativeButton("Stay in Guest Mode", null).show()
+    }
+
     private fun closeGuestTabs() {
         val guestIndices = tabs.indices.filter { tabs[it].isGuest }.reversed()
         if (guestIndices.isEmpty()) { toast("Guest Mode is not active"); return }
@@ -1327,6 +1375,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun chooseSearchEngine() {
+        if (denyGuestAccess("Search engine settings")) return
         val engines = arrayOf("Google", "Bing", "DuckDuckGo", "Brave Search")
         AlertDialog.Builder(this).setTitle("Default search engine")
             .setSingleChoiceItems(engines, engines.indexOf(searchEngine)) { dialog, which ->
@@ -1379,6 +1428,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showShieldSettings() {
+        if (denyGuestAccess("Nova Shield settings")) return
         val modes = ShieldMode.values()
         val current = NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD"))
         val tab = currentTab()
@@ -1452,6 +1502,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showExtensions() {
+        if (denyGuestAccess("Extensions")) return
         val controller = runtime.getWebExtensionController()
         controller.list().accept({ extensions ->
             runOnUiThread {
@@ -1492,6 +1543,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPasswordVault() {
+        if (denyGuestAccess("Password vault")) return
         val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it?.localizedMessage ?: "Unknown error"}"); return }
         val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} · ${it.username}" }.toTypedArray()
         val labels = rows + "Add login manually"
@@ -1537,6 +1589,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSiteControls() {
+        if (denyGuestAccess("Site controls")) return
         val tab = currentTab() ?: return
         val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
         if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
@@ -1588,6 +1641,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exportHistory() {
+        if (denyGuestAccess("History export")) return
         val array = JSONArray()
         readHistory().sortedByDescending { it.visitedAt }.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
         pendingHistoryExport = array.toString(2)
@@ -1598,6 +1652,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSettings() {
+        if (currentTab()?.isGuest == true) {
+            AlertDialog.Builder(this).setTitle("Guest Mode settings")
+                .setMessage("Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden while Guest Mode is active.")
+                .setItems(arrayOf("Exit Guest Mode")) { _, _ -> confirmExitGuestMode() }
+                .setNegativeButton("Close", null).show()
+            return
+        }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
         val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
@@ -1642,6 +1703,7 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showCloudAccount() {
+        if (denyGuestAccess("Nova Cloud")) return
         val email = cloudSync.signedInEmail()
         if (email.isNullOrBlank()) {
             val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; isSingleLine = true }

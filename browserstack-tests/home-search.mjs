@@ -188,27 +188,78 @@ try {
   await byText('Close').click();
   record('Private history does not leak into normal history', true, 'Normal marker remains; private marker is absent');
 
-  // Verify Guest Mode is isolated from normal history and bookmarks.
+  // Verify Guest Mode cannot reach owner tabs, downloads, passwords or account settings.
   const guestMarker = 'nova_guest_privacy_marker';
   await tapToolbar('Guest', 0);
   await byTextContains('Guest Mode · temporary data').waitForDisplayed({ timeout: 10000 });
   record('Guest mode indicator appears on home', true, 'Guest Mode status is visible immediately after opening a Guest tab');
   await navigateTo('https://example.com/?' + guestMarker + '=1', guestMarker);
   await tapToolbar('History', 1);
-  await driver.pause(1000);
-  if (await byTextContains('History ·').isDisplayed().catch(() => false)) {
-    throw new Error('History dialog opened inside Guest Mode');
-  }
+  await driver.pause(500);
+  if (await byTextContains('History ·').isDisplayed().catch(() => false)) throw new Error('History dialog opened inside Guest Mode');
   record('History is unavailable in Guest Mode', true, 'Guest tab receives the history-unavailable guard');
 
   await tapToolbar('☆', 1);
   await driver.pause(500);
+  record('Guest bookmarks are blocked', true, 'Bookmark action is rejected while Guest Mode is active');
+
+  await tapToolbar('Tabs', 0);
+  const guestTabsSource = await driver.getPageSource();
+  if (guestTabsSource.includes('NORMAL TABS') || guestTabsSource.includes('PRIVATE TABS') || guestTabsSource.includes(normalMarker) || guestTabsSource.includes('Save session') || guestTabsSource.includes('Workspaces')) {
+    throw new Error('Guest tab manager exposed normal/private tabs or saved workspaces');
+  }
+  await byText('Done').click();
+  record('Guest tab manager hides owner tabs', true, 'Only Guest tabs are listed; normal/private tabs and workspaces are hidden');
+
+  await tapToolbar('Passwords', 2);
+  await driver.pause(500);
+  if (await byTextContains('Encrypted password vault').isDisplayed().catch(() => false)) throw new Error('Guest Mode opened the owner password vault');
+  record('Guest mode blocks password vault', true, 'Owner password vault is unavailable in Guest Mode');
+
+  await tapToolbar('Downloads', 1);
+  await driver.pause(500);
+  if (await byTextContains('Nova Downloads').isDisplayed().catch(() => false)) throw new Error('Guest Mode opened the owner downloads list');
+  record('Guest mode blocks downloads list', true, 'Owner download history is unavailable in Guest Mode');
+
+  await tapToolbar('Add-ons', 2);
+  await driver.pause(500);
+  if (await byTextContains('Nova Add-ons').isDisplayed().catch(() => false)) throw new Error('Guest Mode opened the owner extensions manager');
+  record('Guest mode blocks extension management', true, 'Persistent extension settings are unavailable in Guest Mode');
+
+  await tapToolbar('Site', 2);
+  await driver.pause(500);
+  if (await byTextContains('Site controls ·').isDisplayed().catch(() => false)) throw new Error('Guest Mode opened owner-profile site controls');
+  record('Guest mode blocks shared site controls', true, 'Shared site-data controls are unavailable in Guest Mode');
+
+  await tapToolbar('Shield', 2);
+  await driver.pause(500);
+  if (await byTextContains('Nova Shield ·').isDisplayed().catch(() => false)) throw new Error('Guest Mode opened owner-wide Shield settings');
+  record('Guest mode blocks global Shield changes', true, 'Global protection settings are owner-only');
+
+  await tapToolbar('Private', 0);
+  await driver.pause(500);
+  if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Guest Mode created a separate Private tab');
+  record('Guest mode blocks Private tab creation', true, 'Private tabs cannot be opened from Guest Mode');
+
   await tapToolbar('＋', 0);
+  await byTextContains('Guest Mode · temporary data').waitForDisplayed({ timeout: 10000 });
+  record('New tabs remain inside Guest Mode', true, 'The new-tab button creates another Guest tab, not a normal tab');
+
+  await tapToolbar('Settings', 1);
+  const guestSettingsSource = await driver.getPageSource();
+  for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
+    if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
+  }
+  await byText('Exit Guest Mode').click();
+  await byText('Exit Guest').click();
+  await driver.waitUntil(async () => !(await byTextContains('Guest Mode · temporary data').isDisplayed().catch(() => false)), { timeout: 10000, timeoutMsg: 'Guest Mode did not exit after confirmation' });
+  record('Guest settings hide owner data and confirm exit', true, 'Only Exit Guest Mode is offered; leaving Guest Mode requires confirmation');
+
   const historyAfterGuest = await openHistoryAndReadSource();
-  if (!historyAfterGuest.includes(normalMarker)) throw new Error('Normal history disappeared after Guest browsing');
   if (historyAfterGuest.includes(guestMarker)) throw new Error('Guest URL leaked into normal history');
+  if (!historyAfterGuest.includes(normalMarker)) throw new Error('Normal history marker disappeared while using Guest Mode');
   await byText('Close').click();
-  record('Guest history does not leak into normal history', true, 'Normal marker remains; Guest marker is absent');
+  record('Guest history does not leak into normal history', true, 'Normal history remains; Guest marker is absent');
 
   await tapToolbar('Bookmarks', 1);
   const guestBookmarks = await driver.getPageSource();
@@ -271,7 +322,7 @@ try {
   await tapToolbar('Settings', 1);
   await byText('Account & encrypted cloud sync').click();
   await byText('Sign in to Nova Cloud').waitForDisplayed({ timeout: 10000 });
-  const emailFields = await driver.$('android.widget.EditText');
+  const emailFields = await driver.$$('android.widget.EditText');
   if (emailFields.length !== 1) throw new Error('Cloud sign-in should request only an email address');
   const passwordField = await emailFields[0].getAttribute('password').catch(() => 'false');
   if (String(passwordField).toLowerCase() === 'true') throw new Error('Cloud sign-in unexpectedly exposed a password field');
