@@ -37,7 +37,7 @@ const driver = await remote({
 const results = [];
 const record = (name, passed, detail = '') => results.push({ name, passed, detail });
 const byA11y = (label) => driver.$('~' + label);
-const byText = (value) => driver.$('android=new UiSelector().text("' + value.replace(/"/g, '\\"') + '")');
+const byText = (value) => driver.$('android=new UiSelector().textMatches("(?i)^' + value + '$")');
 const byTextContains = (value) => driver.$('android=new UiSelector().textContains("' + value.replace(/"/g, '\\"') + '")');
 const addressBar = byA11y('Nova address bar');
 
