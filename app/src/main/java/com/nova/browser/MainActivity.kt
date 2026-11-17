@@ -1819,6 +1819,11 @@ class MainActivity : ComponentActivity() {
         NovaSyncSnapshotRepository.apply(this, snapshot)
         searchEngine = prefs.getString("search_engine", searchEngine) ?: searchEngine
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
+        val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
+        val savedFontScale = prefs.getInt("font_scale_index", 1).coerceIn(fontScaleFactors.indices)
+        runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
+        runtime.settings.setForceUserScalableEnabled(true)
+        homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
         searchEngineButton.text = "$searchEngine ▾"
     }
 
