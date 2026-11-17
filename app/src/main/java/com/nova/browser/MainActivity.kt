@@ -132,6 +132,10 @@ class MainActivity : ComponentActivity() {
         runtime = GeckoRuntime.create(this)
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
+        val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
+        val savedFontScale = prefs.getInt("font_scale_index", 1).coerceIn(fontScaleFactors.indices)
+        runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
+        runtime.settings.setForceUserScalableEnabled(true)
         runtime.setAutocompleteStorageDelegate(object : Autocomplete.StorageDelegate {
             override fun onLoginFetch(domain: String): GeckoResult<Array<Autocomplete.LoginEntry>> {
                 if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
@@ -145,7 +149,7 @@ class MainActivity : ComponentActivity() {
                 runCatching { passwordVault.save(login) }.onFailure { runOnUiThread { toast("Could not save login securely: ${it?.localizedMessage ?: "Unknown error"}") } }
             }
         })
-        runtime.settings.setLoginAutofillEnabled(false)
+        runtime.settings.setLoginAutofillEnabled(true)
         configureExtensionPermissions()
         val previousGuestContext = prefs.getString("guest_context_id", null)
         if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
