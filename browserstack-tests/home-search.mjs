@@ -50,7 +50,16 @@ async function tapToolbar(label, rowIndex) {
   const rows = await driver.$$('android.widget.HorizontalScrollView');
   const row = rows[rowIndex];
   if (!row) throw new Error('Toolbar row not found for ' + label);
-  const rect = await row.getRect();
+  const bounds = await row.getAttribute('bounds').catch(() => null);
+  const match = String(bounds || '').match(/\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/);
+  let rect;
+  if (match) {
+    rect = { x: Number(match[1]), y: Number(match[2]), width: Number(match[3]) - Number(match[1]), height: Number(match[4]) - Number(match[2]) };
+  } else {
+    const location = await row.getLocation();
+    const size = await row.getSize();
+    rect = { x: location.x, y: location.y, width: size.width, height: size.height };
+  }
   for (const direction of ['right', 'left']) {
     for (let attempt = 0; attempt < 3; attempt++) {
       await driver.execute('mobile: scrollGesture', {
