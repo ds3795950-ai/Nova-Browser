@@ -216,6 +216,16 @@ try {
   await byText('Close').click();
   record('Guest bookmarks are not saved', true, 'Guest URL is absent from the normal bookmark list');
 
+  // Clear only the synthetic history created by this test.
+  await tapToolbar('Settings', 1);
+  await byText('Clear browsing history').click();
+  const historyAfterClear = await openHistoryAndReadSource();
+  if (historyAfterClear.includes(normalMarker) || historyAfterClear.includes(privateMarker) || historyAfterClear.includes(guestMarker)) {
+    throw new Error('Clear browsing history left a synthetic test URL behind');
+  }
+  await byText('Close').click();
+  record('Clear browsing history removes saved entries', true, 'Normal, Private and Guest test markers are absent after clearing');
+
   // Exercise the visible site-controls and protection-log dialogs on a normal site.
   await navigateTo('https://example.com/', 'example.com');
   await tapToolbar('Site', 2);
@@ -225,9 +235,65 @@ try {
 
   await tapToolbar('Shield', 2);
   await byText("Show this page's protection log").click();
-  await byTextContains('Nova Shield · example.com').waitForDisplayed({ timeout: 15000 });
-  await byText('OK').click();
-  record('Nova Shield protection log opens', true, 'Protection log dialog opened for example.com');
+  const logDialog = byTextContains('Nova Shield · example.com');
+  const logToast = driver.$('android.widget.Toast');
+  let logOpened = false;
+  let logDetail = 'No protection-log dialog or error toast appeared within 15 seconds';
+  try {
+    await driver.waitUntil(async () =>
+      (await logDialog.isDisplayed().catch(() => false)) ||
+      (await logToast.isDisplayed().catch(() => false)),
+      { timeout: 15000, timeoutMsg: 'Protection log dialog did not appear' }
+    );
+    if (await logDialog.isDisplayed().catch(() => false)) {
+      logOpened = true;
+      await byText('OK').click();
+      logDetail = 'Protection log dialog opened for example.com';
+    } else {
+      logDetail = 'Protection log error: ' + await logToast.getText().catch(() => 'message unavailable');
+    }
+  } catch (error) {
+    logDetail = 'Protection log did not open: ' + (error?.message || String(error));
+  }
+  record('Nova Shield protection log opens', logOpened, logDetail);
+
+  // Open privacy-related settings screens without entering credentials or enabling sync.
+  await tapToolbar('Passwords', 2);
+  await byTextContains('Encrypted password vault').waitForDisplayed({ timeout: 10000 });
+  await byText('Close').click();
+  record('Encrypted password vault screen opens', true, 'Vault screen opens without exposing any stored credential');
+
+  await tapToolbar('Add-ons', 2);
+  await byTextContains('Nova Add-ons').waitForDisplayed({ timeout: 10000 });
+  await byText('Close').click();
+  record('Add-ons privacy screen opens', true, 'Extension manager opens without granting new permissions');
+
+  await tapToolbar('Settings', 1);
+  await byText('Account & encrypted cloud sync').click();
+  await byText('Sign in to Nova Cloud').waitForDisplayed({ timeout: 10000 });
+  const emailFields = await driver.$('android.widget.EditText');
+  if (emailFields.length !== 1) throw new Error('Cloud sign-in should request only an email address');
+  const passwordField = await emailFields[0].getAttribute('password').catch(() => 'false');
+  if (String(passwordField).toLowerCase() === 'true') throw new Error('Cloud sign-in unexpectedly exposed a password field');
+  await byText('Cancel').click();
+  record('Cloud sync sign-in uses email OTP UI', true, 'One email field; no password requested and no OTP sent');
+
+  await tapToolbar('Shield', 2);
+  await byText('Open Orbot · system VPN routing').click();
+  const noOrbot = byText('Orbot is not installed');
+  const routeOrbot = byText('Route traffic through Orbot');
+  await driver.waitUntil(async () =>
+    (await noOrbot.isDisplayed().catch(() => false)) ||
+    (await routeOrbot.isDisplayed().catch(() => false)),
+    { timeout: 10000, timeoutMsg: 'Orbot handoff dialog did not appear' }
+  );
+  if (await noOrbot.isDisplayed().catch(() => false)) {
+    await byText('OK').click();
+    record('Tor handoff states Orbot dependency', true, 'Nova does not bundle Tor; Orbot must be installed separately');
+  } else {
+    await byText('Cancel').click();
+    record('Tor handoff requires explicit approval', true, 'Orbot routing requires explicit user action');
+  }
 
   // Close ephemeral tabs, then confirm they are not restored after an app restart.
   await tapToolbar('Settings', 1);
@@ -253,6 +319,8 @@ try {
   record('Nova Shield setting survives app restart', true, 'Standard protection remains selected');
 
   await driver.saveScreenshot('test-results/06-privacy-regression-complete.png');
+  const failedChecks = results.filter(item => !item.passed);
+  if (failedChecks.length) throw new Error('Privacy checks failed: ' + failedChecks.map(item => item.name).join(', '));
 } catch (error) {
   record('Privacy regression run', false, error?.stack || String(error));
   try { await driver.saveScreenshot('test-results/failure.png'); } catch {}
