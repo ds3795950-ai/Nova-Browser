@@ -39,14 +39,15 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
       - name: Parse and verify BrowserStack credentials
         env:
           ROHANSAHA_NGXOSY: ${{ secrets.ROHANSAHA_NGXOSY }}
         run: |
           set -euo pipefail
-          # Accept either real newlines or the literal two-character \n separator
-          # (some mobile password managers paste escaped newlines into secret fields).
+          # Accept either real newlines or the literal two-character \n separator.
           NORMALIZED_SECRET="${ROHANSAHA_NGXOSY//\\n/$'\n'}"
           mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
           if [ "${#CREDENTIAL_LINES[@]}" -eq 1 ]; then
@@ -77,14 +78,11 @@ jobs:
             printf 'BROWSERSTACK_ACCESS_KEY=%s\n' "$BROWSERSTACK_ACCESS_KEY"
           } >> "$GITHUB_ENV"
 
-      - name: Build universal debug App Bundle
-        run: ./gradlew --no-daemon :app:bundleDebug
+      - name: Build debug App Bundle
+        run: gradle --no-daemon :app:bundleDebug
 
       - name: Upload Nova to BrowserStack App Automate
         id: upload
-        env:
-          BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}
         run: |
           set -euo pipefail
           APP_FILE="app/build/outputs/bundle/debug/app-debug.aab"
@@ -92,7 +90,8 @@ jobs:
           curl --fail-with-body --silent --show-error \
             -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
             -X POST "https://api-cloud.browserstack.com/app-automate/upload" \
-            -F "file=@${APP_FILE}"             -o browserstack-upload.json
+            -F "file=@${APP_FILE}" \
+            -o browserstack-upload.json
           APP_URL="$(jq -r '.app_url // empty' browserstack-upload.json)"
           if [ -z "$APP_URL" ]; then cat browserstack-upload.json; exit 1; fi
           echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
@@ -102,8 +101,6 @@ jobs:
 
       - name: Run home screen and search bar tests
         env:
-          BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}
           BROWSERSTACK_APP_URL: ${{ steps.upload.outputs.app_url }}
           BROWSERSTACK_DEVICE_NAME: ${{ inputs.device_name }}
           BROWSERSTACK_OS_VERSION: ${{ inputs.os_version }}
