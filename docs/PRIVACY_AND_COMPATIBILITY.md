@@ -4,6 +4,12 @@
 
 Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Browsing lists. Standard/Aggressive modes additionally enable cookie purging, private-mode query stripping and email-tracker protection; Aggressive enables strict social-tracker blocking. These controls block known trackers and some ad trackers, but they are **not** a complete EasyList/uBlock-style ad blocker and do not remove every ad or cosmetic page element.
 
+## DNS and network routing
+
+Nova currently relies on Android/GeckoView system name resolution and network routing. It does not expose a browser-managed DNS-over-HTTPS or DNS-over-TLS provider setting, and the app does not implement its own DNS resolver. A successful DNS-over-HTTPS test to a public resolver checks that resolver endpoint separately; it does not mean Nova's normal page requests are forced through that resolver.
+
+Nova does not implement an in-app VPN service or a VPN kill switch. The Shield menu only offers an explicit handoff to the separately installed Orbot Android app, which uses Android's system VPN facility. Nova cannot confirm that Orbot is connected, that Nova is selected in Orbot, that a Tor circuit is active, or that traffic is blocked when the VPN disconnects. Use Android Always-on VPN and Block connections without VPN for system-level fail-closed behavior, and verify the active route independently.
+
 ## Guest Mode and Tor
 
 Guest Mode is an isolated, ephemeral GeckoView private session. It clears its session context when closed/restarted, but it does **not** route traffic through Tor and does not provide Tor's multi-hop anonymity. Nova's current GeckoView integration has no supported first-party proxy controller for a Tor SOCKS route. The Shield dialog now offers an Orbot launcher; the user must enable Orbot VPN mode and include Nova in Orbot's app list. Android Always-on VPN plus Block connections without VPN can provide fail-closed system routing. Nova cannot independently verify the Tor circuit or enforce the VPN. Do not describe Guest Mode as Tor-level browsing.
