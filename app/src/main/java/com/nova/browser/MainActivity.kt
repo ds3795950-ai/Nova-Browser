@@ -223,7 +223,7 @@ class MainActivity : ComponentActivity() {
         controls.addView(actionButton("Split") { chooseSplitTab() })
         controls.addView(actionButton("Private") { createTab(true, HOME_URL) })
         controls.addView(actionButton("Guest") { createGuestTab() })
-        top.addView(controls)
+        top.addView(toolbarScroll(controls), LinearLayout.LayoutParams(-1, dp(48)))
 
         val tools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -238,7 +238,7 @@ class MainActivity : ComponentActivity() {
         tools.addView(actionButton("Translate") { translatePage() })
         tools.addView(actionButton("Share") { sharePage() })
         tools.addView(actionButton("Settings") { showSettings() })
-        top.addView(tools)
+        top.addView(toolbarScroll(tools), LinearLayout.LayoutParams(-1, dp(48)))
         val advancedTools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -248,7 +248,7 @@ class MainActivity : ComponentActivity() {
         advancedTools.addView(actionButton("Add-ons") { showExtensions() })
         advancedTools.addView(actionButton("Passwords") { showPasswordVault() })
         advancedTools.addView(actionButton("Site") { showSiteControls() })
-        top.addView(advancedTools)
+        top.addView(toolbarScroll(advancedTools), LinearLayout.LayoutParams(-1, dp(48)))
 
         tabLabel = TextView(this).apply {
             text = "Nova Browser"
@@ -404,13 +404,21 @@ class MainActivity : ComponentActivity() {
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density + 0.5f).toInt()
 
+    private fun toolbarScroll(row: LinearLayout) =
+        android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = false
+            addView(row, android.widget.HorizontalScrollView.LayoutParams(-2, dp(48)))
+        }
+
     private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
         text = label
         contentDescription = label
         textSize = 11f
         isAllCaps = false
-        minWidth = 0
-        minimumWidth = 0
+        minWidth = dp(48)
+        minimumWidth = dp(48)
+        minimumHeight = dp(48)
         setPadding(dp(7), 0, dp(7), 0)
         setOnClickListener { action() }
     }
