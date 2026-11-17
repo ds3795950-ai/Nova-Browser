@@ -47,11 +47,8 @@ try {
   });
   if (!(await addressBar.isDisplayed())) throw new Error('Accessible address bar not found on home screen');
   if (!(await byA11y('Home').isDisplayed())) throw new Error('Dedicated Home button is not visible beside the address bar');
-  if (!(await byText('Google').isDisplayed().catch(() => false))) {
-    // Search engine label includes a dropdown glyph on the toolbar; the home shortcut remains a separate control.
-    const googleShortcut = await byText('Google').isDisplayed().catch(() => false);
-    if (!googleShortcut) throw new Error('Google shortcut/search control is missing');
-  }
+  const searchEnginePicker = driver.$('android=new UiSelector().descriptionContains("Choose search engine. Current:")');
+  if (!(await searchEnginePicker.isDisplayed())) throw new Error('Search engine picker is missing from the address toolbar');
   await driver.saveScreenshot('test-results/01-home-screen.png');
   record('Home screen renders', true, 'NOVA title, accessible address bar and dedicated Home button are visible');
 
@@ -70,15 +67,30 @@ try {
     timeout: 15000,
     timeoutMsg: 'Home button did not return to the Nova home screen',
   });
+
+  // Reproduce the case where the user presses Home while the address field is active.
+  await addressBar.click();
+  await addressBar.setValue('unfinished search');
+  await byA11y('Home').click();
+  await driver.waitUntil(async () => (await byText('NOVA').isDisplayed().catch(() => false)), {
+    timeout: 15000,
+    timeoutMsg: 'Home button did not return home from an active address field',
+  });
+  const homeFieldText = await addressBar.getAttribute('text').catch(() => '');
+  if (homeFieldText.trim()) throw new Error('Home did not clear the unfinished address-bar text');
+  if (await driver.isKeyboardShown()) throw new Error('Home left the on-screen keyboard open');
+  await driver.saveScreenshot('test-results/03-home-dismisses-keyboard.png');
+  record('Home clears address field and dismisses keyboard', true, 'Unfinished text cleared and keyboard hidden');
+
   await addressBar.click();
   await addressBar.setValue('https://example.com');
-  await driver.pressKeyCode(66);
+  await driver.execute('mobile: performEditorAction', { action: 'go' });
   await driver.waitUntil(async () => {
     const value = await addressBar.getAttribute('text').catch(() => '');
     return value.startsWith('https://example.com');
-  }, { timeout: 20000, timeoutMsg: 'Keyboard Enter did not submit the typed URL' });
-  await driver.saveScreenshot('test-results/03-keyboard-navigation.png');
-  record('Keyboard Enter submits URL', true, 'Typed URL was accepted from the keyboard action');
+  }, { timeout: 20000, timeoutMsg: 'Keyboard Go action did not submit the typed URL' });
+  await driver.saveScreenshot('test-results/04-keyboard-navigation.png');
+  record('Keyboard Go submits URL', true, 'Typed URL was accepted through the Android editor action');
 } catch (error) {
   record('Regression run', false, error?.stack || String(error));
   try { await driver.saveScreenshot('test-results/failure.png'); } catch {}
