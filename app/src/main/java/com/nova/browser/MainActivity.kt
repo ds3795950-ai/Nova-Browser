@@ -1475,9 +1475,9 @@ class MainActivity : ComponentActivity() {
         if (enabled) {
             runtime.settings.setTrustedRecursiveResolverUri(ADGUARD_DOH_ENDPOINT)
             // ONLY mode intentionally has no system-DNS fallback if the encrypted resolver fails.
-            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TR...)
+            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_ONLY)
         } else {
-            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TR...)
+            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_OFF)
         }
     }
 
