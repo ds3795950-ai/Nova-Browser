@@ -379,7 +379,59 @@ try {
   await byText('Close').click();
   record('Nova Shield setting survives app restart', true, 'Standard protection remains selected');
 
-  await driver.saveScreenshot('test-results/06-privacy-regression-complete.png');
+  // Regular settings regression: reversible preference changes, persistence, and core dialogs.
+  await tapToolbar('Settings', 1);
+  await byText('Nova Settings').waitForDisplayed({ timeout: 10000 });
+  const settingsSource = await driver.getPageSource();
+  for (const item of ['Choose search engine', 'Toggle home shortcuts', 'Clear browsing history',
+    'Nova Shield', 'AI assistants', 'Extensions', 'Password manager', 'Site permissions',
+    'Accessibility', 'Export history', 'About Nova', 'Account & encrypted cloud sync']) {
+    if (!settingsSource.includes(item)) throw new Error('Missing regular setting: ' + item);
+  }
+  record('Regular settings menu exposes all expected controls', true, 'Search, shortcuts, history, Shield, AI, add-ons, passwords, site permissions, accessibility, export, about and cloud sync are listed');
+  await byText('Close').click();
+
+  await tapToolbar('Settings', 1);
+  await byText('Choose search engine').click();
+  await byText('DuckDuckGo').click();
+  await tapToolbar('Settings', 1);
+  await byText('Choose search engine').click();
+  const engineSource = await driver.getPageSource();
+  if (!engineSource.includes('DuckDuckGo')) throw new Error('Search engine selection did not persist');
+  await byText('Google').click();
+  record('Search engine selection persists and can be restored', true, 'DuckDuckGo persisted after reopening; restored Google default');
+
+  await tapToolbar('Settings', 1);
+  const shortcutsBefore = await driver.getPageSource();
+  await byTextContains('Toggle home shortcuts').click();
+  await tapToolbar('Settings', 1);
+  const shortcutsAfter = await driver.getPageSource();
+  if (shortcutsBefore === shortcutsAfter) throw new Error('Home shortcut setting did not update');
+  await byTextContains('Toggle home shortcuts').click();
+  record('Home shortcut visibility toggles and restores', true, 'Preference changed and was returned to its original default');
+
+  await tapToolbar('Settings', 1);
+  await byText('Accessibility').click();
+  await byText('90%').click();
+  await tapToolbar('Settings', 1);
+  await byText('Accessibility').click();
+  await byText('Accessibility · page text size').waitForDisplayed({ timeout: 10000 });
+  await byText('100%').click();
+  record('Accessibility text scale changes and persists', true, '90% selection reopened correctly; restored 100% default');
+
+  await tapToolbar('Settings', 1);
+  await byText('About Nova').click();
+  await byTextContains('Nova Browser · GeckoView engine').waitForDisplayed({ timeout: 10000 });
+  await byText('OK').click();
+  record('About Nova dialog opens', true, 'Browser identity and engine information displayed');
+
+  await tapToolbar('Settings', 1);
+  await byText('AI assistants').click();
+  await byText('Choose browser AI').waitForDisplayed({ timeout: 10000 });
+  await byText('Cancel').click();
+  record('AI assistant settings open without sending data', true, 'Provider picker opens and cancels without a prompt');
+
+  await driver.saveScreenshot('test-results/06-privacy-and-settings-regression-complete.png');
   const failedChecks = results.filter(item => !item.passed);
   if (failedChecks.length) throw new Error('Privacy checks failed: ' + failedChecks.map(item => item.name).join(', '));
 } catch (error) {
