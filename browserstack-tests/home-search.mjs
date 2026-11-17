@@ -139,6 +139,14 @@ try {
   await driver.saveScreenshot('test-results/04-keyboard-navigation.png');
   record('Keyboard Go submits URL', true, 'Typed URL was accepted through the Android editor action');
 
+  // Connectivity and hostname-resolution checks through GeckoView itself.
+  await navigateTo('https://www.iana.org/', 'iana.org');
+  record('HTTPS connectivity to independent host', true, 'A second HTTPS origin loaded through the browser');
+  await navigateTo('https://dns.google/resolve?name=example.com&type=A', 'dns.google/resolve');
+  const dohSource = await driver.getPageSource();
+  if (!/\"Status\"\s*:\s*0/.test(dohSource)) throw new Error('DNS-over-HTTPS lookup did not return a successful DNS status');
+  record('DNS lookup returns a successful answer', true, 'dns.google returned DNS status 0 for example.com');
+
   // Check all Nova Shield modes can be selected and the selected mode is reflected when reopened.
   await tapToolbar('Shield', 2);
   await byText('Off').waitForDisplayed({ timeout: 10000 });
@@ -250,7 +258,7 @@ try {
   for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
     if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
   }
-  await byText('Guest Mode settings').waitForDisplayed({ timeout: 10000 });
+  await byTextContains('Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden').waitForDisplayed({ timeout: 10000 });
   await byText('Close').waitForDisplayed({ timeout: 10000 });
   await byText('Close').click();
   record('Guest settings hide owner data', true, 'Only Exit Guest Mode is offered; owner exports and account controls are hidden');
@@ -350,10 +358,12 @@ try {
   );
   if (await noOrbot.isDisplayed().catch(() => false)) {
     await byText('OK').click();
-    record('Tor handoff states Orbot dependency', true, 'Nova does not bundle Tor; Orbot must be installed separately');
+    record('Tor handoff states Orbot dependency', true, 'Orbot is not installed on this test device; Nova does not bundle Tor');
   } else {
+    const vpnCopy = await driver.getPageSource();
+    if (!vpnCopy.includes('Always-on VPN') || !vpnCopy.includes('Nova cannot verify')) throw new Error('Orbot handoff omits VPN fail-closed and verification limitations');
     await byText('Cancel').click();
-    record('Tor handoff requires explicit approval', true, 'Orbot routing requires explicit user action');
+    record('Tor handoff requires explicit approval', true, 'Orbot routing requires user action and explains Always-on VPN and verification limits');
   }
 
   // Close ephemeral tabs, then confirm they are not restored after an app restart.
