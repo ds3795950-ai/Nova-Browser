@@ -47,6 +47,7 @@ try {
   });
   if (!(await addressBar.isDisplayed())) throw new Error('Accessible address bar not found on home screen');
   if (!(await byA11y('Home').isDisplayed())) throw new Error('Dedicated Home button is not visible beside the address bar');
+  if (await driver.isKeyboardShown()) throw new Error('Keyboard opened automatically on the home screen');
   const searchEnginePicker = driver.$('android=new UiSelector().descriptionContains("Choose search engine. Current:")');
   if (!(await searchEnginePicker.isDisplayed())) throw new Error('Search engine picker is missing from the address toolbar');
   await driver.saveScreenshot('test-results/01-home-screen.png');
@@ -77,7 +78,10 @@ try {
     timeoutMsg: 'Home button did not return home from an active address field',
   });
   const homeFieldText = await addressBar.getAttribute('text').catch(() => '');
-  if (homeFieldText.trim()) throw new Error('Home did not clear the unfinished address-bar text');
+  // Android exposes the EditText hint as its text attribute when the actual value is empty.
+  if (homeFieldText.trim() && homeFieldText.trim() !== 'Search or enter address') {
+    throw new Error('Home did not clear the unfinished address-bar text');
+  }
   if (await driver.isKeyboardShown()) throw new Error('Home left the on-screen keyboard open');
   await driver.saveScreenshot('test-results/03-home-dismisses-keyboard.png');
   record('Home clears address field and dismisses keyboard', true, 'Unfinished text cleared and keyboard hidden');
