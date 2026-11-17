@@ -49,7 +49,10 @@ async function tapToolbar(label, rowIndex) {
   }
   const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const rows = await driver.$$('android.widget.HorizontalScrollView');
-  const indices = [rowIndex, ...rows.map((_, i) => i).filter(i => i !== rowIndex)];
+  const indices = [rowIndex];
+  for (let i = 0; i < rows.length; i++) {
+    if (i !== rowIndex) indices.push(i);
+  }
   for (const i of indices) {
     try {
       const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`;
