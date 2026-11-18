@@ -68,9 +68,9 @@ android {
 
 configurations.configureEach {
     resolutionStrategy.force(
-        "org.jetbrains.kotlin:kotlin-stdlib:2.2.20",
-        "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.20",
-        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.2.20"
+        "org.jetbrains.kotlin:kotlin-stdlib:2.3.20",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.20",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.20"
     )
 }
 
@@ -78,9 +78,10 @@ dependencies {
     implementation(project(":firewall"))
     implementation("androidx.activity:activity:1.10.1")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
-    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.2.20")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
     // GeckoView is the sole browser engine.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 }
+
