@@ -24,14 +24,18 @@ android {
     }
     sourceSets {
         getByName("main") {
-            java.srcDir("../vendor/tacuns/app/src/main/java")
+            kotlin.srcDir("../vendor/tacuns/app/src/main/java")
             res.srcDir("../vendor/tacuns/app/src/main/res")
             assets.srcDir("../vendor/tacuns/app/src/main/assets")
         }
         getByName("test") {
-            java.srcDir("../vendor/tacuns/app/src/test/java")
+            kotlin.srcDir("../vendor/tacuns/app/src/test/java")
         }
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
