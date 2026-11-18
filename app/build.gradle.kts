@@ -19,7 +19,7 @@ android {
 
     defaultConfig {
         applicationId = "com.nova.browser"
-        minSdk = 26
+        minSdk = 29
         targetSdk = 36
         versionCode = 4
         versionName = "0.4.0-performance"
@@ -75,6 +75,7 @@ configurations.configureEach {
 }
 
 dependencies {
+    implementation(project(":firewall"))
     implementation("androidx.activity:activity:1.10.1")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.2.20")

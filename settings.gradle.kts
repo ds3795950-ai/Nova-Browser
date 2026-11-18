@@ -16,4 +16,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "NovaBrowser"
-include(":app")
+include(":app", ":firewall")
+project(":firewall").projectDir = file("firewall")

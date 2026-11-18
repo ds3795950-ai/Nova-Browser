@@ -6,8 +6,6 @@
 
     <queries>
         <package android:name="org.torproject.android" />
-        <package android:name="com.psiphon3" />
-        <package android:name="com.psiphon3.subscription" />
     </queries>
     <application
         android:allowBackup="false"
