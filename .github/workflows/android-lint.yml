@@ -14,8 +14,6 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -27,6 +25,7 @@ jobs:
         run: timeout 8m gradle :app:lintDebug --no-daemon --continue
       - name: Upload lint reports
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: nova-android-lint-report
