@@ -1,0 +1,51 @@
+name: Integrate browser-only 1VPN and Nova Firewall
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "scripts/apply-nova-vpn-firewall.py"
+      - ".github/workflows/apply-nova-vpn-firewall.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply the surgical migration
+        run: python3 scripts/apply-nova-vpn-firewall.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+      - name: Assemble debug APK
+        run: gradle :app:assembleDebug --no-daemon
+      - name: Run Android lint
+        run: gradle :app:lintDebug --no-daemon
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-browser-1vpn-firewall-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+      - name: Commit tested migration and remove bootstrap files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f scripts/apply-nova-vpn-firewall.py .github/workflows/apply-nova-vpn-firewall.yml
+          git add -A
+          git commit -m "Replace device VPN with browser-only 1VPN and firewall controls"
+          git push origin HEAD:main

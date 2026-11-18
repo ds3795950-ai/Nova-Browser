@@ -1,0 +1,1 @@
+Internal component: official 1VPN Firefox add-on, downloaded and bundled during build. Upstream source: https://github.com/1vpn/browser-extension. Licence: GPL-3.0; see LICENSE in the generated APK assets. This component is controlled by Nova Settings and hidden from Nova's add-ons list.\n
