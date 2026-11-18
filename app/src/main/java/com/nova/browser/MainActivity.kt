@@ -1489,7 +1489,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(12), dp(20), dp(12))
         }
         AlertDialog.Builder(this)
-            .setTitle("Protected DNS · AdGuard DNS", "Nova Firewall · TacUNS")
+            .setTitle("Protected DNS · AdGuard DNS")
             .setMessage("When enabled, Nova's GeckoView browser engine sends DNS lookups to AdGuard over DNS-over-HTTPS. Strict mode does not fall back to unencrypted DNS if the resolver is unavailable.\n\nThis protects DNS lookups made by Nova only. It is not a VPN, does not hide your IP address, and does not change DNS for other apps or Android itself.")
             .setView(check)
             .setPositiveButton("Save") { _, _ ->
