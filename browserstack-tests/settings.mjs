@@ -18,34 +18,22 @@ let driver;
 let failed = false;
 const byA11y = label => driver.$('~' + label);
 async function tapToolbar(label, rowIndex) {
-  const element = byA11y(label);
-  if (await element.isDisplayed().catch(() => false)) {
-    await element.click();
-    return;
-  }
-  const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
   const rows = await driver.$$('android.widget.HorizontalScrollView');
   const indices = [rowIndex];
-  for (let i = 0; i < rows.length; i++) {
-    if (i !== rowIndex) indices.push(i);
-  }
+  for (let i = 0; i < rows.length; i++) if (i !== rowIndex) indices.push(i);
   for (const i of indices) {
-    try {
-      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`;
-      const target = driver.$(selector);
-      await target.waitForDisplayed({ timeout: 3000 });
-      await target.click();
-      return;
-    } catch (_) {}
-  }
-  for (const i of indices) {
-    try {
-      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
-      const target = driver.$(selector);
-      await target.waitForDisplayed({ timeout: 3000 });
-      await target.click();
-      return;
-    } catch (_) {}
+    for (const match of ['description', 'text']) {
+      try {
+        const selector = match === 'description'
+          ? `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`
+          : `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
+        const target = driver.$(selector);
+        await target.waitForDisplayed({ timeout: 3000 });
+        await target.click();
+        return;
+      } catch (_) {}
+    }
   }
   throw new Error('Could not expose toolbar button: ' + label);
 }
