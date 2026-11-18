@@ -167,12 +167,18 @@ try {
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
   await driver.pause(1500);
-  await driver.startActivity('com.nova.browser', 'com.sentinel.ui.SentinelActivity');
-  await driver.pause(1800);
+  const homeAfterRestart = driver.$('android=new UiSelector().text("NOVA")');
+  await homeAfterRestart.waitForDisplayed({ timeout: 30000 });
+  await tapToolbar('Settings', 1);
+  const vpnMenuAfterRestart = await scrollToSetting('VPN & Firewall · 1VPN');
+  await vpnMenuAfterRestart.click();
+  await driver.pause(1200);
   const vpnAfterRestart = await driver.$('android=new UiSelector().text("Enable 1VPN for Nova")');
   const firewallAfterRestart = await driver.$('android=new UiSelector().text("Enable browser firewall")');
-  record('VPN preference persists after activity restart', (await checked(vpnAfterRestart)) === finalVpn);
-  record('Firewall preference persists after activity restart', (await checked(firewallAfterRestart)) === finalFirewall);
+  record('VPN preference persists after app restart', (await checked(vpnAfterRestart)) === finalVpn);
+  record('Firewall preference persists after app restart', (await checked(firewallAfterRestart)) === finalFirewall);
+  const serverAfterRestart = await driver.$('android=new UiSelector().className("android.widget.Button").textStartsWith("Server:")');
+  record('Selected free server persists after app restart', (await serverAfterRestart.getText()).includes('Los Angeles'));
 
   await driver.saveScreenshot(`${out}/settings-final.png`);
 } catch (error) {
