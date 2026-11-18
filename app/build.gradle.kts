@@ -25,10 +25,10 @@ android {
         versionName ="0.4.0-performance"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", "\"https://ycgubmykjhikjyfbgycp.supabase.co\"")
-        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTRZ2fV2A_XTM04aEP\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTBZ2fV2A_XTM04aEP\"")
     }
 
-    // Produce device-specific APK s instead of bundling every GeckoView native ABI in one file.
+    // Produce device-specific APKs instead of bundling every GeckoView native ABI in one file.
     splits {
         abi {
             isEnable = true
