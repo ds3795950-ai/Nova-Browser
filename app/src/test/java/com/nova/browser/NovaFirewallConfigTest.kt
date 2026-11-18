@@ -18,10 +18,11 @@ class NovaFirewallConfigTest {
     """.trimIndent()
 
     @Test
-    fun addsAppExclusionsAndAdGuardDns() {
+    fun addsAppExclusionsAndAdGuardDnsAndRoutesDnsThroughPeer() {
         val result = NovaFirewallConfig.apply(profile, setOf("com.example.blocked"), 1)
         assertTrue(result.contains("ExcludedApplications = com.example.blocked"))
         assertTrue(result.contains("DNS = 94.140.14.14, 94.140.15.15"))
+        assertTrue(result.contains("AllowedIPs = 0.0.0.0/0, 94.140.14.14/32, 94.140.15.15/32"))
         assertFalse(result.contains("DNS = 1.1.1.1"))
     }
 
@@ -31,6 +32,13 @@ class NovaFirewallConfigTest {
         val result = NovaFirewallConfig.apply(withExisting, setOf("com.example.new"), 0)
         assertTrue(result.contains("ExcludedApplications = com.example.old, com.example.new"))
         assertTrue(result.contains("DNS = 1.1.1.1"))
+    }
+
+    @Test
+    fun addsDnsRouteWhenPeerHasNoAllowedIps() {
+        val noRoutes = profile.replace("AllowedIPs = 0.0.0.0/0\n", "")
+        val result = NovaFirewallConfig.apply(noRoutes, emptySet(), 2)
+        assertTrue(result.contains("AllowedIPs = 94.140.14.15/32, 94.140.15.16/32"))
     }
 
     @Test(expected = IllegalArgumentException::class)

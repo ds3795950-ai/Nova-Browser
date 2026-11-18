@@ -44,6 +44,31 @@ internal object NovaFirewallConfig {
             updated.add("ExcludedApplications = ${mergedExcluded.joinToString(", ")}")
         }
         updated.addAll(lines.drop(endIndex))
+
+        if (dnsMode != 0) {
+            val dnsRoutes = if (dnsMode == 1) {
+                listOf("94.140.14.14/32", "94.140.15.15/32")
+            } else {
+                listOf("94.140.14.15/32", "94.140.15.16/32")
+            }
+            val peerIndex = updated.indexOfFirst { it.trim().equals("[Peer]", ignoreCase = true) }
+            require(peerIndex >= 0) { "WireGuard configuration has no peer for DNS routing." }
+            val peerEnd = (peerIndex + 1 until updated.size)
+                .firstOrNull { updated[it].trim().startsWith("[") } ?: updated.size
+            val allowedIndex = (peerIndex + 1 until peerEnd)
+                .firstOrNull { updated[it].trim().substringBefore("=").trim().equals("AllowedIPs", true) }
+            if (allowedIndex != null) {
+                val line = updated[allowedIndex]
+                val beforeComment = line.substringBefore("#")
+                val comment = line.substringAfter("#", "").trim()
+                val values = beforeComment.substringAfter("=", "").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val merged = (values + dnsRoutes).distinct()
+                updated[allowedIndex] = "AllowedIPs = ${merged.joinToString(", ")}" +
+                    if (comment.isNotEmpty()) " # $comment" else ""
+            } else {
+                updated.add(peerIndex + 1, "AllowedIPs = ${dnsRoutes.joinToString(", ")}")
+            }
+        }
         return updated.joinToString("\n").trimEnd() + "\n"
     }
 }
