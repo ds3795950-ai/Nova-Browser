@@ -42,34 +42,22 @@ const byTextContains = (value) => driver.$('android=new UiSelector().textContain
 const addressBar = byA11y('Nova address bar');
 
 async function tapToolbar(label, rowIndex) {
-  const element = byA11y(label);
-  if (await element.isDisplayed().catch(() => false)) {
-    await element.click();
-    return;
-  }
-  const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
   const rows = await driver.$$('android.widget.HorizontalScrollView');
   const indices = [rowIndex];
-  for (let i = 0; i < rows.length; i++) {
-    if (i !== rowIndex) indices.push(i);
-  }
+  for (let i = 0; i < rows.length; i++) if (i !== rowIndex) indices.push(i);
   for (const i of indices) {
-    try {
-      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`;
-      const target = driver.$(selector);
-      await target.waitForDisplayed({ timeout: 3000 });
-      await target.click();
-      return;
-    } catch (_) {}
-  }
-  for (const i of indices) {
-    try {
-      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
-      const target = driver.$(selector);
-      await target.waitForDisplayed({ timeout: 3000 });
-      await target.click();
-      return;
-    } catch (_) {}
+    for (const match of ['description', 'text']) {
+      try {
+        const selector = match === 'description'
+          ? `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`
+          : `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
+        const target = driver.$(selector);
+        await target.waitForDisplayed({ timeout: 3000 });
+        await target.click();
+        return;
+      } catch (_) {}
+    }
   }
   throw new Error('Could not expose toolbar button: ' + label);
 }
@@ -251,15 +239,21 @@ try {
   await tapToolbar('Private', 0);
   await driver.pause(500);
   if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Guest Mode created a separate Private tab');
-  record('Guest mode blocks Private tab creation', true, 'Private tabs cannot be opened from Guest Mode');
+  await byTextContains('Guest tab · temporary').waitForDisplayed({ timeout: 5000 });
+  record('Guest mode blocks Private tab creation', true, 'Guest tab remains active after the Private action');
 
   await tapToolbar('Settings', 1);
-  await byTextContains('Guest Mode settings').waitForDisplayed({ timeout: 10000 });
+  try {
+    await byText('Tor routing · Orbot').waitForDisplayed({ timeout: 10000 });
+    await byText('Exit Guest Mode').waitForDisplayed({ timeout: 5000 });
+  } catch (error) {
+    console.error('Guest settings screen after tapping Settings:', await driver.getPageSource());
+    throw error;
+  }
   const guestSettingsSource = await driver.getPageSource();
   for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
     if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
   }
-  if (!guestSettingsSource.includes('Guest Mode settings')) throw new Error('Guest Mode settings dialog did not open');
   if (!guestSettingsSource.includes('Tor routing · Orbot') || !guestSettingsSource.includes('Exit Guest Mode')) throw new Error('Guest Mode settings actions are missing');
   await byText('Close').waitForDisplayed({ timeout: 10000 });
   await byText('Close').click();
