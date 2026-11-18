@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - "scripts/apply-nova-vpn-firewall.py"
+      - "scripts/apply-nova-vpn-firewall-v2.py"
       - ".github/workflows/apply-nova-vpn-firewall.yml"
 
 permissions:
@@ -20,7 +21,7 @@ jobs:
           ref: main
           fetch-depth: 0
       - name: Apply the surgical migration
-        run: python3 scripts/apply-nova-vpn-firewall.py
+        run: python3 scripts/apply-nova-vpn-firewall-v2.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -46,7 +47,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f scripts/apply-nova-vpn-firewall.py .github/workflows/apply-nova-vpn-firewall.yml
+          git rm -f scripts/apply-nova-vpn-firewall.py scripts/apply-nova-vpn-firewall-v2.py .github/workflows/apply-nova-vpn-firewall.yml
           git add -A
           git commit -m "Replace device VPN with browser-only 1VPN and firewall controls"
           git push origin HEAD:main
