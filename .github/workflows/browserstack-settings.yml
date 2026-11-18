@@ -47,25 +47,28 @@ jobs:
           ROHANSHAHA_NGXOSY: ${{ secrets.ROHANSHAHA_NGXOSY }}
         run: |
           set -euo pipefail
-          NORMALIZED_SECRET="${ROHANSHAHA_NGXOSY//$'\\r'/}"
-          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\\r' | awk 'NF { print }')
+          NORMALIZED_SECRET="${ROHANSHAHA_NGXOSY//\\n/$'\\n'}"
+          NORMALIZED_SECRET="${NORMALIZED_SECRET//$'\\r'/}"
+          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
           if [ "${#CREDENTIAL_LINES[@]}" -eq 1 ]; then
             SINGLE_LINE="${CREDENTIAL_LINES[0]}"
-            for SEPARATOR in ' ' ':' ',' ';' '|'; do
-              if [[ "$SINGLE_LINE" == *"$SEPARATOR"* ]]; then
-                LEFT="${SINGLE_LINE%%"$SEPARATOR"*}"
-                RIGHT="${SINGLE_LINE#*"$SEPARATOR"}"
-                if [ -n "$LEFT" ] && [ -n "$RIGHT" ]; then
-                  CREDENTIAL_LINES=("$LEFT" "$RIGHT")
+            if [[ "$SINGLE_LINE" =~ [[:space:]] ]]; then
+              read -r -a CREDENTIAL_LINES <<< "$SINGLE_LINE"
+            else
+              for SEPARATOR in ':' ',' ';' '|'; do
+                if [[ "$SINGLE_LINE" == *"$SEPARATOR"* ]]; then
+                  CREDENTIAL_LINES=("${SINGLE_LINE%%"$SEPARATOR"*}" "${SINGLE_LINE#*"$SEPARATOR"}")
                   break
                 fi
-              fi
-            done
+              done
+            fi
           fi
           if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ] || [ -z "${CREDENTIAL_LINES[0]}" ] || [ -z "${CREDENTIAL_LINES[1]}" ]; then
-            echo "BrowserStack secret must contain username and access key as two lines or a supported separator."
+            echo "Could not parse two BrowserStack credentials. Expected two lines, a literal \\n separator, whitespace, colon, comma, semicolon or pipe."
             exit 1
           fi
+          echo "::add-mask::${CREDENTIAL_LINES[0]}"
+          echo "::add-mask::${CREDENTIAL_LINES[1]}"
           {
             printf 'BROWSERSTACK_USERNAME=%s\\n' "${CREDENTIAL_LINES[0]}"
             printf 'BROWSERSTACK_ACCESS_KEY=%s\\n' "${CREDENTIAL_LINES[1]}"
