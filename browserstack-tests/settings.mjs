@@ -16,6 +16,48 @@ await mkdir(out, { recursive: true });
 
 let driver;
 let failed = false;
+const byA11y = label => driver.$('~' + label);
+async function tapToolbar(label, rowIndex) {
+  const element = byA11y(label);
+  if (await element.isDisplayed().catch(() => false)) {
+    await element.click();
+    return;
+  }
+  const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const rows = await driver.$$('android.widget.HorizontalScrollView');
+  const indices = [rowIndex];
+  for (let i = 0; i < rows.length; i++) {
+    if (i !== rowIndex) indices.push(i);
+  }
+  for (const i of indices) {
+    try {
+      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`;
+      const target = driver.$(selector);
+      await target.waitForDisplayed({ timeout: 3000 });
+      await target.click();
+      return;
+    } catch (_) {}
+  }
+  for (const i of indices) {
+    try {
+      const selector = `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
+      const target = driver.$(selector);
+      await target.waitForDisplayed({ timeout: 3000 });
+      await target.click();
+      return;
+    } catch (_) {}
+  }
+  throw new Error('Could not expose toolbar button: ' + label);
+}
+
+
+async function scrollToSetting(label, startsWith = false) {
+  const selector = startsWith ? `new UiSelector().textStartsWith("${label}")` : `new UiSelector().text("${label}")`;
+  const element = driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).setAsVerticalList().scrollIntoView(${selector})`);
+  await element.waitForDisplayed({ timeout: 8000 });
+  return element;
+}
+
 try {
   driver = await remote({
     protocol: 'https',
@@ -30,6 +72,8 @@ try {
       'appium:deviceName': process.env.BROWSERSTACK_DEVICE_NAME || 'Google Pixel 8',
       'appium:platformVersion': process.env.BROWSERSTACK_OS_VERSION || '14.0',
       'appium:app': process.env.BROWSERSTACK_APP_URL,
+      'appium:appPackage': 'com.nova.browser',
+      'appium:appActivity': '.MainActivity',
       'appium:autoGrantPermissions': true,
       'appium:newCommandTimeout': 180,
       'bstack:options': {
@@ -42,13 +86,30 @@ try {
     }
   });
 
-  await driver.startActivity('com.nova.browser', 'com.sentinel.ui.SentinelActivity');
-  await driver.pause(2500);
+  const homeTitle = driver.$('android=new UiSelector().text("NOVA")');
+  await homeTitle.waitForDisplayed({ timeout: 30000 });
+  await tapToolbar('Settings', 1);
+  await driver.pause(500);
+  const menuEntries = [
+    ['Choose search engine', false], ['Toggle home shortcuts', true], ['Clear browsing history', false],
+    ['Close private and Guest tabs', false], ['Exit Guest Mode', false], ['Exit Reader view', false],
+    ['Nova Shield', false], ['AI assistants', false], ['Extensions', false], ['Password manager', false],
+    ['Site permissions', false], ['Accessibility', false], ['Export history', false], ['About Nova', false],
+    ['Account & encrypted cloud sync', false], ['Protected DNS · AdGuard DNS', false], ['VPN & Firewall · 1VPN', false]
+  ];
+  for (const [label, startsWith] of menuEntries) {
+    await scrollToSetting(label, startsWith);
+    record('Settings menu entry available: ' + label, true);
+  }
+  await driver.saveScreenshot(`${out}/settings-menu.png`);
+  const vpnMenuEntry = await scrollToSetting('VPN & Firewall · 1VPN');
+  await vpnMenuEntry.click();
+  await driver.pause(1200);
 
   const heading = await driver.$('android=new UiSelector().text("Nova VPN & Firewall")');
   const headingVisible = await heading.isDisplayed().catch(() => false);
-  record('Settings screen opens', headingVisible, headingVisible ? '' : 'Expected Nova VPN & Firewall heading');
-  if (!headingVisible) throw new Error('Settings screen did not open');
+  record('VPN and firewall settings screen opens from Nova Settings', headingVisible, headingVisible ? '' : 'Expected Nova VPN & Firewall heading');
+  if (!headingVisible) throw new Error('VPN and firewall settings screen did not open from Nova Settings');
 
   const vpn = await driver.$('android=new UiSelector().text("Enable 1VPN for Nova")');
   const firewall = await driver.$('android=new UiSelector().text("Enable browser firewall")');
