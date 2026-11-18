@@ -28,7 +28,7 @@ android {
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTBZ2fV2A_XTM04aEP\"")
     }
 
-    // Produce device-specific APKs instead of bundling every GeckoView native ABI in one file.
+    // Produce device-specific APK s instead of bundling every GeckoView native ABI in one file.
     splits {
         abi {
             isEnable = true
@@ -71,7 +71,7 @@ configurations.configureEach {
     resolutionStrategy.force(
         "org.jetbrains.kotlin:kotlin-stdlib:2.3.20",
         "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.20",
-        "org.jetbrains.kotlin-stdlib-jdk8:2.3.20"
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.20"
     )
 }
 
