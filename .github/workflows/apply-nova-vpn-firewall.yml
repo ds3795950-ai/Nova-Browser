@@ -35,6 +35,8 @@ jobs:
         run: gradle :app:assembleDebug --no-daemon
       - name: Run Android lint
         run: gradle :app:lintDebug --no-daemon
+      - name: Verify generated build output is ignored by Git
+        run: git check-ignore -q app/build/outputs/apk/debug/app-debug.apk
       - name: Upload debug APK
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -49,5 +51,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm -f scripts/apply-nova-vpn-firewall.py scripts/apply-nova-vpn-firewall-v2.py .github/workflows/apply-nova-vpn-firewall.yml
           git add -A
+          if git ls-files --error-unmatch app/build/outputs/apk/debug/app-debug.apk >/dev/null 2>&1; then
+            echo "Refusing to commit generated APK"
+            exit 1
+          fi
           git commit -m "Replace device VPN with browser-only 1VPN and firewall controls"
           git push origin HEAD:main
