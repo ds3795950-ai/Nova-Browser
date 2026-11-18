@@ -1,65 +1,73 @@
-# AdGuard VPN integration plan
+# Nova VPN: AdGuard TrustTunnel integration
 
-## Decision
+## Selected approach
 
-Use AdGuard's official white-label VPN SDK as the preferred VPN provider for Nova Browser. Do not integrate Aether/AGPL code or GuardianConnect. Keep the existing Orbot handoff separate from the VPN provider.
+Use the open-source TrustTunnel protocol, originally developed by AdGuard VPN, with the official Android client adapter as the implementation reference.
 
-Official provider references:
-- https://adguard.com/en/partners/technology.html
-- https://adguard-vpn.com/en/white-label-vpn.html
-- https://adguard-vpn.com/en/blog/white-label-vpn-and-vpn-sdk-how-to-choose-a-provider.html
+- Protocol/server: https://github.com/TrustTunnel/TrustTunnel
+- Android client adapter: https://github.com/TrustTunnel/TrustTunnelClient/tree/master/platform/android
+- Official Flutter client (reference only): https://github.com/TrustTunnel/TrustTunnelFlutterClient
+- License: Apache-2.0 for the TrustTunnel protocol/client repositories.
 
-## Current implementation status
+This replaces the earlier plan to use AdGuard's commercial white-label VPN SDK. Nova does not have partner SDK credentials, and the commercial AdGuard VPN server network is not available merely because the protocol is open source.
 
-**Planning only — no AdGuard tunnel is integrated.** The repository currently has no AdGuard SDK dependency, VPN service, provider credentials, or verified connection-state implementation. Do not show a connected state or claim traffic is protected until the SDK reports a live tunnel and network tests confirm routing.
+## What this choice means
 
-The previous `saharohan870-svg/Nova-Browser` repository could not be inspected during this migration because GitHub returned HTTP 403 (account suspended). This plan carries forward the AdGuard provider decision, not unverified source code from that repository.
+TrustTunnel is self-hosted. Nova can ship the client protocol without an AdGuard partner account, but it still needs an endpoint that Nova owns or is authorized to use. There are no bundled public exit servers in the official self-hosted client.
 
-## Provider access and account model
+A TrustTunnel endpoint requires a public IP or domain, a valid TLS certificate, server configuration, and client credentials/configuration. A server can optionally provide per-user subscription configuration. Nova must not invent or silently use a third-party endpoint.
 
-AdGuard describes its white-label VPN as a partner SDK backed by AdGuard's server network. The documented integration includes a client SDK and a server-side provisioning API. The Nova backend is expected to issue per-installation or per-user access tokens and keep provider credentials server-side.
+The official TrustTunnel Android app is a standalone client for self-hosted endpoints. It is useful as a reference and a way to validate a server configuration, but launching it is not the same as embedding a VPN in Nova.
 
-Before implementation, AdGuard must confirm in writing:
-1. SDK access and Android sample/documentation for this project.
-2. Commercial terms, minimum commitments, free-tier availability, and whether an accountless end-user flow is permitted.
-3. Whether anonymous installation-scoped tokens can be provisioned without requiring Nova users to create AdGuard accounts.
-4. Token expiry, revocation, usage limits, server selection, and backend API requirements.
-5. Supported Android API levels, ABI requirements, and SDK redistribution obligations.
+## Current Nova status
 
-A public SDK description is not proof that Nova has access or that end users can use the service for free. Do not embed partner secrets, API keys, or privileged provisioning credentials in the APK.
+- AdGuard DNS-over-HTTPS is already implemented as a browser-scoped GeckoView setting (protected_dns_enabled).
+- This DNS setting is not a VPN: it does not tunnel IP traffic, mask the user's public IP, or protect other apps.
+- No TrustTunnel engine, Android VpnService, or VPN connection UI is integrated yet.
+- No TrustTunnel server endpoint or client credentials have been provisioned.
+- Do not display a VPN Connected state until the embedded TrustTunnel client reports an active tunnel and independent network checks confirm routing.
 
-## Required Nova UX
+## Android integration requirements
 
-- Provide independent VPN and Tor controls.
-- VPN control must connect/disconnect only the AdGuard VPN session.
-- Tor control remains a separate Guest Mode action and must not silently toggle VPN.
-- Warn users before changing between VPN providers because Android allows only one active `VpnService` per Android user/profile.
-- Never report VPN connected until the SDK confirms an active tunnel.
-- Show explicit states: unavailable, permission required, connecting, connected, disconnecting, and error.
-- If the tunnel drops, report the failure; only claim kill-switch protection after it is enabled and verified.
-- Keep DNS configuration inside the VPN tunnel. Test DNS, IPv4, IPv6, and WebRTC leak behavior.
+The official Android adapter is a native Android library backed by JNI/native code, not a simple Kotlin-only dependency. Its current source build documents these prerequisites: Python 3.13+, CMake 3.24+, Conan 2.0.5+, Go 1.18.3+, Ninja 1.13+, Android SDK 35+, and Android NDK 29.0.14206865+.
 
-## Guest Mode and Tor isolation constraint
+The published Android AAR is hosted in GitHub Packages and currently requires package authentication in the tested download path. Do not add a dependency that makes public builds depend on a developer's personal GitHub token. Prefer a reproducible source build or an explicitly approved, reproducibly pinned distribution route.
 
-Android's VPN service is device/profile-level, not per-tab. AdGuard's app exclusions may be able to route Nova as an application, but that would still route all Nova traffic, not only Guest Mode. Therefore, do not claim that AdGuard VPN or Android VPN routing isolates Tor to Guest Mode.
+The upstream Android API exposes a VpnClient backed by libtrusttunnel_android, a VpnService, configuration parsing, connection state callbacks, network-change notification, and a socket-protection callback. The app integration must:
+1. Pin an upstream release/commit and verify its Apache-2.0 license and notices.
+2. Build the native Android adapter reproducibly for Nova's supported ABIs.
+3. Integrate the upstream service lifecycle and foreground notification correctly.
+4. Ensure the tunnel's own transport sockets are protected from VPN recursion.
+5. Ensure Nova browser traffic is routed through the tunnel. Audit upstream app-exclusion behavior; do not accidentally exclude the Nova package.
+6. Parse/import tt:// configurations safely, validate endpoint/TLS settings, and store credentials using Android Keystore-backed encryption.
+7. Request Android VPN consent using VpnService.prepare() and report the actual native state only.
+8. Handle reconnects, network changes, process death, user disconnect, and Android 13+ foreground-service/notification rules.
+9. Keep server credentials out of source control and APK build constants.
 
-Tor must remain available only through the Guest Mode UI, and the implementation must separately prove browser-level isolation before claiming that only Guest tabs use Tor. If this cannot be guaranteed with GeckoView's supported APIs, disclose the limitation rather than presenting a false privacy guarantee.
+## Routing and privacy constraints
 
-## Implementation gates
+- Android permits one active VPN service per Android user/profile. TrustTunnel and Orbot cannot normally run as simultaneous VPNs. Nova must detect/explain this conflict and never silently claim both are active.
+- Android VPN routing is user/profile-level, not browser-tab-level. Do not claim that only Guest Mode or only one tab is routed through the system VPN.
+- Nova's existing Protected DNS is browser-scoped. When a VPN is connected, the VPN's configured DNS must be used for tunneled traffic; test for conflicts with GeckoView TRR.
+- Do not advertise a kill switch until the implementation has a verified always-on/lockdown strategy and interruption tests.
+- Do not claim anonymity. A VPN changes the network path and visible exit IP; it does not make browser fingerprints or signed-in accounts anonymous.
 
-1. Obtain AdGuard SDK access, sample app, documentation, and written commercial/accountless-flow answers.
-2. Review SDK license, redistribution terms, privacy requirements, Android compatibility, and security model.
-3. Build a provider adapter around the SDK; keep SDK-specific code out of browser UI.
-4. Implement backend token provisioning with server-only credentials and no privileged secrets in the APK.
-5. Add VPN permission, lifecycle, connection-state, DNS, server-selection, and failure handling.
-6. Verify kill switch and traffic routing on physical Android devices, including tunnel interruption and reconnect tests.
-7. Run automated tests and BrowserStack checks for UI/lifecycle behavior. BrowserStack alone cannot prove real VPN routing, DNS leak protection, or kill-switch behavior; those require network-level tests on physical devices.
+## Required verification before release
 
-## Acceptance criteria
+### Build and automated tests
+- Build debug and release APKs for every shipped ABI.
+- Unit-test TrustTunnel config parsing, secret storage, service state transitions, and error handling.
+- Test VPN permission denial, cancellation, connect/disconnect, app restart, network switching, and process recreation.
+- Run BrowserStack UI/lifecycle checks. BrowserStack UI tests do not prove VPN routing or leak resistance.
 
-- A successful connection is backed by SDK-reported tunnel state and independent route verification.
-- Disconnecting or killing the tunnel cannot silently fall back to unprotected traffic if kill switch is advertised.
-- DNS requests use the configured in-tunnel resolver while connected.
-- VPN and Tor controls remain independent and warn about the Android VPN slot conflict.
-- No user-facing accountless/free claim is made until AdGuard confirms the exact entitlement model.
-- No Guest-only Tor isolation claim is made until verified end-to-end.
+### Physical-device/network tests
+- Verify the public IPv4 and IPv6 exit addresses while connected.
+- Verify DNS resolver and DNS leak behavior.
+- Verify WebRTC address exposure.
+- Verify that tunnel interruption does not silently fall back if a kill switch is advertised.
+- Verify that Nova traffic is included in the tunnel and the tunnel transport itself does not recurse.
+- Verify conflict handling with Orbot and other VPN apps.
+
+## Provisioning blocker
+
+A functioning VPN cannot be tested until a TrustTunnel endpoint and a valid client configuration are available. The endpoint can be self-hosted or supplied by a provider that explicitly authorizes Nova to use it. Do not deploy paid infrastructure, create provider accounts, or claim a free public VPN service without explicit authorization and confirmed terms.
