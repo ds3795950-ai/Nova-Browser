@@ -73,12 +73,12 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             }
         }
         val firewallDetails = TextView(this).apply {
-            text = "Uses GeckoView's built-in tracking and content protection to block known trackers, fingerprinting and cryptomining. It does not filter traffic from other apps or act as a device-wide packet firewall."
+            text = "Uses GeckoView's built-in Enhanced Tracking Protection to block known trackers and tracking content. NovaShield's Aggressive mode adds stricter fingerprinting and cryptomining protection. It does not filter other apps or act as a device-wide packet firewall."
             textSize = 13f
             setPadding(dp(4), 0, dp(4), dp(16))
         }
         val privacy = TextView(this).apply {
-            text = "1VPN is a third-party provider. When enabled, browser requests are routed through its free proxy servers. See 1vpn.org/privacy-policy for its privacy terms. WebRTC protection is applied where GeckoView exposes the required setting; this is not a claim of a fully audited leak-proof tunnel."
+            text = "1VPN is a third-party provider. When enabled, browser requests are routed through its free proxy servers. See 1vpn.org/privacy-policy for its privacy terms. WebRTC protection is applied where supported. If all proxy servers fail, GeckoView may fall back to the browser's default route; treat this as best-effort browser proxying, not a leak-proof tunnel."
             textSize = 12f
             setPadding(0, dp(12), 0, 0)
         }
@@ -131,6 +131,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
         val raw = NovaBrowserVpnController.statusText()
         status.text = when {
             !enabled -> "VPN: Off"
+            raw.contains("error", ignoreCase = true) || raw.contains("disconnected", ignoreCase = true) || raw.contains("unavailable", ignoreCase = true) -> "VPN: $raw"
             !NovaBrowserVpnController.isProxySupported() -> "VPN: Waiting for the 1VPN proxy backend. $raw"
             else -> "VPN: On · ${selectedLocationLabel()} · browser proxy configured. Open an IP-check page to verify the exit IP."
         }
