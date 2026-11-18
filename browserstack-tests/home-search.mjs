@@ -254,6 +254,7 @@ try {
   record('Guest mode blocks Private tab creation', true, 'Private tabs cannot be opened from Guest Mode');
 
   await tapToolbar('Settings', 1);
+  await byTextContains('Guest Mode settings').waitForDisplayed({ timeout: 10000 });
   const guestSettingsSource = await driver.getPageSource();
   for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
     if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
