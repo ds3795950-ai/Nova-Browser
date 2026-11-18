@@ -1,0 +1,112 @@
+name: BrowserStack Nova Settings Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_name:
+        description: BrowserStack Android device
+        required: true
+        default: Google Pixel 8
+        type: string
+      os_version:
+        description: Android OS version
+        required: true
+        default: "14.0"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  settings:
+    name: VPN and firewall settings on BrowserStack
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Parse and verify BrowserStack credentials
+        env:
+          ROHANSHAHA_NGXOSY: ${{ secrets.ROHANSHAHA_NGXOSY }}
+        run: |
+          set -euo pipefail
+          NORMALIZED_SECRET="${ROHANSHAHA_NGXOSY//$'\\r'/}"
+          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\\r' | awk 'NF { print }')
+          if [ "${#CREDENTIAL_LINES[@]}" -eq 1 ]; then
+            SINGLE_LINE="${CREDENTIAL_LINES[0]}"
+            for SEPARATOR in ' ' ':' ',' ';' '|'; do
+              if [[ "$SINGLE_LINE" == *"$SEPARATOR"* ]]; then
+                LEFT="${SINGLE_LINE%%"$SEPARATOR"*}"
+                RIGHT="${SINGLE_LINE#*"$SEPARATOR"}"
+                if [ -n "$LEFT" ] && [ -n "$RIGHT" ]; then
+                  CREDENTIAL_LINES=("$LEFT" "$RIGHT")
+                  break
+                fi
+              fi
+            done
+          fi
+          if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ] || [ -z "${CREDENTIAL_LINES[0]}" ] || [ -z "${CREDENTIAL_LINES[1]}" ]; then
+            echo "BrowserStack secret must contain username and access key as two lines or a supported separator."
+            exit 1
+          fi
+          {
+            printf 'BROWSERSTACK_USERNAME=%s\\n' "${CREDENTIAL_LINES[0]}"
+            printf 'BROWSERSTACK_ACCESS_KEY=%s\\n' "${CREDENTIAL_LINES[1]}"
+          } >> "$GITHUB_ENV"
+          echo "BrowserStack credentials parsed successfully."
+
+      - name: Build debug App Bundle
+        run: gradle --no-daemon :app:bundleDebug
+
+      - name: Upload Nova to BrowserStack App Automate
+        id: upload
+        run: |
+          set -euo pipefail
+          APP_FILE="app/build/outputs/bundle/debug/app-debug.aab"
+          test -f "$APP_FILE"
+          curl --fail-with-body --silent --show-error \\
+            -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \\
+            -X POST "https://api-cloud.browserstack.com/app-automate/upload" \\
+            -F "file=@${APP_FILE}" -o browserstack-upload.json
+          APP_URL="$(jq -r '.app_url // empty' browserstack-upload.json)"
+          if [ -z "$APP_URL" ]; then cat browserstack-upload.json; exit 1; fi
+          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Install Appium test dependency
+        run: npm install --no-save webdriverio@9
+
+      - name: Run VPN and firewall settings tests
+        env:
+          BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}
+          BROWSERSTACK_APP_URL: ${{ steps.upload.outputs.app_url }}
+          BROWSERSTACK_DEVICE_NAME: ${{ inputs.device_name }}
+          BROWSERSTACK_OS_VERSION: ${{ inputs.os_version }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: node browserstack-tests/settings.mjs
+
+      - name: Upload settings screenshots and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-settings-test-results-${{ github.run_number }}
+          path: test-results/settings/
+          if-no-files-found: warn
+          retention-days: 14
