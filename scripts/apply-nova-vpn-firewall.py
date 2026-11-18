@@ -52,5 +52,5 @@ for path in [
     if target.exists():
         target.unlink()
 
-print("Applied browser-only VPN/firewall migration.")
+print("Applied browser-only VPN/firewall migration with nullable extension guard.")
 

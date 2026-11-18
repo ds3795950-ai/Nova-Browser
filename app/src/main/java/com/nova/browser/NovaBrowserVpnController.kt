@@ -25,42 +25,50 @@ object NovaBrowserVpnController {
         geckoRuntime.getWebExtensionController()
             .ensureBuiltIn(EXTENSION_URI, EXTENSION_ID)
             .accept({ extension ->
-                extension.setMessageDelegate(object : WebExtension.MessageDelegate {
-                    override fun onConnect(port: WebExtension.Port) {
-                        nativePort = port
-                        port.setDelegate(object : WebExtension.PortDelegate {
-                            override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                                val payload = message as? JSONObject ?: return
-                                val prefs = preferences ?: return
-                                when (payload.optString("type")) {
-                                    "ready", "status" -> {
-                                        prefs.edit()
-                                            .putBoolean("nova_vpn_proxy_supported", payload.optBoolean("supported", false))
-                                            .putBoolean("nova_vpn_webrtc_protected", payload.optBoolean("webrtcProtected", false))
-                                            .putString("nova_vpn_status", payload.optString("status", "Proxy backend ready"))
-                                            .apply()
-                                        statusListener?.invoke()
-                                    }
-                                    "error" -> {
-                                        prefs.edit()
-                                            .putBoolean("nova_vpn_proxy_supported", false)
-                                            .putString("nova_vpn_status", payload.optString("message", "1VPN proxy error"))
-                                            .apply()
-                                        statusListener?.invoke()
+                if (extension == null) {
+                    preferences?.edit()
+                        ?.putBoolean("nova_vpn_proxy_supported", false)
+                        ?.putString("nova_vpn_status", "1VPN built-in component could not be installed")
+                        ?.apply()
+                    statusListener?.invoke()
+                } else {
+                    extension.setMessageDelegate(object : WebExtension.MessageDelegate {
+                        override fun onConnect(port: WebExtension.Port) {
+                            nativePort = port
+                            port.setDelegate(object : WebExtension.PortDelegate {
+                                override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                                    val payload = message as? JSONObject ?: return
+                                    val prefs = preferences ?: return
+                                    when (payload.optString("type")) {
+                                        "ready", "status" -> {
+                                            prefs.edit()
+                                                .putBoolean("nova_vpn_proxy_supported", payload.optBoolean("supported", false))
+                                                .putBoolean("nova_vpn_webrtc_protected", payload.optBoolean("webrtcProtected", false))
+                                                .putString("nova_vpn_status", payload.optString("status", "Proxy backend ready"))
+                                                .apply()
+                                            statusListener?.invoke()
+                                        }
+                                        "error" -> {
+                                            prefs.edit()
+                                                .putBoolean("nova_vpn_proxy_supported", false)
+                                                .putString("nova_vpn_status", payload.optString("message", "1VPN proxy error"))
+                                                .apply()
+                                            statusListener?.invoke()
+                                        }
                                     }
                                 }
-                            }
 
-                            override fun onDisconnect(port: WebExtension.Port) {
-                                if (nativePort === port) nativePort = null
-                                preferences?.edit()?.putString("nova_vpn_status", "Proxy bridge disconnected")?.apply()
-                                statusListener?.invoke()
-                            }
-                        })
-                        sendCurrentSettings()
-                    }
-                }, NATIVE_APP)
-                sendCurrentSettings()
+                                override fun onDisconnect(port: WebExtension.Port) {
+                                    if (nativePort === port) nativePort = null
+                                    preferences?.edit()?.putString("nova_vpn_status", "Proxy bridge disconnected")?.apply()
+                                    statusListener?.invoke()
+                                }
+                            })
+                            sendCurrentSettings()
+                        }
+                    }, NATIVE_APP)
+                    sendCurrentSettings()
+                }
             }, { error ->
                 preferences?.edit()
                     ?.putBoolean("nova_vpn_proxy_supported", false)
