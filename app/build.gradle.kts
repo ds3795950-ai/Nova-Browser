@@ -22,13 +22,13 @@ android {
         minSdk = 29
         targetSdk = 36
         versionCode = 4
-        versionName = "0.4.0-performance"
+        versionName ="0.4.0-performance"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", "\"https://ycgubmykjhikjyfbgycp.supabase.co\"")
-        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTBZ2fV2A_XTM04aEP\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTRZ2fV2A_XTM04aEP\"")
     }
 
-    // Produce device-specific APKs instead of bundling every GeckoView native ABI in one file.
+    // Produce device-specific APK s instead of bundling every GeckoView native ABI in one file.
     splits {
         abi {
             isEnable = true
@@ -41,6 +41,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     signingConfigs {
@@ -70,13 +71,15 @@ configurations.configureEach {
     resolutionStrategy.force(
         "org.jetbrains.kotlin:kotlin-stdlib:2.3.20",
         "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.20",
-        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.20"
+        "org.jetbrains.kotlin-stdlib-jdk8:2.3.20"
     )
 }
 
 dependencies {
-    implementation(project(":firewall"))
+    implementation("com.wireguard.android:tunnel:1.0.20260102")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("androidx.activity:activity:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
     // GeckoView is the sole browser engine.
@@ -84,4 +87,3 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 }
-
