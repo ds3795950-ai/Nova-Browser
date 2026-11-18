@@ -12,7 +12,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
+import android.app.AlertDialog
 import androidx.lifecycle.lifecycleScope
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
