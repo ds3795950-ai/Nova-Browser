@@ -1489,13 +1489,50 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(12), dp(20), dp(12))
         }
         AlertDialog.Builder(this)
-            .setTitle("Protected DNS · AdGuard DNS")
+            .setTitle("Protected DNS · AdGuard DNS", "Psiphon VPN · external app")
             .setMessage("When enabled, Nova's GeckoView browser engine sends DNS lookups to AdGuard over DNS-over-HTTPS. Strict mode does not fall back to unencrypted DNS if the resolver is unavailable.\n\nThis protects DNS lookups made by Nova only. It is not a VPN, does not hide your IP address, and does not change DNS for other apps or Android itself.")
             .setView(check)
             .setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("protected_dns_enabled", check.isChecked).apply()
                 applyProtectedDns(check.isChecked)
                 toast(if (check.isChecked) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun openPsiphonVpn() {
+        val launchIntent = listOf("com.psiphon3", "com.psiphon3.subscription")
+            .firstNotNullOfOrNull { packageName -> packageManager.getLaunchIntentForPackage(packageName) }
+
+        if (launchIntent == null) {
+            AlertDialog.Builder(this)
+                .setTitle("Psiphon is not installed")
+                .setMessage("Nova uses the official Psiphon app for VPN connectivity; it does not bundle Psiphon or operate VPN servers. Install Psiphon from its official Google Play listing or download page.")
+                .setPositiveButton("Google Play") { _, _ ->
+                    val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.psiphon3"))
+                    runCatching { startActivity(market) }.onFailure {
+                        runCatching {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.psiphon3")))
+                        }.onFailure { toast("Could not open Google Play") }
+                    }
+                }
+                .setNeutralButton("Official download page") { _, _ ->
+                    runCatching {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://psiphon.ca/en/download.html")))
+                    }.onFailure { toast("Could not open Psiphon download page") }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Open Psiphon VPN")
+            .setMessage("Psiphon runs as a separate Android VPN app. When connected, its VPN may route traffic for the whole Android user/profile, not just Nova or the current tab. Android allows only one active VPN at a time, so disconnect Orbot or another VPN first. Nova cannot read Psiphon's connection state or guarantee a kill switch.")
+            .setPositiveButton("Open Psiphon") { _, _ ->
+                runCatching { startActivity(launchIntent) }
+                    .onFailure { toast("Could not open Psiphon") }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1735,6 +1772,7 @@ class MainActivity : ComponentActivity() {
                     .setPositiveButton("OK", null).show()
                 14 -> showCloudAccount()
                 15 -> showProtectedDnsSettings()
+                16 -> openPsiphonVpn()
             }
         }.show()
     }
