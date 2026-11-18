@@ -30,7 +30,7 @@ class NovaFirewallConfigTest {
     fun mergesExistingExclusions() {
         val withExisting = profile.replace("DNS = 1.1.1.1", "DNS = 1.1.1.1\nExcludedApplications = com.example.old")
         val result = NovaFirewallConfig.apply(withExisting, setOf("com.example.new"), 0)
-        assertTrue(result.contains("ExcludedApplications = com.example.old, com.example.new"))
+        assertTrue(result.contains("ExcludedApplications = com.example.new, com.example.old"))
         assertTrue(result.contains("DNS = 1.1.1.1"))
     }
 
