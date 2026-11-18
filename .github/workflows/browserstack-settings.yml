@@ -47,9 +47,12 @@ jobs:
           ROHANSAHA_NGXOSY: ${{ secrets.ROHANSAHA_NGXOSY }}
         run: |
           set -euo pipefail
+          # Accept either real newlines or the literal two-character \n separator.
           NORMALIZED_SECRET="${ROHANSAHA_NGXOSY//\\n/$'\n'}"
-          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
+          mapfile -t CREDENTIAL_LINES < <(printf '%s' "$NORMALIZED_SECRET" | tr -d '\r' | awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')
           if [ "${#CREDENTIAL_LINES[@]}" -eq 1 ]; then
+            # Mobile editors sometimes flatten a pasted line break. Accept a single
+            # whitespace- or punctuation-separated pair, without logging its contents.
             SINGLE_LINE="${CREDENTIAL_LINES[0]}"
             if [[ "$SINGLE_LINE" == *[[:space:]]* ]]; then
               read -r -a CREDENTIAL_LINES <<< "$SINGLE_LINE"
@@ -63,16 +66,17 @@ jobs:
             fi
           fi
           if [ "${#CREDENTIAL_LINES[@]}" -ne 2 ] || [ -z "${CREDENTIAL_LINES[0]}" ] || [ -z "${CREDENTIAL_LINES[1]}" ]; then
-            echo "Could not parse two BrowserStack credentials from the configured repository secret."
+            echo "Could not parse two non-empty BrowserStack credentials from the combined secret. Store username and access key on separate lines, or separate them with one space, colon, comma, semicolon, or pipe."
             exit 1
           fi
-          echo "::add-mask::${CREDENTIAL_LINES[0]}"
-          echo "::add-mask::${CREDENTIAL_LINES[1]}"
+          BROWSERSTACK_USERNAME="${CREDENTIAL_LINES[0]}"
+          BROWSERSTACK_ACCESS_KEY="${CREDENTIAL_LINES[1]}"
+          echo "::add-mask::$BROWSERSTACK_USERNAME"
+          echo "::add-mask::$BROWSERSTACK_ACCESS_KEY"
           {
-            printf 'BROWSERSTACK_USERNAME=%s\\n' "${CREDENTIAL_LINES[0]}"
-            printf 'BROWSERSTACK_ACCESS_KEY=%s\\n' "${CREDENTIAL_LINES[1]}"
+            printf 'BROWSERSTACK_USERNAME=%s\n' "$BROWSERSTACK_USERNAME"
+            printf 'BROWSERSTACK_ACCESS_KEY=%s\n' "$BROWSERSTACK_ACCESS_KEY"
           } >> "$GITHUB_ENV"
-          echo "BrowserStack credentials parsed successfully."
 
       - name: Build debug App Bundle
         run: gradle --no-daemon :app:bundleDebug
@@ -83,10 +87,11 @@ jobs:
           set -euo pipefail
           APP_FILE="app/build/outputs/bundle/debug/app-debug.aab"
           test -f "$APP_FILE"
-          curl --fail-with-body --silent --show-error \\
-            -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \\
-            -X POST "https://api-cloud.browserstack.com/app-automate/upload" \\
-            -F "file=@${APP_FILE}" -o browserstack-upload.json
+          curl --fail-with-body --silent --show-error \
+            -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+            -X POST "https://api-cloud.browserstack.com/app-automate/upload" \
+            -F "file=@${APP_FILE}" \
+            -o browserstack-upload.json
           APP_URL="$(jq -r '.app_url // empty' browserstack-upload.json)"
           if [ -z "$APP_URL" ]; then cat browserstack-upload.json; exit 1; fi
           echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
