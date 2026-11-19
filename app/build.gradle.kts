@@ -18,8 +18,11 @@ val releaseSigningReady = !releaseStorePath.isNullOrBlank() && file(releaseStore
 
 android {
     namespace = "com.nova.browser"
-    compileSdk = 37
-    compileSdkExtension = 1
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         applicationId = "com.nova.browser"
