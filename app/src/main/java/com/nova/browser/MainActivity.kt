@@ -794,8 +794,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enforceSessionBudget() {
-        val keep = tabs.sortedByDescending { if (it === currentTab()) Long.MAX_VALUE else it.lastAccess }
-            .take(4).toSet()
+        val keep = TabSessionRetentionPolicy.retainedTabIds(
+            tabLastAccess = tabs.map { it.id to it.lastAccess },
+            activeTabId = currentTab()?.id,
+            splitTabId = splitTabId
+        )
         tabs.forEach { tab ->
             if (tab !in keep && (tab.session != null || tab.cefriumEngine != null) && tab.id != splitTabId) {
                 tab.session?.setActive(false)
