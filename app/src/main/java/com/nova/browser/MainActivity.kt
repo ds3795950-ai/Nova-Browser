@@ -27,6 +27,14 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import com.cefrium.CefriumProfile
+import com.nova.browser.engine.BrowserEngineMode
+import com.nova.browser.engine.BrowserEngineType
+import com.nova.browser.engine.BrowserEngineProfilePolicy
+import com.nova.browser.engine.BrowserEnginePreferenceStore
+import com.nova.browser.engine.CefriumBrowserEngine
+import com.nova.browser.engine.BrowserProfileKind
 import android.widget.GridLayout
 import android.widget.ScrollView
 import org.json.JSONArray
@@ -93,6 +101,8 @@ class MainActivity : ComponentActivity() {
     private var activeIndex = 0
     private var searchEngine = "Google"
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
+    private val enginePreferences by lazy { BrowserEnginePreferenceStore(prefs) }
+    private var activePrimaryEngineView: View? = null
 
     private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
@@ -112,7 +122,9 @@ class MainActivity : ComponentActivity() {
         var desktopSite: Boolean = false,
         var readerOriginalUrl: String? = null,
         var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
-        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList()
+        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList(),
+        var engineType: BrowserEngineType = BrowserEngineType.GECKOVIEW,
+        var cefriumEngine: CefriumBrowserEngine? = null
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,7 +137,7 @@ class MainActivity : ComponentActivity() {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
                 if (tab?.lastUrl == HOME_URL) finish()
-                else if (tab?.canGoBack == true) tab.session?.goBack()
+                else if (tab?.canGoBack == true) { if (tab.engineType == BrowserEngineType.CEFRIUM) tab.cefriumEngine?.goBack() else tab.session?.goBack() }
                 else finish()
             }
         })
@@ -450,19 +462,87 @@ class MainActivity : ComponentActivity() {
         }
         currentTab()?.session?.setActive(false)
         currentTab()?.session?.setFocused(false)
+        currentTab()?.cefriumEngine?.setActive(false, false)
         val tab = BrowserTab(null, isPrivate, isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
+        tab.engineType = resolveEngineForTab(tab)
         tabs.add(tab)
         activeIndex = tabs.lastIndex
-        val session = ensureSession(tab)
-        browserView.setSession(session)
-        session.setActive(true)
-        session.setFocused(true)
+        activateTab(tab)
         tab.lastAccess = System.nanoTime()
         addressBar.setText(url)
         tabLabel.text = when { isGuest -> "Guest tab · temporary"; isPrivate -> "Private tab · ${tabs.size} total"; else -> "Tab ${tabs.size}" }
         if (!isPrivate && !isGuest) persistTabs()
         if (url == HOME_URL) showHomeScreen() else navigate(url)
         enforceSessionBudget()
+    }
+
+    private fun resolveEngineForTab(tab: BrowserTab): BrowserEngineType {
+        // Private and Guest tabs stay on GeckoView until Cefrium can provide separate,
+        // independently erasable ephemeral profiles for each Nova privacy context.
+        if (tab.isPrivate || tab.isGuest) return BrowserEngineType.GECKOVIEW
+        return enginePreferences.resolve(
+            tab.lastUrl,
+            BrowserProfileKind.NORMAL,
+            cefriumAvailable = true,
+            cefriumCompatible = (tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")) &&
+                !prefs.getBoolean("protected_dns_enabled", false) &&
+                NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) == ShieldMode.OFF &&
+                !runCatching { passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) } }.getOrDefault(false)
+        ).engine
+    }
+
+    private fun ensureCefriumEngine(tab: BrowserTab): CefriumBrowserEngine {
+        tab.cefriumEngine?.let { return it }
+        check(!tab.isPrivate && !tab.isGuest) { "Cefrium is not enabled for private profiles yet" }
+        val profile = CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
+        val engine = CefriumBrowserEngine(this, profile) { state ->
+            runOnUiThread {
+                val previousUrl = tab.lastUrl
+                state.url?.takeIf { it.isNotBlank() }?.let { tab.lastUrl = it }
+                state.title?.takeIf { it.isNotBlank() }?.let { tab.title = it }
+                tab.canGoBack = state.canGoBack
+                tab.canGoForward = state.canGoForward
+                if (currentTab() === tab) {
+                    state.url?.takeIf { it.isNotBlank() }?.let { addressBar.setText(it) }
+                    state.title?.takeIf { it.isNotBlank() }?.let { tabLabel.text = it.take(32) }
+                    pageStatus.text = if (state.isLoading) "Loading · Cefrium" else "Cefrium · ${state.progress}%"
+                }
+                if (state.url != null && state.url != previousUrl && !tab.isPrivate && !tab.isGuest && !state.url.startsWith("about:")) {
+                    addHistory(state.url)
+                    persistTabs()
+                }
+            }
+        }
+        tab.cefriumEngine = engine
+        if (tab.needsReload && tab.lastUrl != HOME_URL && tab.lastUrl.startsWith("http")) {
+            engine.loadUrl(tab.lastUrl)
+            tab.needsReload = false
+        }
+        return engine
+    }
+
+    private fun showPrimaryEngineView(view: View) {
+        val previous = activePrimaryEngineView
+        if (previous != null && previous !== view) (previous.parent as? ViewGroup)?.removeView(previous)
+        if (view.parent != null && view.parent !== browserPane) (view.parent as? ViewGroup)?.removeView(view)
+        if (view.parent === browserPane) browserPane.removeView(view)
+        if (browserView.parent === browserPane) browserPane.removeView(browserView)
+        browserPane.addView(view, 0, LinearLayout.LayoutParams(-1, 0, 1f))
+        activePrimaryEngineView = view
+    }
+
+    private fun activateTab(tab: BrowserTab) {
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            val engine = ensureCefriumEngine(tab)
+            showPrimaryEngineView(engine.view)
+            engine.setActive(true, true)
+        } else {
+            showPrimaryEngineView(browserView)
+            val session = ensureSession(tab)
+            browserView.setSession(session)
+            session.setActive(true)
+            session.setFocused(true)
+        }
     }
 
     private fun createGuestTab() {
@@ -625,11 +705,14 @@ class MainActivity : ComponentActivity() {
         val keep = tabs.sortedByDescending { if (it === currentTab()) Long.MAX_VALUE else it.lastAccess }
             .take(4).toSet()
         tabs.forEach { tab ->
-            if (tab !in keep && tab.session != null && tab.id != splitTabId) {
+            if (tab !in keep && (tab.session != null || tab.cefriumEngine != null) && tab.id != splitTabId) {
                 tab.session?.setActive(false)
                 tab.session?.setFocused(false)
                 tab.session?.close()
                 tab.session = null
+                tab.cefriumEngine?.setActive(false, false)
+                tab.cefriumEngine?.close()
+                tab.cefriumEngine = null
                 tab.needsReload = true
             }
         }
@@ -658,14 +741,12 @@ class MainActivity : ComponentActivity() {
         }
         currentTab()?.session?.setActive(false)
         currentTab()?.session?.setFocused(false)
+        currentTab()?.cefriumEngine?.setActive(false, false)
         activeIndex = index
         val tab = tabs[index]
         tab.lastAccess = System.nanoTime()
         if (splitTabId == tab.id) exitSplitScreen()
-        val session = ensureSession(tab)
-        browserView.setSession(session)
-        session.setActive(true)
-        session.setFocused(true)
+        activateTab(tab)
         addressBar.setText(tab.lastUrl)
         tabLabel.text = (when { tab.isGuest -> "Guest tab"; tab.isPrivate -> "Private tab"; else -> "Tab" }) + " · ${index + 1}/${tabs.size}"
         pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Normal session · ${tab.group}" }
@@ -676,7 +757,7 @@ class MainActivity : ComponentActivity() {
 
     private fun chooseSplitTab() {
         if (denyGuestAccess("Split screen")) return
-        val candidates = tabs.filter { !it.isPrivate && !it.isGuest && it !== currentTab() }
+        val candidates = tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.GECKOVIEW && it !== currentTab() }
         if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
         AlertDialog.Builder(this).setTitle("Open second pane")
             .setItems(candidates.map { it.title.ifBlank { it.lastUrl } }.toTypedArray()) { _, which ->
@@ -733,7 +814,8 @@ class MainActivity : ComponentActivity() {
         addressBar.setText(target)
         pageStatus.text = when { tab.isGuest -> "Guest Mode · history disabled"; tab.isPrivate -> "Private browsing · history disabled"; else -> "Loading…" }
         try {
-            ensureSession(tab).loadUri(target)
+            if (tab.engineType == BrowserEngineType.CEFRIUM) ensureCefriumEngine(tab).loadUrl(target)
+            else ensureSession(tab).loadUri(target)
             if (!tab.isPrivate && !tab.isGuest) addHistory(target)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
@@ -743,15 +825,15 @@ class MainActivity : ComponentActivity() {
 
     private fun goBack() {
         val tab = currentTab() ?: return
-        if (tab.canGoBack) tab.session?.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
+        if (tab.canGoBack) { if (tab.engineType == BrowserEngineType.CEFRIUM) tab.cefriumEngine?.goBack() else tab.session?.goBack() } else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
     }
 
     private fun goForward() {
         val tab = currentTab() ?: return
-        if (tab.canGoForward) tab.session?.goForward() else toast("No next page")
+        if (tab.canGoForward) { if (tab.engineType == BrowserEngineType.CEFRIUM) tab.cefriumEngine?.goForward() else tab.session?.goForward() } else toast("No next page")
     }
 
-    private fun reloadPage() { currentTab()?.let { ensureSession(it).reload() } }
+    private fun reloadPage() { currentTab()?.let { if (it.engineType == BrowserEngineType.CEFRIUM) it.cefriumEngine?.reload() else ensureSession(it).reload() } }
 
     private fun showTabs() {
         if (tabs.isEmpty()) return
@@ -847,6 +929,7 @@ class MainActivity : ComponentActivity() {
         val removed = tabs.removeAt(index)
         if (removed.id == splitTabId) exitSplitScreen()
         removed.session?.close()
+        removed.cefriumEngine?.close()
         cleanupGuestContextIfIdle()
         if (removed.isGuest && wasGuestActive && tabs.none { it.isGuest }) {
             createGuestTab()
@@ -885,7 +968,7 @@ class MainActivity : ComponentActivity() {
         val saved = JSONArray()
         tabs.filter { !it.isPrivate && !it.isGuest }.forEach { tab ->
             saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title)
-                .put("readerOriginalUrl", tab.readerOriginalUrl ?: ""))
+                .put("readerOriginalUrl", tab.readerOriginalUrl ?: "").put("engine", tab.engineType.name))
         }
         val normalTabs = tabs.filter { !it.isPrivate && !it.isGuest }
         val active = currentTab()
@@ -913,7 +996,9 @@ class MainActivity : ComponentActivity() {
                     lastUrl = url,
                     group = item.optString("group", "Ungrouped"),
                     title = item.optString("title", "New tab"),
+                    engineType = runCatching { BrowserEngineType.valueOf(item.optString("engine", "GECKOVIEW")) }.getOrDefault(BrowserEngineType.GECKOVIEW),
                     desktopSite = isDesktopUrl(url),
+                    needsReload = true,
                     readerOriginalUrl = item.optString("readerOriginalUrl")
                         .takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 )
@@ -1290,6 +1375,17 @@ class MainActivity : ComponentActivity() {
         val url = tab.lastUrl
         if (!url.startsWith("http")) { toast("Open an article first"); return }
         tab.readerOriginalUrl = url
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            tab.cefriumEngine?.setActive(false, false)
+            tab.cefriumEngine?.close()
+            tab.cefriumEngine = null
+            tab.engineType = BrowserEngineType.GECKOVIEW
+            showPrimaryEngineView(browserView)
+            val session = ensureSession(tab)
+            browserView.setSession(session)
+            session.setActive(true)
+            session.setFocused(true)
+        }
         val readerUrl = "about:reader?url=${Uri.encode(url)}"
         tab.lastUrl = readerUrl
         addressBar.setText(readerUrl)
@@ -1350,6 +1446,12 @@ class MainActivity : ComponentActivity() {
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
         val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
         if (desired != tab.desktopSite) {
+            if (tab.engineType == BrowserEngineType.CEFRIUM) {
+                tab.cefriumEngine?.setActive(false, false)
+                tab.cefriumEngine?.close()
+                tab.cefriumEngine = null
+                tab.engineType = BrowserEngineType.GECKOVIEW
+            }
             tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
             tab.session = null
             tab.desktopSite = desired
@@ -1379,6 +1481,7 @@ class MainActivity : ComponentActivity() {
             val removed = tabs.removeAt(index)
             if (removed.id == splitTabId) exitSplitScreen()
             removed.session?.close()
+            removed.cefriumEngine?.close()
         }
         activeIndex = tabs.indexOfFirst { it.id == activeIdBeforeClose }.takeIf { it >= 0 } ?: (activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0))
         cleanupGuestContextIfIdle()
@@ -1694,6 +1797,21 @@ class MainActivity : ComponentActivity() {
         startActivityForResult(intent, historyExportRequestCode)
     }
 
+    private fun showBrowserEngineSettings() {
+        val modes = arrayOf("Automatic · Cefrium preferred", "Cefrium · Chromium", "GeckoView · Firefox")
+        val values = BrowserEngineMode.values()
+        val selected = values.indexOf(enginePreferences.normalMode()).coerceAtLeast(0)
+        AlertDialog.Builder(this).setTitle("Browser engine")
+            .setMessage("This setting applies to new Normal tabs. Existing tabs keep their current engine. Private and Guest tabs remain on GeckoView until isolated Cefrium privacy profiles are implemented. Nova Shield, Protected DNS and saved-login sites currently require GeckoView, so Automatic falls back there. Website sign-in data is not migrated when switching engines.")
+            .setSingleChoiceItems(modes, selected) { dialog, which ->
+                val mode = values[which]
+                enginePreferences.setNormalMode(mode)
+                dialog.dismiss()
+                toast("${modes[which].substringBefore(" · ")} selected for new Normal tabs")
+            }
+            .setNegativeButton("Close", null).show()
+    }
+
     private fun showSettings() {
         if (currentTab()?.isGuest == true) {
             AlertDialog.Builder(this).setTitle("Guest Mode settings")
@@ -1705,8 +1823,13 @@ class MainActivity : ComponentActivity() {
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
         val items = mutableListOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "VPN & Firewall · 1VPN")
+        val enginePreferenceIndex = items.size.also { items.add("Browser engine · ${enginePreferences.normalMode().name.lowercase().replaceFirstChar { it.uppercase() }}") }
         val engineProbeIndex = if (BuildConfig.DEBUG) items.size.also { items.add("Developer · Cefrium engine test") } else -1
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items.toTypedArray()) { _, which ->
+            if (which == enginePreferenceIndex) {
+                showBrowserEngineSettings()
+                return@setItems
+            }
             if (which == engineProbeIndex) {
                 startActivity(Intent().setClassName(packageName, "com.nova.browser.CefriumEngineProbeActivity"))
                 return@setItems
@@ -1726,6 +1849,7 @@ class MainActivity : ComponentActivity() {
                         val removed = tabs.removeAt(index)
                         if (removed.id == splitTabId) exitSplitScreen()
                         removed.session?.close()
+                        removed.cefriumEngine?.close()
                     }
                     cleanupGuestContextIfIdle()
                     if (tabs.isEmpty()) createTab(false, HOME_URL) else {
@@ -1883,7 +2007,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         persistTabs()
+        tabs.forEach { it.cefriumEngine?.onHostPause() }
         super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        tabs.forEach { it.cefriumEngine?.onHostResume() }
     }
 
     @Deprecated("Activity result API retained for compatibility with the current minimal app module")
