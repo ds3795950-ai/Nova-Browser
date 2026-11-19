@@ -9,5 +9,6 @@ object NovaVpnLocations {
         NovaVpnLocation("ams", "Amsterdam", "Netherlands", true),
         NovaVpnLocation("lax", "Los Angeles", "United States", true)
     )
+    val free: List<NovaVpnLocation> get() = all.filter { it.free }
     fun find(id: String?): NovaVpnLocation? = all.firstOrNull { it.id == id }
 }
