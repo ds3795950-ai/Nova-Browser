@@ -231,7 +231,10 @@ class MainActivity : ComponentActivity() {
         controls.addView(actionButton("Tabs") { showTabs() })
         controls.addView(actionButton("Split") { chooseSplitTab() })
         controls.addView(actionButton("Private") {
-            if (currentTab()?.isGuest == true) toast("Private tabs are unavailable in Guest Mode") else createTab(true, HOME_URL)
+            if (currentTab()?.isGuest == true) {
+                pageStatus.text = "Guest Mode · temporary data"
+                toast("Private tabs are unavailable in Guest Mode")
+            } else createTab(true, HOME_URL)
         })
         controls.addView(actionButton("Guest") { createGuestTab() })
         top.addView(toolbarScroll(controls), LinearLayout.LayoutParams(-1, dp(48)))
@@ -642,6 +645,7 @@ class MainActivity : ComponentActivity() {
 
     private fun denyGuestAccess(feature: String): Boolean {
         if (currentTab()?.isGuest != true) return false
+        pageStatus.text = "Guest Mode · temporary data"
         toast("$feature is unavailable in Guest Mode")
         return true
     }
