@@ -62,9 +62,9 @@ class CefriumEngineProbeActivity : ComponentActivity() {
 
         try {
             val isolatedProbeProfile = CefriumProfile.get("nova-engine-probe")
-            val created = CefriumBrowserEngine(this, isolatedProbeProfile) { state ->
+            val created = CefriumBrowserEngine(this, isolatedProbeProfile, listener = { state ->
                 runOnUiThread { renderState(state) }
-            }
+            })
             engine = created
             browserHost.addView(created.view, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
