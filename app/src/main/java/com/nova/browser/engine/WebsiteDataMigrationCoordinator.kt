@@ -1,5 +1,7 @@
 package com.nova.browser.engine
 
+import java.net.URI
+
 /** Exportable website state. Engine adapters must omit non-portable/device-bound material. */
 data class WebsiteDataSnapshot(
     val cookies: List<PortableCookie> = emptyList(),
@@ -41,6 +43,10 @@ data class WebsiteMigrationResult(
  * Conservative, user-consented, best-effort migration. The coordinator never clears the
  * source profile. Service workers, Cache Storage, sessionStorage, passkeys and device-bound
  * credentials are not represented as portable data and must be recreated or reauthenticated.
+ *
+ * [origin] must be an origin, not an arbitrary URL. Restricting it here prevents adapters
+ * from accidentally exporting or importing data for a path, another authority, or a URL
+ * carrying user-info/query/fragment components.
  */
 class WebsiteDataMigrationCoordinator {
     fun migrate(
@@ -53,7 +59,7 @@ class WebsiteDataMigrationCoordinator {
     ): WebsiteMigrationResult {
         if (!userConsented) return WebsiteMigrationResult(WebsiteMigrationStatus.SKIPPED_NO_CONSENT)
         if (sourceEngine == destinationEngine) return WebsiteMigrationResult(WebsiteMigrationStatus.SAME_ENGINE)
-        if (!origin.startsWith("https://") && !origin.startsWith("http://")) {
+        if (!isExactWebOrigin(origin)) {
             return WebsiteMigrationResult(WebsiteMigrationStatus.FAILED_SOURCE_RETAINED)
         }
         return runCatching {
@@ -70,5 +76,15 @@ class WebsiteDataMigrationCoordinator {
         }.getOrElse {
             WebsiteMigrationResult(WebsiteMigrationStatus.FAILED_SOURCE_RETAINED)
         }
+    }
+
+    private fun isExactWebOrigin(value: String): Boolean {
+        if (value.isBlank() || value != value.trim() || value.any(Char::isWhitespace)) return false
+        val uri = runCatching { URI(value) }.getOrNull() ?: return false
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        if (uri.host.isNullOrBlank() || uri.rawUserInfo != null) return false
+        if (uri.rawQuery != null || uri.rawFragment != null) return false
+        return uri.rawPath.isNullOrEmpty() || uri.rawPath == "/"
     }
 }
