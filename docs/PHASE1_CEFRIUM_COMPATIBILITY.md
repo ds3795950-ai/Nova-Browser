@@ -24,11 +24,17 @@ If Nova Shield or saved-password autofill is required, Cefrium is considered inc
 
 Cefrium component updates are disabled because the SDK uses a separate network context for those requests.
 
-## 1VPN integration blocker
+## 1VPN Cefrium adapter
 
-The existing 1VPN implementation is a GeckoView WebExtension. It performs proxy selection and authentication internally. Cefrium exposes a fixed profile proxy and a proxy-auth callback, but Nova does not yet have a supported way to provide the extension's authenticated proxy credentials to that callback.
+The bundled 1VPN WebExtension remains the source of truth for proxy hosts and authentication. Its own `onAuthRequired` callback now forwards the resolved credentials and challenged proxy host to Nova's native bridge. A short-lived hidden Gecko session initiates one ordinary request to trigger that existing authentication path; it is closed after credentials arrive or the handshake times out. Nova does not embed or persist the proxy password.
 
-Do not embed copied shared credentials, use an unauthenticated proxy as a substitute, or report Cefrium as VPN-connected until a supported credential hand-off or approved provider API is implemented. A completed adapter must fail closed, restrict non-proxied WebRTC, and pass DNS/IP leak tests.
+Cefrium applies the returned HTTPS proxy to its Normal and Private profiles, answers only matching proxy-auth challenges, disables non-proxied WebRTC UDP, and uses a fixed proxy with no direct fallback. If the credential bridge is unavailable, Cefrium is assigned a fail-closed local proxy target and the UI reports that traffic is blocked. Guest remains GeckoView and continues using the original extension route.
+
+The VPN settings screen currently exposes the free 1VPN locations (Singapore, Amsterdam and Los Angeles). Premium credentials can be relayed if the existing extension has an authenticated session; the app does not create or store a separate 1VPN account.
+
+## Remaining VPN verification
+
+The build-time patch intentionally checks the upstream extension's auth callback shape. If 1VPN changes that callback, the build stops rather than silently shipping a broken or unauthenticated adapter. On-device tests must still verify a successful proxy handshake, location switching, proxy failure, WebRTC leak blocking, DNS behavior while proxied, and disabling the proxy.
 
 ## Acceptance checks still required
 
@@ -38,4 +44,4 @@ Do not embed copied shared credentials, use an unauthenticated proxy as a substi
 - Verify Reader Mode on article pages, script-heavy pages, and pages without semantic article markup.
 - Verify Private storage is separate from Normal and clears after the final Private browser closes.
 - Verify Guest remains GeckoView and its storage lifecycle is unchanged.
-- Complete Cefrium 1VPN integration and test proxy authentication, fail-closed behavior, WebRTC and DNS/IP leaks before declaring Phase 1 complete.
+- Complete real-device acceptance for the Cefrium 1VPN adapter: proxy authentication, fail-closed behavior, WebRTC and DNS/IP leak checks.

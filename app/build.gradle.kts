@@ -157,9 +157,17 @@ val prepare1VpnAssets by tasks.registering {
             "Upstream 1VPN proxy-auth handler changed; review before bundling."
         }
         val authEndExclusive = authEndIndex + authEnd.length
-        val authStatement = background.substring(authStartIndex, authEndExclusive)
+        var authStatement = background.substring(authStartIndex, authEndExclusive)
+        val credentialResolve = Regex("resolve\\(\\{\\s*authCredentials\\s*:\\s*([^}]+)\\}\\)")
+        check(credentialResolve.containsMatchIn(authStatement)) {
+            "Upstream 1VPN credential callback changed; review before forwarding credentials to Cefrium."
+        }
+        authStatement = credentialResolve.replace(authStatement) { match ->
+            val credentialExpression = match.groupValues[1].trim()
+            "if(globalThis.__novaPublishProxyCredentials){globalThis.__novaPublishProxyCredentials(" + credentialExpression + ",details.challenger)};" + match.value
+        }
         background = background.replace(
-            authStatement,
+            background.substring(authStartIndex, authEndExclusive),
             "try{" + authStatement + ";globalThis.__novaAuthReady=true}catch(e){globalThis.__novaAuthReady=false;console.error(e)}"
         )
 
@@ -174,6 +182,19 @@ val prepare1VpnAssets by tasks.registering {
             ;(function() {
               var nativePort = null;
               var webRtcProtected = false;
+              globalThis.__novaPublishProxyCredentials = function(credentials, challenger) {
+                try {
+                  if (nativePort && credentials && credentials.username && credentials.password && challenger && challenger.host) {
+                    nativePort.postMessage({
+                      type: "proxyCredentials",
+                      host: challenger.host,
+                      port: challenger.port || 443,
+                      username: credentials.username,
+                      password: credentials.password
+                    });
+                  }
+                } catch (_) {}
+              };
               function supported() {
                 return globalThis.__novaProxyReady === true && globalThis.__novaAuthReady === true;
               }

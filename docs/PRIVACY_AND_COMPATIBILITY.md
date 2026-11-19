@@ -20,7 +20,7 @@ Nova exposes its Orbot handoff only from Guest Mode settings. The Tor launcher c
 
 Nova's current 1VPN feature is a browser proxy, not an Android VpnService and not a full-device VPN. It is currently provided through GeckoView's bundled WebExtension. A connected extension status does not imply that every Android app or every Cefrium request is routed through that proxy.
 
-Cefrium's SDK exposes profile-level fixed proxy configuration and proxy-auth callbacks, but the current Nova build does not yet provide the required 1VPN credential hand-off to that callback. Cefrium VPN remains pending; Nova must not show it as connected or silently send traffic directly when a future proxy is enabled. A completed integration must also restrict non-proxied WebRTC traffic and test proxy failure, DNS and IP leakage.
+Cefrium uses its profile-level fixed HTTPS proxy and proxy-auth callback. The bundled 1VPN extension remains the credential source: its own auth callback relays the challenged proxy host and resolved credentials to Nova in memory. Cefrium restricts non-proxied WebRTC UDP and fixed-proxy requests have no direct fallback. If the bridge cannot provide credentials, the Cefrium profile remains on a local fail-closed proxy target. Runtime proxy, DNS and IP-leak acceptance still needs real-device verification.
 
 ## Extensions
 
@@ -41,5 +41,5 @@ Cloud sync is end-to-end encrypted with a passphrase that is not uploaded. Each 
 - Reader Mode extracts and sanitizes article content before displaying it in a simplified Cefrium reading page. Source scripts and event handlers are removed.
 - Nova Shield and saved-password autofill remain GeckoView-only. When either is required, engine selection conservatively falls back to GeckoView.
 - Cefrium component updates are disabled because the SDK documents that they do not use a profile proxy.
-- 1VPN is still GeckoView-only. Its current WebExtension owns the authenticated proxy flow; the native credential hand-off required by Cefrium has not been implemented. No Cefrium VPN connection is claimed.
+- 1VPN now has a Cefrium adapter: the GeckoView extension provides the authenticated proxy credentials through a native bridge, while Cefrium applies its own fixed profile proxy and WebRTC policy. Runtime connectivity and leak tests are still pending.
 

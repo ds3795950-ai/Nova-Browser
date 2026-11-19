@@ -18,6 +18,7 @@ import com.cefrium.CefriumDownloadClient
 import com.cefrium.CefriumChromeClient
 import com.cefrium.CefriumPermissionRequest
 import com.cefrium.CefriumProfile
+import com.cefrium.CefriumNavigationClient
 import com.nova.browser.DownloadProtocol
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -35,7 +36,7 @@ data class CefriumDownloadInfo(
 /** Cefrium implementation of the shared per-tab engine contract. */
 class CefriumBrowserEngine(
     activity: Activity,
-    profile: CefriumProfile,
+    private val profile: CefriumProfile,
     private val listener: BrowserEngineListener? = null,
     private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {},
     private val onPermissionRequest: (origin: String, permissions: List<String>, respond: (Boolean) -> Unit) -> Unit = { _, _, respond -> respond(false) },
@@ -75,6 +76,25 @@ class CefriumBrowserEngine(
         }
         browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
         if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
+        CefriumVpnController.registerProfile(profile)
+        browser.setNavigationClient(object : CefriumNavigationClient {
+            override fun onHttpAuthRequest(
+                browser: CefriumBrowser,
+                host: String,
+                realm: String,
+                port: Int,
+                isProxy: Boolean,
+                callback: CefriumBrowser.HttpAuthCallback
+            ) {
+                CefriumVpnController.provideProxyCredentials(
+                    host = host,
+                    port = port,
+                    isProxy = isProxy,
+                    callback = { username, password -> callback.proceed(username, password) },
+                    cancel = { callback.cancel() }
+                )
+            }
+        })
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
             override fun onPermissionRequest(browser: CefriumBrowser, request: CefriumPermissionRequest) {
@@ -104,6 +124,11 @@ class CefriumBrowserEngine(
     override fun reload() {
         checkOpen()
         browser.reload()
+    }
+
+    fun refreshVpnSettings() {
+        checkOpen()
+        CefriumVpnController.registerProfile(profile)
     }
 
     fun setDesktopMode(enabled: Boolean) {
