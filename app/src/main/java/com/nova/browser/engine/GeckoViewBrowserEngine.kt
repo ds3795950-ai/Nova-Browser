@@ -47,7 +47,7 @@ class GeckoViewBrowserEngine(
             }
         })
         session.setContentDelegate(object : GeckoSession.ContentDelegate {
-            override fun onTitleChange(session: GeckoSession, title: String) {
+            override fun onTitleChange(session: GeckoSession, title: String?) {
                 publish(currentState.copy(title = title))
             }
         })
