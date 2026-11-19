@@ -161,13 +161,16 @@ val prepare1VpnAssets by tasks.registering {
         }
         val authEndExclusive = authEndIndex + authEnd.length
         var authStatement = background.substring(authStartIndex, authEndExclusive)
-        val credentialResolve = Regex("resolve\\(\\{\\s*authCredentials\\s*:\\s*([^}]+)\\}\\)")
-        check(credentialResolve.containsMatchIn(authStatement)) {
-            "Upstream 1VPN credential callback changed; review before forwarding credentials to Cefrium."
+        val credentialResolve = Regex("[A-Za-z_$][A-Za-z0-9_$]*\\(\\{\\s*authCredentials\\s*:\\s*([^}]+)\\}\\)")
+        val challengerVariable = Regex("([A-Za-z_$][A-Za-z0-9_$]*)\\.challenger\\.host").find(authStatement)?.groupValues?.get(1)
+        check(credentialResolve.containsMatchIn(authStatement) && challengerVariable != null) {
+            "Upstream 1VPN auth callback changed; cannot safely relay proxy credentials to Cefrium."
         }
         authStatement = credentialResolve.replace(authStatement) { match ->
             val credentialExpression = match.groupValues[1].trim()
-            "if(globalThis.__novaPublishProxyCredentials){globalThis.__novaPublishProxyCredentials(" + credentialExpression + ",details.challenger)};" + match.value
+            val callName = match.value.substringBefore("(")
+            "if(globalThis.__novaPublishProxyCredentials){globalThis.__novaPublishProxyCredentials(" + credentialExpression + "," + challengerVariable + ".challenger)};" +
+                callName + "({authCredentials:" + credentialExpression + "})"
         }
         background = background.replace(
             background.substring(authStartIndex, authEndExclusive),
