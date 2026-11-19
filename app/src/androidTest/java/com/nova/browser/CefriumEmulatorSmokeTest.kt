@@ -69,4 +69,42 @@ class CefriumEmulatorSmokeTest {
             scenario.onActivity { engine?.close() }
         }
     }
+    @Test fun cefriumReaderModeExtractsArticleFromLocalPage() {
+        val pageLoaded = CountDownLatch(1)
+        val readerFinished = CountDownLatch(1)
+        var readerSuccess = false
+        var readerTitle = ""
+        var engine: CefriumBrowserEngine? = null
+        val articleUrl = "file:///android_asset/nova_reader_smoke.html"
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                engine = CefriumBrowserEngine(
+                    activity = activity,
+                    profile = CefriumProfile.get("nova-reader-smoke"),
+                    listener = BrowserEngineListener { state ->
+                        if (!state.isLoading && state.url == articleUrl) pageLoaded.countDown()
+                    }
+                )
+                val contentRoot = activity.findViewById<FrameLayout>(android.R.id.content)
+                contentRoot.addView(
+                    engine!!.view,
+                    FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                )
+                engine!!.loadUrl(articleUrl)
+            }
+            assertTrue("Cefrium did not load the local article", pageLoaded.await(30, TimeUnit.SECONDS))
+            scenario.onActivity {
+                engine!!.loadReaderView(articleUrl) { success, title ->
+                    readerSuccess = success
+                    readerTitle = title
+                    readerFinished.countDown()
+                }
+            }
+            assertTrue("Cefrium Reader Mode did not finish extraction", readerFinished.await(15, TimeUnit.SECONDS))
+            assertTrue("Reader Mode should extract article content", readerSuccess)
+            assertEquals("Nova Reader Smoke", readerTitle)
+            scenario.onActivity { engine?.close() }
+        }
+    }
+
 }

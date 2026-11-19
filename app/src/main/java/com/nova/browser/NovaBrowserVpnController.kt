@@ -175,6 +175,7 @@ object NovaBrowserVpnController {
                 val session = GeckoSession()
                 credentialBootstrapSession = session
                 session.open(geckoRuntime)
+                session.setActive(true)
                 session.loadUri("https://example.com/")
                 val timeout = Runnable {
                     closeCredentialBootstrap()
