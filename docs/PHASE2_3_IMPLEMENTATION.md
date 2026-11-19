@@ -21,7 +21,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 ### Remaining production work
 - `MainActivity.BrowserTab` still retains a `GeckoSession?` for Gecko-specific delegates and features; the common interface is not yet the sole production tab owner.
 - Split-pane is still GeckoView-only. Re-home Gecko-specific prompts, permissions, extension APIs, translation, downloads, autofill and Shield behind engine capability adapters; preserve parity or clearly expose unsupported behavior.
-- Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Add secure password save/fill and download integration before removing the corresponding Gecko fallback.
+- Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Add secure password save/fill before removing the corresponding Gecko fallback. Cefrium downloads now publish completed files to Downloads/Nova and register them in Nova's persisted download list; pause/resume/cancel controls are not yet available for in-progress Cefrium transfers.
 - Add isolated, erasable Cefrium profiles for Private and Guest before enabling those modes on Cefrium.
 - Validate engine switching, lifecycle and crash recovery on Android devices; CI and device acceptance remain required.
 
@@ -35,7 +35,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 
 ### Remaining production work
 - No concrete GeckoView/Cefrium `WebsiteDataPort` adapters are wired. Cross-engine cookies, localStorage and IndexedDB are not yet migrated.
-- Integrate Cefrium downloads and permission prompts with Nova's app-level repositories; implement secure password save/fill in Cefrium before treating the vault as fully shared.
+- Integrate Cefrium permission prompts with Nova's app-level permission repository; implement secure password save/fill in Cefrium before treating the vault as fully shared.
 - Keep engine-native data distinct; do not claim service workers, Cache Storage, sessionStorage, passkeys or device-bound credentials are portable. Require re-fetch or reauthentication where needed.
 - Add related-domain affinity for authentication flows without broadly grouping unrelated origins.
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
