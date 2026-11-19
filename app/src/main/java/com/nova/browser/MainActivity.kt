@@ -29,6 +29,8 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import com.cefrium.CefriumProfile
+import com.cefrium.Cefrium
+import com.cefrium.CefriumSecureDnsMode
 import com.nova.browser.engine.BrowserEngineMode
 import com.nova.browser.engine.BrowserEngineType
 import com.nova.browser.engine.BrowserEngineProfilePolicy
@@ -132,6 +134,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Cefrium component updates use a separate system network context, not a profile proxy.
+        // Nova ships a pinned engine, so disable those out-of-profile background requests.
+        Cefrium.setComponentUpdatesEnabled(false)
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationPermissionRequestPending = false
             if (!granted) toast("Downloads still work, but Android may hide their notifications until permission is enabled")
@@ -486,25 +491,31 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resolveEngineForTab(tab: BrowserTab): BrowserEngineType {
-        // Private and Guest tabs stay on GeckoView until Cefrium can provide separate,
-        // independently erasable ephemeral profiles for each Nova privacy context.
-        if (tab.isPrivate || tab.isGuest) return BrowserEngineType.GECKOVIEW
+        // Guest is intentionally GeckoView-only. Private uses Cefrium's isolated in-memory
+        // incognito profile whenever the page does not require a Gecko-only feature.
+        if (tab.isGuest) return BrowserEngineType.GECKOVIEW
+        val profileKind = if (tab.isPrivate) BrowserProfileKind.PRIVATE else BrowserProfileKind.NORMAL
+        val webUrl = tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")
+        val hasSavedLogin = runCatching {
+            passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) }
+        }.getOrDefault(false)
         return enginePreferences.resolve(
             tab.lastUrl,
-            BrowserProfileKind.NORMAL,
+            profileKind,
             cefriumAvailable = true,
-            cefriumCompatible = (tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")) &&
-                !prefs.getBoolean("protected_dns_enabled", false) &&
+            cefriumCompatible = webUrl &&
                 NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) == ShieldMode.OFF &&
-                !tab.desktopSite && tab.readerOriginalUrl == null &&
-                !runCatching { passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) } }.getOrDefault(false)
+                !hasSavedLogin
         ).engine
     }
 
     private fun ensureCefriumEngine(tab: BrowserTab): CefriumBrowserEngine {
         tab.cefriumEngine?.let { return it }
-        check(!tab.isPrivate && !tab.isGuest) { "Cefrium is not enabled for private profiles yet" }
-        val profile = CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
+        check(!tab.isGuest) { "Guest tabs must remain on GeckoView" }
+        val profile = if (BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(
+                if (tab.isPrivate) BrowserProfileKind.PRIVATE else BrowserProfileKind.NORMAL
+            )
+        ) CefriumProfile.incognito() else CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
         val engine = CefriumBrowserEngine(
             activity = this,
             profile = profile,
@@ -541,7 +552,8 @@ class MainActivity : ComponentActivity() {
             },
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread { showCefriumPermissionPrompt(origin, permissions, respond) }
-            }
+            },
+            desktopMode = tab.desktopSite
         )
         tab.cefriumEngine = engine
         if (tab.needsReload && tab.lastUrl != HOME_URL && tab.lastUrl.startsWith("http")) {
@@ -898,6 +910,7 @@ class MainActivity : ComponentActivity() {
     private fun navigate(input: String) {
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         val tab = currentTab() ?: return
+        if (tab.readerOriginalUrl != null) tab.readerOriginalUrl = null
         prepareDesktopModeForNavigation(tab, target)
         tab.lastUrl = target
         tab.title = Uri.parse(target).host ?: target.take(48)
@@ -1451,23 +1464,27 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleDesktopSite() {
         val tab = currentTab() ?: return
-        if (tab.isPrivate || tab.isGuest) { toast("Desktop preference is not saved in private or Guest Mode"); return }
+        if (tab.isGuest) { toast("Desktop mode is unavailable in Guest Mode"); return }
         val host = Uri.parse(tab.lastUrl).host ?: run { toast("Open a website first"); return }
-        val sites = desktopSites
-        tab.desktopSite = if (host in sites) { sites.remove(host); false } else { sites.add(host); true }
-        prefs.edit().putStringSet("desktop_sites", sites).apply()
-        if (tab.engineType == BrowserEngineType.CEFRIUM) {
-            tab.cefriumEngine?.setActive(false, false)
-            tab.cefriumEngine?.close()
-            tab.cefriumEngine = null
-            tab.engineType = BrowserEngineType.GECKOVIEW
-            showPrimaryEngineView(browserView)
+        tab.desktopSite = !tab.desktopSite
+        if (!tab.isPrivate) {
+            val sites = desktopSites
+            if (tab.desktopSite) sites.add(host) else sites.remove(host)
+            prefs.edit().putStringSet("desktop_sites", sites).apply()
         }
-        tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
-        tab.session = null; tab.needsReload = true
-        val session = ensureSession(tab)
-        browserView.setSession(session); session.setActive(true); session.setFocused(true)
-        session.loadUri(tab.lastUrl)
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            val engine = tab.cefriumEngine ?: ensureCefriumEngine(tab)
+            engine.setDesktopMode(tab.desktopSite)
+            engine.reload()
+        } else {
+            tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
+            tab.session = null
+            val session = ensureSession(tab)
+            browserView.setSession(session)
+            session.setActive(true)
+            session.setFocused(true)
+            session.loadUri(tab.lastUrl)
+        }
         toast(if (tab.desktopSite) "Desktop site enabled for $host" else "Mobile site restored for $host")
     }
 
@@ -1475,18 +1492,26 @@ class MainActivity : ComponentActivity() {
         val tab = currentTab() ?: return
         val url = tab.lastUrl
         if (!url.startsWith("http")) { toast("Open an article first"); return }
-        tab.readerOriginalUrl = url
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
-            tab.cefriumEngine?.setActive(false, false)
-            tab.cefriumEngine?.close()
-            tab.cefriumEngine = null
-            tab.engineType = BrowserEngineType.GECKOVIEW
-            showPrimaryEngineView(browserView)
-            val session = ensureSession(tab)
-            browserView.setSession(session)
-            session.setActive(true)
-            session.setFocused(true)
+            val engine = tab.cefriumEngine ?: ensureCefriumEngine(tab)
+            tab.readerOriginalUrl = url
+            engine.loadReaderView(url) { success, detail ->
+                if (!success) {
+                    tab.readerOriginalUrl = null
+                    toast(detail)
+                    return@loadReaderView
+                }
+                tab.title = detail
+                tab.lastUrl = url
+                addressBar.setText(url)
+                tabLabel.text = "Reader view"
+                pageStatus.text = "Reader view · Cefrium"
+                showBrowserPage()
+            }
+            return
         }
+
+        tab.readerOriginalUrl = url
         val readerUrl = "about:reader?url=${Uri.encode(url)}"
         tab.lastUrl = readerUrl
         addressBar.setText(readerUrl)
@@ -1546,26 +1571,26 @@ class MainActivity : ComponentActivity() {
 
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
         val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
-        if (desired != tab.desktopSite) {
-            if (tab.engineType == BrowserEngineType.CEFRIUM) {
-                tab.cefriumEngine?.setActive(false, false)
-                tab.cefriumEngine?.close()
-                tab.cefriumEngine = null
-                tab.engineType = BrowserEngineType.GECKOVIEW
-            }
-            tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
-            tab.session = null
-            tab.desktopSite = desired
-            tab.needsReload = false
-            val newSession = ensureSession(tab)
-            if (currentTab() === tab) {
-                showPrimaryEngineView(browserView)
-                browserView.setSession(newSession)
-            }
-            if (tab.id == splitTabId) {
-                secondaryBrowserView.setSession(newSession)
-                showSecondaryEngineView(secondaryBrowserView)
-            }
+        if (desired == tab.desktopSite) return
+        tab.desktopSite = desired
+
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            // Apply the UA before the target URL is loaded; do not fall back to GeckoView.
+            tab.cefriumEngine?.setDesktopMode(desired)
+            return
+        }
+
+        tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
+        tab.session = null
+        tab.needsReload = false
+        val newSession = ensureSession(tab)
+        if (currentTab() === tab) {
+            showPrimaryEngineView(browserView)
+            browserView.setSession(newSession)
+        }
+        if (tab.id == splitTabId) {
+            secondaryBrowserView.setSession(newSession)
+            showSecondaryEngineView(secondaryBrowserView)
         }
     }
 
@@ -1688,10 +1713,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyProtectedDns(enabled: Boolean) {
+        // Cefrium applies this setting to all of its browser profiles. SECURE mode has no
+        // system-DNS fallback when the configured resolver is unavailable.
+        runCatching {
+            Cefrium.setSecureDns(
+                if (enabled) CefriumSecureDnsMode.SECURE else CefriumSecureDnsMode.OFF,
+                if (enabled) ADGUARD_DOH_ENDPOINT else ""
+            )
+        }.onFailure { error ->
+            if (enabled) toast("Cefrium Protected DNS could not be applied: " + (error.localizedMessage ?: "unknown error"))
+        }
+
         if (!::runtime.isInitialized) return
         if (enabled) {
             runtime.settings.setTrustedRecursiveResolverUri(ADGUARD_DOH_ENDPOINT)
-            // ONLY mode intentionally has no system-DNS fallback if the encrypted resolver fails.
             runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_ONLY)
         } else {
             runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_OFF)
@@ -1707,13 +1742,12 @@ class MainActivity : ComponentActivity() {
         }
         AlertDialog.Builder(this)
             .setTitle("Protected DNS · AdGuard DNS")
-            .setMessage("When enabled, Nova's GeckoView browser engine sends DNS lookups to AdGuard over DNS-over-HTTPS. Strict mode does not fall back to unencrypted DNS if the resolver is unavailable.\n\nThis protects DNS lookups made by Nova only. It is not a VPN, does not hide your IP address, and does not change DNS for other apps or Android itself.")
+            .setMessage("When enabled, GeckoView and Cefrium use AdGuard DNS-over-HTTPS in strict mode for direct DNS lookups. If a browser proxy is active in Cefrium, the proxy resolves remote website hostnames instead. If AdGuard is unavailable, direct DNS lookups fail rather than falling back to unencrypted DNS.\n\nThis protects Nova browser DNS only. It is not a full-device VPN and does not change DNS for other Android apps.")
             .setView(check)
             .setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("protected_dns_enabled", check.isChecked).apply()
                 applyProtectedDns(check.isChecked)
-                if (check.isChecked) switchCurrentTabToGecko("Protected DNS")
-                toast(if (check.isChecked) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
+                toast(if (check.isChecked) "AdGuard encrypted DNS enabled for GeckoView and Cefrium" else "Protected DNS disabled")
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1934,8 +1968,8 @@ class MainActivity : ComponentActivity() {
 
     private fun switchCurrentTabEngine() {
         val tab = currentTab() ?: return
-        if (tab.isPrivate || tab.isGuest) {
-            toast("Manual engine switching is available only in Normal tabs")
+        if (tab.isGuest) {
+            toast("Guest Mode always uses GeckoView")
             return
         }
         if (tab.lastUrl == HOME_URL || !(tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://"))) {
@@ -1945,10 +1979,7 @@ class MainActivity : ComponentActivity() {
         val switchingToCefrium = tab.engineType != BrowserEngineType.CEFRIUM
         if (switchingToCefrium) {
             val reason = when {
-                prefs.getBoolean("protected_dns_enabled", false) -> "Protected DNS currently requires GeckoView"
                 NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) != ShieldMode.OFF -> "Nova Shield currently requires GeckoView"
-                tab.desktopSite -> "Desktop-site mode currently requires GeckoView"
-                tab.readerOriginalUrl != null -> "Reader view currently requires GeckoView"
                 runCatching { passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) } }.getOrDefault(false) -> "Saved-login autofill currently requires GeckoView"
                 else -> null
             }

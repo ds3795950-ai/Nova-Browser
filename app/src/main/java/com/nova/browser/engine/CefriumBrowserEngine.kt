@@ -10,6 +10,9 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.view.View
 import android.widget.Toast
+import android.webkit.ValueCallback
+import org.json.JSONObject
+import org.json.JSONTokener
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumDownloadClient
 import com.cefrium.CefriumChromeClient
@@ -35,7 +38,8 @@ class CefriumBrowserEngine(
     profile: CefriumProfile,
     private val listener: BrowserEngineListener? = null,
     private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {},
-    private val onPermissionRequest: (origin: String, permissions: List<String>, respond: (Boolean) -> Unit) -> Unit = { _, _, respond -> respond(false) }
+    private val onPermissionRequest: (origin: String, permissions: List<String>, respond: (Boolean) -> Unit) -> Unit = { _, _, respond -> respond(false) },
+    desktopMode: Boolean = false
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     private val browser = CefriumBrowser.createWithSurface(activity, profile)
@@ -69,6 +73,8 @@ class CefriumBrowserEngine(
                 error = null
             ))
         }
+        browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
+        if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
             override fun onPermissionRequest(browser: CefriumBrowser, request: CefriumPermissionRequest) {
@@ -100,6 +106,75 @@ class CefriumBrowserEngine(
         browser.reload()
     }
 
+    fun setDesktopMode(enabled: Boolean) {
+        checkOpen()
+        browser.setUserAgentOverride(if (enabled) DESKTOP_USER_AGENT else null)
+    }
+
+    fun loadReaderView(originalUrl: String, onResult: (Boolean, String) -> Unit) {
+        checkOpen()
+        val extractionScript = """
+            (() => {
+              const root = document.querySelector('article') ||
+                document.querySelector('[role="main"]') ||
+                document.querySelector('main') || document.body;
+              if (!root) return { title: document.title || 'Reader view', html: '' };
+              const clone = root.cloneNode(true);
+              clone.querySelectorAll('script,style,link,nav,header,footer,aside,form,button,input,select,textarea,iframe,object,embed,canvas,svg,noscript,[hidden],[aria-hidden="true"]').forEach(n => n.remove());
+              clone.querySelectorAll('*').forEach(el => {
+                Array.from(el.attributes).forEach(attr => {
+                  const name = attr.name.toLowerCase();
+                  const value = attr.value.trim();
+                  if (name.startsWith('on') || name === 'style' || name === 'srcdoc' || name === 'srcset') {
+                    el.removeAttribute(attr.name);
+                  } else if (name === 'href' || name === 'src') {
+                    try {
+                      const resolved = new URL(value, document.baseURI);
+                      if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') el.removeAttribute(attr.name);
+                    } catch (_) { el.removeAttribute(attr.name); }
+                  }
+                });
+              });
+              return { title: document.title || (clone.querySelector('h1')?.textContent || 'Reader view'), html: clone.innerHTML };
+            })()
+        """.trimIndent()
+
+        browser.evaluateJavaScript(extractionScript, ValueCallback { raw ->
+            try {
+                val decoded = JSONTokener(raw ?: "{}").nextValue()
+                val payload = if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+                val title = payload.optString("title").ifBlank { "Reader view" }
+                val content = payload.optString("html")
+                check(content.isNotBlank()) { "No readable article content was found" }
+                val safeBase = escapeHtml(originalUrl)
+                val html = buildString {
+                    append("<!doctype html><html><head><meta charset=\"utf-8\">")
+                    append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+                    append("<base href=\"").append(safeBase).append("\">")
+                    append("<title>").append(escapeHtml(title)).append("</title>")
+                    append("<style>")
+                    append(":root { color-scheme: light dark; }")
+                    append("body { max-width: 760px; margin: 0 auto; padding: 28px 20px 56px; font: 18px/1.75 system-ui, sans-serif; overflow-wrap: anywhere; }")
+                    append("h1,h2,h3 { line-height: 1.25; } img,video { max-width: 100%; height: auto; }")
+                    append("a { text-decoration: underline; } blockquote { margin-inline: 0; padding-left: 1em; border-left: 3px solid #888; }")
+                    append("</style></head><body><main>")
+                    append(content)
+                    append("</main></body></html>")
+                }
+                browser.loadHtmlWithBaseUrl(html, originalUrl)
+                onResult(true, title)
+            } catch (error: Exception) {
+                onResult(false, error.localizedMessage ?: "Could not extract this page")
+            }
+        })
+    }
+
+    private fun escapeHtml(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+
     override fun setActive(active: Boolean, focused: Boolean) {
         checkOpen()
         browser.setPageVisible(active)
@@ -127,6 +202,29 @@ class CefriumBrowserEngine(
 
     private fun checkOpen() {
         check(!closed && !browser.isClosed()) { "Cefrium browser engine is closed" }
+    }
+
+    private companion object {
+        const val DESKTOP_USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+
+        const val DESKTOP_VIEWPORT_SCRIPT = """
+            (() => {
+              if (window.top !== window || /Android|Mobile|iPhone|iPad/i.test(navigator.userAgent)) return;
+              const apply = () => {
+                document.querySelectorAll('meta[name="viewport"]').forEach(node => node.remove());
+                if (document.head && !document.querySelector('meta[name="viewport"][data-nova-desktop]')) {
+                  const meta = document.createElement('meta');
+                  meta.name = 'viewport';
+                  meta.content = 'width=1280';
+                  meta.setAttribute('data-nova-desktop', 'true');
+                  document.head.appendChild(meta);
+                }
+              };
+              new MutationObserver(apply).observe(document, { childList: true, subtree: true });
+              apply();
+            })();
+        """
     }
 }
 
