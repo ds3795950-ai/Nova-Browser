@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
     private val enginePreferences by lazy { BrowserEnginePreferenceStore(prefs) }
     private var activePrimaryEngineView: View? = null
+    private var activeSecondaryEngineView: View? = null
 
     private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
@@ -322,6 +323,7 @@ class MainActivity : ComponentActivity() {
             addView(secondaryBrowserView, LinearLayout.LayoutParams(-1, 0, 1f))
             visibility = View.GONE
         }
+        activeSecondaryEngineView = secondaryBrowserView
         browserPane = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(browserView, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -516,6 +518,8 @@ class MainActivity : ComponentActivity() {
                         state.url?.takeIf { it.isNotBlank() }?.let { addressBar.setText(it) }
                         state.title?.takeIf { it.isNotBlank() }?.let { tabLabel.text = it.take(32) }
                         pageStatus.text = if (state.isLoading) "Loading · Cefrium" else "Cefrium · ${state.progress}%"
+                    } else if (tab.id == splitTabId) {
+                        state.url?.takeIf { it.isNotBlank() }?.let { secondaryAddressBar.setText(it) }
                     }
                     if (state.url != null && state.url != previousUrl && !tab.isPrivate && !tab.isGuest && !state.url.startsWith("about:")) {
                         addHistory(state.url)
@@ -599,6 +603,14 @@ class MainActivity : ComponentActivity() {
         if (browserView.parent === browserPane) browserPane.removeView(browserView)
         browserPane.addView(view, 0, LinearLayout.LayoutParams(-1, 0, 1f))
         activePrimaryEngineView = view
+    }
+
+    private fun showSecondaryEngineView(view: View) {
+        val previous = activeSecondaryEngineView
+        if (previous != null && previous !== view) (previous.parent as? ViewGroup)?.removeView(previous)
+        if (view.parent != null) (view.parent as? ViewGroup)?.removeView(view)
+        secondaryPane.addView(view, 1, LinearLayout.LayoutParams(-1, 0, 1f))
+        activeSecondaryEngineView = view
     }
 
     private fun activateTab(tab: BrowserTab) {
@@ -827,20 +839,27 @@ class MainActivity : ComponentActivity() {
 
     private fun chooseSplitTab() {
         if (denyGuestAccess("Split screen")) return
-        val candidates = tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.GECKOVIEW && it !== currentTab() }
+        val candidates = tabs.filter { !it.isPrivate && !it.isGuest && it !== currentTab() }
         if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
         AlertDialog.Builder(this).setTitle("Open second pane")
-            .setItems(candidates.map { it.title.ifBlank { it.lastUrl } }.toTypedArray()) { _, which ->
+            .setItems(candidates.map { "${it.title.ifBlank { it.lastUrl }} · ${it.engineType.name}" }.toTypedArray()) { _, which ->
                 val tab = candidates[which]
                 if (splitTabId != null) exitSplitScreen()
-                val session = ensureSession(tab)
-                secondaryBrowserView.setSession(session)
                 secondaryAddressBar.setText(tab.lastUrl)
                 secondaryPane.visibility = View.VISIBLE
                 browserPane.visibility = View.VISIBLE
                 homePanel.visibility = View.GONE
-                session.setActive(true)
-                session.setFocused(false)
+                if (tab.engineType == BrowserEngineType.CEFRIUM) {
+                    val engine = ensureCefriumEngine(tab)
+                    showSecondaryEngineView(engine.view)
+                    engine.setActive(true, false)
+                } else {
+                    val session = ensureSession(tab)
+                    secondaryBrowserView.setSession(session)
+                    showSecondaryEngineView(secondaryBrowserView)
+                    session.setActive(true)
+                    session.setFocused(false)
+                }
                 splitTabId = tab.id
                 toast("Split screen enabled")
             }.setNegativeButton("Cancel", null).show()
@@ -850,6 +869,7 @@ class MainActivity : ComponentActivity() {
         val second = tabs.firstOrNull { it.id == splitTabId }
         second?.session?.setFocused(false)
         second?.session?.setActive(false)
+        second?.cefriumEngine?.setActive(false, false)
         secondaryPane.visibility = View.GONE
         splitTabId = null
         enforceSessionBudget()
@@ -861,7 +881,8 @@ class MainActivity : ComponentActivity() {
         prepareDesktopModeForNavigation(tab, target)
         tab.lastUrl = target
         tab.title = Uri.parse(target).host ?: target.take(48)
-        ensureSession(tab).loadUri(target)
+        if (tab.engineType == BrowserEngineType.CEFRIUM) ensureCefriumEngine(tab).loadUrl(target)
+        else ensureSession(tab).loadUri(target)
         secondaryAddressBar.setText(target)
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
     }
@@ -1540,7 +1561,10 @@ class MainActivity : ComponentActivity() {
                 showPrimaryEngineView(browserView)
                 browserView.setSession(newSession)
             }
-            if (tab.id == splitTabId) secondaryBrowserView.setSession(newSession)
+            if (tab.id == splitTabId) {
+                secondaryBrowserView.setSession(newSession)
+                showSecondaryEngineView(secondaryBrowserView)
+            }
         }
     }
 
