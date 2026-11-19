@@ -19,23 +19,36 @@ let failed = false;
 const byA11y = label => driver.$('~' + label);
 async function tapToolbar(label, rowIndex) {
   const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
+  const selectors = [
+    `android=new UiSelector().description("${safeLabel}")`,
+    `android=new UiSelector().text("${safeLabel}")`
+  ];
+  for (const selector of selectors) {
+    try {
+      const direct = driver.$(selector);
+      if (await direct.isDisplayed()) {
+        await direct.click();
+        return;
+      }
+    } catch (_) {}
+  }
   const rows = await driver.$$('android.widget.HorizontalScrollView');
   const indices = [rowIndex];
   for (let i = 0; i < rows.length; i++) if (i !== rowIndex) indices.push(i);
   for (const i of indices) {
-    for (const match of ['description', 'text']) {
+    for (let j = 0; j < selectors.length; j++) {
       try {
-        const selector = match === 'description'
-          ? `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`
-          : `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
-        const target = driver.$(selector);
+        const match = j === 0 ? `new UiSelector().description("${safeLabel}")` : `new UiSelector().text("${safeLabel}")`;
+        const scroller = driver.$(`android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(${match})`);
+        await scroller.waitForDisplayed({ timeout: 3000 });
+        const target = driver.$(selectors[j]);
         await target.waitForDisplayed({ timeout: 3000 });
         await target.click();
         return;
       } catch (_) {}
     }
   }
-  throw new Error('Could not expose toolbar button: ' + label);
+  throw new Error('Could not find and click toolbar button: ' + label);
 }
 
 
@@ -265,15 +278,16 @@ try {
 
   await selectSetting('Protected DNS · AdGuard DNS');
   await driver.$('android=new UiSelector().text("Protected DNS · AdGuard DNS")').waitForDisplayed({ timeout: 10000 });
-  const dnsCheck = driver.$('android=new UiSelector().className("android.widget.CheckBox")');
-  const dnsOriginal = (await dnsCheck.getAttribute('checked')) === 'true';
-  await dnsCheck.click();
+  const dnsCheckBefore = driver.$('android=new UiSelector().className("android.widget.CheckBox")');
+  const dnsOriginal = (await dnsCheckBefore.getAttribute('checked')) === 'true';
+  await dnsCheckBefore.click();
   await closeByText('Save');
   await selectSetting('Protected DNS · AdGuard DNS');
-  const dnsPersisted = ((await dnsCheck.getAttribute('checked')) === 'true') !== dnsOriginal;
+  const dnsCheckAfter = driver.$('android=new UiSelector().className("android.widget.CheckBox")');
+  const dnsPersisted = ((await dnsCheckAfter.getAttribute('checked')) === 'true') !== dnsOriginal;
   record('Protected DNS toggle persists', dnsPersisted);
   if (!dnsPersisted) throw new Error('Protected DNS preference did not persist');
-  await dnsCheck.click();
+  await dnsCheckAfter.click();
   await closeByText('Save');
 
   await driver.saveScreenshot(`${out}/settings-all-entries.png`);
