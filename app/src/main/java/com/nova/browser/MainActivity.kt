@@ -62,7 +62,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import org.mozilla.geckoview.GeckoView
 
-/** Nova browser core. GeckoView is the only rendering engine. */
+/** Nova browser core. Engine selection is shared; GeckoView remains the safe fallback for unsupported features. */
 class MainActivity : ComponentActivity() {
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private var notificationPermissionRequestPending = false
@@ -814,8 +814,10 @@ class MainActivity : ComponentActivity() {
         addressBar.setText(target)
         pageStatus.text = when { tab.isGuest -> "Guest Mode · history disabled"; tab.isPrivate -> "Private browsing · history disabled"; else -> "Loading…" }
         try {
-            if (tab.engineType == BrowserEngineType.CEFRIUM) ensureCefriumEngine(tab).loadUrl(target)
-            else ensureSession(tab).loadUri(target)
+            if (tab.engineType == BrowserEngineType.CEFRIUM) {
+                tab.needsReload = false
+                ensureCefriumEngine(tab).loadUrl(target)
+            } else ensureSession(tab).loadUri(target)
             if (!tab.isPrivate && !tab.isGuest) addHistory(target)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
@@ -1362,6 +1364,13 @@ class MainActivity : ComponentActivity() {
         val sites = desktopSites
         tab.desktopSite = if (host in sites) { sites.remove(host); false } else { sites.add(host); true }
         prefs.edit().putStringSet("desktop_sites", sites).apply()
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            tab.cefriumEngine?.setActive(false, false)
+            tab.cefriumEngine?.close()
+            tab.cefriumEngine = null
+            tab.engineType = BrowserEngineType.GECKOVIEW
+            showPrimaryEngineView(browserView)
+        }
         tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
         tab.session = null; tab.needsReload = true
         val session = ensureSession(tab)
@@ -1457,7 +1466,10 @@ class MainActivity : ComponentActivity() {
             tab.desktopSite = desired
             tab.needsReload = false
             val newSession = ensureSession(tab)
-            if (currentTab() === tab) browserView.setSession(newSession)
+            if (currentTab() === tab) {
+                showPrimaryEngineView(browserView)
+                browserView.setSession(newSession)
+            }
             if (tab.id == splitTabId) secondaryBrowserView.setSession(newSession)
         }
     }
@@ -1556,6 +1568,7 @@ class MainActivity : ComponentActivity() {
                         val mode = modes[which]
                         prefs.edit().putString("shield_mode", mode.name).apply()
                         NovaShield.apply(runtime, mode)
+                        if (mode != ShieldMode.OFF) switchCurrentTabToGecko("Nova Shield")
                         toast("Nova Shield: ${mode.name.lowercase().replaceFirstChar { it.uppercase() }}")
                     }
                     3 -> {
@@ -1604,6 +1617,7 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("protected_dns_enabled", check.isChecked).apply()
                 applyProtectedDns(check.isChecked)
+                if (check.isChecked) switchCurrentTabToGecko("Protected DNS")
                 toast(if (check.isChecked) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
             }
             .setNegativeButton("Cancel", null)
@@ -1795,6 +1809,19 @@ class MainActivity : ComponentActivity() {
             addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-history.json")
         }
         startActivityForResult(intent, historyExportRequestCode)
+    }
+
+    private fun switchCurrentTabToGecko(reason: String) {
+        val tab = currentTab() ?: return
+        if (tab.engineType != BrowserEngineType.CEFRIUM) return
+        tab.cefriumEngine?.setActive(false, false)
+        tab.cefriumEngine?.close()
+        tab.cefriumEngine = null
+        tab.engineType = BrowserEngineType.GECKOVIEW
+        tab.needsReload = true
+        showPrimaryEngineView(browserView)
+        activateTab(tab)
+        toast("Switched to GeckoView for $reason. This site may require you to sign in again; website data is not migrated yet.")
     }
 
     private fun rememberCurrentSiteEngine() {

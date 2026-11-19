@@ -15,7 +15,8 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Normal-tab rendering, navigation, back/forward, reload, tab switching, session-budget eviction and Activity pause/resume route through the Cefrium adapter when Cefrium is selected.
 - Normal-tab engine selection is persisted with session restore. The Settings menu can save an exact-host engine affinity for the current Normal site.
 - Private and Guest tabs deliberately remain on GeckoView. Cefrium's shared incognito profile cannot currently provide the separate, independently erasable Private and Guest storage contexts required by Nova.
-- Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases.
+- Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases. Enabling Shield or Protected DNS while a Cefrium tab is active also switches that tab to GeckoView and warns that website state is not migrated.
+- Desktop-site and Reader actions that require GeckoView switch the active tab to GeckoView before attaching a Gecko session.
 
 ### Remaining production work
 - `MainActivity.BrowserTab` still retains a `GeckoSession?` for Gecko-specific delegates and features; the common interface is not yet the sole production tab owner.
