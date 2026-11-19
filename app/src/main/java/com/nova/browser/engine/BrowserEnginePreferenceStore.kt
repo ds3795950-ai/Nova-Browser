@@ -8,20 +8,10 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
 
     fun normalMode(): BrowserEngineMode = preferences.getString(KEY_NORMAL_MODE, null)
         ?.let { runCatching { BrowserEngineMode.valueOf(it) }.getOrNull() }
-        ?: BrowserEngineMode.AUTOMATIC
+        ?: BrowserEngineMode.CEFRIUM
 
     fun setNormalMode(mode: BrowserEngineMode) {
         preferences.edit().putString(KEY_NORMAL_MODE, mode.name).apply()
-    }
-
-    /** Null means the agreed Guest default (GeckoView). */
-    fun guestEngineOverride(): BrowserEngineType? = preferences.getString(KEY_GUEST_ENGINE, null)
-        ?.let { runCatching { BrowserEngineType.valueOf(it) }.getOrNull() }
-
-    fun setGuestEngineOverride(engine: BrowserEngineType?) {
-        preferences.edit().apply {
-            if (engine == null) remove(KEY_GUEST_ENGINE) else putString(KEY_GUEST_ENGINE, engine.name)
-        }.apply()
     }
 
     fun siteAffinity(url: String): BrowserEngineType? = affinity.get(url)
@@ -44,7 +34,6 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
             EngineSelectionRequest(
                 mode = mode,
                 profile = profile,
-                guestEngineOverride = if (profile == BrowserProfileKind.GUEST) guestEngineOverride() else null,
                 siteAffinity = affinityForNormal,
                 cefriumAvailable = cefriumAvailable,
                 cefriumCompatible = cefriumCompatible
@@ -54,6 +43,5 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
 
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
-        const val KEY_GUEST_ENGINE = "guest_engine_override"
     }
 }

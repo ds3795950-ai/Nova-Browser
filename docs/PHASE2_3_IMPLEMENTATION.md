@@ -5,13 +5,14 @@ Branch: `feature/phase-1-dual-engine-foundation`
 ## Phase 2: engine selection and production tab migration
 
 ### Implemented foundation
-- `BrowserEnginePreferenceStore` persists the global mode and optional Guest override. It is wired into the production Settings menu and normal-tab creation.
-- `EngineSelectionPolicy` is pure and unit-testable. Automatic normal/private mode prefers Cefrium, honors exact-site affinity, and falls back to GeckoView when Cefrium is unavailable or the site is known incompatible. Explicit global GeckoView/Cefrium modes take precedence over site affinity.
-- Guest mode defaults to GeckoView; Cefrium is selected only when an explicit Guest override is supplied. Cefrium unavailable/incompatible still falls back safely.
+- `BrowserEnginePreferenceStore` persists the Normal-mode engine choice. New installations default to Cefrium; users may choose Automatic or GeckoView in Settings.
+- `EngineSelectionPolicy` is pure and unit-testable. Normal mode defaults to Cefrium; Automatic prefers Cefrium, honors exact-site affinity and falls back to GeckoView when Cefrium is unavailable or the site is known incompatible. Explicit Normal-mode choices take precedence over site affinity.
+- Guest and Private modes are locked to GeckoView, regardless of the Normal-mode selection. There is no Guest engine override.
 - `BrowserEngineProfilePolicy` reserves `nova-normal-v1` for persistent Normal Cefrium browsing and requires Private/Guest Cefrium profiles to be ephemeral. Gecko Guest context IDs remain separate.
 
 ### Production integration landed (partial)
-- Normal tabs now resolve their engine through `BrowserEnginePreferenceStore`; the Settings menu exposes Automatic, Cefrium and GeckoView modes.
+- Normal tabs now resolve their engine through `BrowserEnginePreferenceStore`; new installations default to Cefrium, and the Settings menu exposes Cefrium (default), Automatic and GeckoView modes.
+- Guest tabs always use GeckoView. This is enforced both in production tab creation and the unit-tested engine-selection policy; changing the Normal-mode engine cannot affect Guest tabs.
 - Normal-tab rendering, navigation, back/forward, reload, tab switching, session-budget eviction and Activity pause/resume route through the Cefrium adapter when Cefrium is selected.
 - Normal-tab engine selection is persisted with session restore. The Settings menu can save an exact-host engine affinity for the current Normal site.
 - Normal tabs can explicitly switch the current tab between GeckoView and Cefrium from Settings. The action warns that engine-native cookies and website storage are not migrated, preserves the source engine's stored profile, and blocks Cefrium when Nova Shield, Protected DNS, desktop-site mode, Reader view or saved-login autofill requires GeckoView.
@@ -44,7 +45,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates
-- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. The latest debug Engine Lab constructor fix, typed Cefrium permission handler and password fallback are committed; the CI/lint reruns are pending.
+- Unit tests cover Cefrium as the Normal default, Automatic fallback, Guest/Private GeckoView isolation, profile isolation, migration consent, portable-state counts and failed destination verification. The latest debug Engine Lab constructor fix, typed Cefrium permission handler and password fallback are committed; the CI/lint reruns are pending.
 - Instrumented tests cover both engines in one process, multiple tabs, split-pane, pause/resume, crash recovery and close.
 - Device tests cover Android 10+ ARM64, Cefrium memory/APK footprint, site compatibility and GeckoView regressions.
 - Migration tests use disposable profiles and confirm destination state before any optional source cleanup.

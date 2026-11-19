@@ -1993,11 +1993,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showBrowserEngineSettings() {
-        val modes = arrayOf("Automatic · Cefrium preferred", "Cefrium · Chromium", "GeckoView · Firefox")
-        val values = BrowserEngineMode.values()
+        val modes = arrayOf("Cefrium · Chromium (default)", "Automatic · Cefrium preferred", "GeckoView · Firefox")
+        val values = arrayOf(BrowserEngineMode.CEFRIUM, BrowserEngineMode.AUTOMATIC, BrowserEngineMode.GECKOVIEW)
         val selected = values.indexOf(enginePreferences.normalMode()).coerceAtLeast(0)
         AlertDialog.Builder(this).setTitle("Browser engine")
-            .setMessage("This setting applies to new Normal tabs. Existing tabs keep their current engine; use Settings → Switch this tab's engine to reload the current Normal tab. Private and Guest tabs remain on GeckoView until independently erasable Cefrium privacy contexts are available. Nova Shield, Protected DNS, desktop-site mode, Reader view and saved-login sites currently require GeckoView. Website sign-in data is never migrated automatically between engines.")
+            .setMessage("Normal browsing defaults to Cefrium (Chromium). Automatic prefers Cefrium and falls back to GeckoView when a site or enabled protection requires it; you can also choose GeckoView. Guest and Private tabs always use GeckoView. Existing tabs keep their current engine; use Switch this tab's engine to reload a Normal tab. Website cookies, storage and sign-in sessions are not transferred between engines.")
             .setSingleChoiceItems(modes, selected) { dialog, which ->
                 val mode = values[which]
                 enginePreferences.setNormalMode(mode)

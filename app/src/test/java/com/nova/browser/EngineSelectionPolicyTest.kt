@@ -5,16 +5,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EngineSelectionPolicyTest {
-    @Test fun automaticPrefersCefriumForNormalTabs() {
+    @Test fun normalModeDefaultsToCefrium() {
         val result = EngineSelectionPolicy.resolve(EngineSelectionRequest(cefriumAvailable = true))
         assertEquals(BrowserEngineType.CEFRIUM, result.engine)
         assertFalse(result.usedFallback)
     }
 
     @Test fun automaticFallsBackWhenCefriumUnavailableOrIncompatible() {
-        assertTrue(EngineSelectionPolicy.resolve(EngineSelectionRequest(cefriumAvailable = false)).usedFallback)
-        assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(cefriumAvailable = false)).engine)
-        assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(cefriumAvailable = true, cefriumCompatible = false)).engine)
+        assertTrue(EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.AUTOMATIC, cefriumAvailable = false)).usedFallback)
+        assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.AUTOMATIC, cefriumAvailable = false)).engine)
+        assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.AUTOMATIC, cefriumAvailable = true, cefriumCompatible = false)).engine)
     }
 
     @Test fun explicitNormalModeIsRespectedWhenAvailable() {
@@ -22,18 +22,30 @@ class EngineSelectionPolicyTest {
         assertEquals(BrowserEngineType.GECKOVIEW, result.engine)
     }
 
-    @Test fun guestDefaultsToGeckoAndOnlyExplicitOverrideSelectsCefrium() {
-        val default = EngineSelectionPolicy.resolve(EngineSelectionRequest(profile = BrowserProfileKind.GUEST, cefriumAvailable = true))
-        val chosen = EngineSelectionPolicy.resolve(EngineSelectionRequest(profile = BrowserProfileKind.GUEST, guestEngineOverride = BrowserEngineType.CEFRIUM, cefriumAvailable = true))
-        assertEquals(BrowserEngineType.GECKOVIEW, default.engine)
-        assertEquals(BrowserEngineType.CEFRIUM, chosen.engine)
+    @Test fun guestAlwaysUsesGeckoViewEvenWhenNormalModeIsCefrium() {
+        val result = EngineSelectionPolicy.resolve(
+            EngineSelectionRequest(
+                mode = BrowserEngineMode.CEFRIUM,
+                profile = BrowserProfileKind.GUEST,
+                cefriumAvailable = true
+            )
+        )
+        assertEquals(BrowserEngineType.GECKOVIEW, result.engine)
+        assertEquals("Guest Mode always uses GeckoView", result.reason)
     }
 
     @Test fun siteAffinityAppliesOnlyInAutomaticMode() {
-        val automatic = EngineSelectionPolicy.resolve(EngineSelectionRequest(siteAffinity = BrowserEngineType.GECKOVIEW, cefriumAvailable = true))
+        val automatic = EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.AUTOMATIC, siteAffinity = BrowserEngineType.GECKOVIEW, cefriumAvailable = true))
         val forced = EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.CEFRIUM, siteAffinity = BrowserEngineType.GECKOVIEW, cefriumAvailable = true))
         assertEquals(BrowserEngineType.GECKOVIEW, automatic.engine)
         assertEquals(BrowserEngineType.CEFRIUM, forced.engine)
+    }
+
+    @Test fun privateModeAlsoStaysOnGeckoView() {
+        val result = EngineSelectionPolicy.resolve(
+            EngineSelectionRequest(mode = BrowserEngineMode.CEFRIUM, profile = BrowserProfileKind.PRIVATE, cefriumAvailable = true)
+        )
+        assertEquals(BrowserEngineType.GECKOVIEW, result.engine)
     }
 
     @Test fun privateAndGuestProfilesNeverUsePersistentCefriumProfile() {

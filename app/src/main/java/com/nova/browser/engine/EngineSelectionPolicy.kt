@@ -6,10 +6,8 @@ enum class BrowserEngineMode { AUTOMATIC, CEFRIUM, GECKOVIEW }
 enum class BrowserProfileKind { NORMAL, PRIVATE, GUEST }
 
 data class EngineSelectionRequest(
-    val mode: BrowserEngineMode = BrowserEngineMode.AUTOMATIC,
+    val mode: BrowserEngineMode = BrowserEngineMode.CEFRIUM,
     val profile: BrowserProfileKind = BrowserProfileKind.NORMAL,
-    /** A Guest-only explicit choice. Null means the agreed GeckoView default. */
-    val guestEngineOverride: BrowserEngineType? = null,
     /** Per-site affinity is considered only in Automatic mode. */
     val siteAffinity: BrowserEngineType? = null,
     val cefriumAvailable: Boolean,
@@ -26,12 +24,8 @@ data class EngineSelection(
 object EngineSelectionPolicy {
     fun resolve(request: EngineSelectionRequest): EngineSelection {
         val requested = when (request.profile) {
-            BrowserProfileKind.GUEST -> request.guestEngineOverride ?: BrowserEngineType.GECKOVIEW
-            BrowserProfileKind.PRIVATE -> when (request.mode) {
-                BrowserEngineMode.CEFRIUM -> BrowserEngineType.CEFRIUM
-                BrowserEngineMode.GECKOVIEW -> BrowserEngineType.GECKOVIEW
-                BrowserEngineMode.AUTOMATIC -> request.siteAffinity ?: BrowserEngineType.CEFRIUM
-            }
+            BrowserProfileKind.GUEST -> BrowserEngineType.GECKOVIEW
+            BrowserProfileKind.PRIVATE -> BrowserEngineType.GECKOVIEW
             BrowserProfileKind.NORMAL -> when (request.mode) {
                 BrowserEngineMode.CEFRIUM -> BrowserEngineType.CEFRIUM
                 BrowserEngineMode.GECKOVIEW -> BrowserEngineType.GECKOVIEW
@@ -40,8 +34,8 @@ object EngineSelectionPolicy {
         }
 
         if (requested != BrowserEngineType.CEFRIUM) {
-            return EngineSelection(requested, if (request.profile == BrowserProfileKind.GUEST && request.guestEngineOverride == null) {
-                "Guest Mode defaults to GeckoView"
+            return EngineSelection(requested, if (request.profile == BrowserProfileKind.GUEST) {
+                "Guest Mode always uses GeckoView"
             } else if (request.mode == BrowserEngineMode.AUTOMATIC && request.siteAffinity != null) {
                 "Using the saved engine preference for this site"
             } else "GeckoView selected")

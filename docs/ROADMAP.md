@@ -5,7 +5,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 ## Current dual-engine transition
 
 - **Active branch:** `feature/phase-1-dual-engine-foundation`; Cefrium SDK 0.21.0 is integrated alongside GeckoView.
-- **Production behavior:** compatible Normal tabs can use Cefrium or GeckoView through Automatic/Cefrium/GeckoView settings. Automatic prefers Cefrium and falls back to GeckoView when Cefrium is unavailable or a Gecko-only protection/autofill feature is required.
+- **Production behavior:** Normal mode defaults to Cefrium. Users can select Automatic (Cefrium preferred with compatibility fallback) or GeckoView in Settings. Guest mode is locked to GeckoView regardless of the Normal-mode selection; Private mode also remains on GeckoView.
 - **Per-tab switching:** Normal tabs can be explicitly reloaded in the other engine after a warning. Website cookies, storage and login sessions are not transferred; the source engine's profile remains intact. Switching to Cefrium is blocked when Nova Shield, Protected DNS, desktop-site mode, Reader view or saved-login autofill requires GeckoView.
 - **Integrated Cefrium features:** normal-tab navigation/lifecycle, secondary split-pane rendering, site permission prompts and completed-download publication into Nova's download repository.
 - **Privacy boundary:** Private and Guest tabs remain on GeckoView. Cefrium's built-in incognito profile is shared, and named profiles are persistent until safely deleted; Nova does not enable Cefrium in those modes until independently erasable contexts can meet the privacy requirement.
@@ -28,7 +28,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 
 ## Core browser and privacy
 
-- GeckoView is the privacy/protection fallback and the engine for Private/Guest tabs; Cefrium serves compatible Normal tabs.
+- Cefrium is the default engine for compatible Normal tabs; GeckoView is used for every Guest tab and for Private tabs, plus Normal sites that require Gecko-only protections or autofill.
 - Address/search, search provider selection, navigation, tabs, normal session restore, private tabs and isolated ephemeral Guest context.
 - Bookmarks, history, downloads/uploads, workspaces, desktop-site mode, reader mode, translation, sharing and split-pane tab workflow.
 - Nova Shield currently uses GeckoView native tracking protection, cookie isolation, Safe Browsing, GPC/fingerprinting controls and per-site permissions. Cefrium is not selected while these protections are enabled.
