@@ -20,9 +20,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - uses: android-actions/setup-android@v3
       - name: Install Android SDK 37 extension 1
-        run: sdkmanager "platforms;android-37-ext1"
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37-ext1"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
