@@ -12,6 +12,8 @@ import android.view.View
 import android.widget.Toast
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumDownloadClient
+import com.cefrium.CefriumChromeClient
+import com.cefrium.CefriumPermissionRequest
 import com.cefrium.CefriumProfile
 import com.nova.browser.DownloadProtocol
 import java.io.File
@@ -32,7 +34,8 @@ class CefriumBrowserEngine(
     activity: Activity,
     profile: CefriumProfile,
     private val listener: BrowserEngineListener? = null,
-    private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {}
+    private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {},
+    private val onPermissionRequest: (origin: String, permissions: List<String>, respond: (Boolean) -> Unit) -> Unit = { _, _, respond -> respond(false) }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     private val browser = CefriumBrowser.createWithSurface(activity, profile)
@@ -67,6 +70,14 @@ class CefriumBrowserEngine(
             ))
         }
         browser.setDownloadClient(downloadPublisher.client)
+        browser.setChromeClient(object : CefriumChromeClient {
+            override fun onPermissionRequest(browser: CefriumBrowser, request: CefriumPermissionRequest) {
+                val requested = request.permissions.map { it.toString().substringAfterLast('.') }
+                onPermissionRequest(request.origin, requested) { allowed ->
+                    if (allowed) request.grant() else request.deny()
+                }
+            }
+        })
     }
 
     override fun loadUrl(url: String) {
