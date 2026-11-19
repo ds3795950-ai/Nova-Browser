@@ -87,11 +87,19 @@ jobs:
           set -euo pipefail
           APP_FILE="app/build/outputs/bundle/debug/app-debug.aab"
           test -f "$APP_FILE"
-          curl --fail-with-body --silent --show-error \
+          set +e
+          UPLOAD_HTTP=$(curl --silent --show-error --write-out "%{http_code}" \
             -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
             -X POST "https://api-cloud.browserstack.com/app-automate/upload" \
             -F "file=@${APP_FILE}" \
-            -o browserstack-upload.json
+            -o browserstack-upload.json)
+          CURL_STATUS=$?
+          set -e
+          if [ "$CURL_STATUS" -ne 0 ] || [ "$UPLOAD_HTTP" != "200" ]; then
+            echo "BrowserStack upload failed: HTTP ${UPLOAD_HTTP:-unknown}, curl exit ${CURL_STATUS}"
+            cat browserstack-upload.json
+            exit 1
+          fi
           APP_URL="$(jq -r '.app_url // empty' browserstack-upload.json)"
           if [ -z "$APP_URL" ]; then cat browserstack-upload.json; exit 1; fi
           echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
