@@ -1,9 +1,21 @@
 package com.nova.browser.engine
 
 import android.app.Activity
+import android.content.ContentValues
+import android.content.Context
+import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import android.view.View
+import android.widget.Toast
 import com.cefrium.CefriumBrowser
+import com.cefrium.CefriumDownloadClient
 import com.cefrium.CefriumProfile
+import com.nova.browser.DownloadProtocol
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /** Cefrium implementation of the shared per-tab engine contract. */
 class CefriumBrowserEngine(
@@ -13,6 +25,7 @@ class CefriumBrowserEngine(
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     private val browser = CefriumBrowser.createWithSurface(activity, profile)
+    private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext)
     override val view: View = browser.getSurfaceContainer()
     private var currentState = BrowserEngineState(
         url = browser.getUrl(),
@@ -25,8 +38,8 @@ class CefriumBrowserEngine(
         get() = currentState
 
     init {
-        // Cefrium is pre-1.0. Keep its callback surface isolated here so SDK API migrations do not
-        // leak into Nova's tab manager. These callbacks are retained for compatibility with 0.21.0.
+        // Cefrium is pre-1.0. Keep its callback surface retained here so SDK API migrations do not
+        // leak into Nova's tab manager.
         browser.setOnUrlChangedListener { url ->
             publish(currentState.copy(url = url))
         }
@@ -42,6 +55,7 @@ class CefriumBrowserEngine(
                 error = null
             ))
         }
+        browser.setDownloadClient(downloadPublisher.client)
     }
 
     override fun loadUrl(url: String) {
@@ -91,5 +105,76 @@ class CefriumBrowserEngine(
 
     private fun checkOpen() {
         check(!closed && !browser.isClosed()) { "Cefrium browser engine is closed" }
+    }
+}
+
+/**
+ * Routes completed Cefrium downloads into the user's public Downloads/Nova folder.
+ * The engine writes to its app-private Downloads directory first; only completed files
+ * are copied to MediaStore, and the private source is deleted only after publication.
+ */
+private class CefriumDownloadPublisher(context: Context) {
+    private val appContext = context.applicationContext
+    private val publishingIds = ConcurrentHashMap.newKeySet<Int>()
+
+    val client: CefriumDownloadClient = object : CefriumDownloadClient {
+        override fun onBeforeDownload(
+            browser: CefriumBrowser,
+            item: CefriumBrowser.DownloadItem,
+            callback: CefriumBrowser.BeforeDownloadCallback
+        ) {
+            // Let Cefrium choose its safe app-private Downloads path. Nova publishes it below.
+            callback.allow(null)
+        }
+
+        override fun onDownloadUpdated(browser: CefriumBrowser, item: CefriumBrowser.DownloadItem) {
+            if (!item.isComplete || !publishingIds.add(item.id)) return
+            val sourcePath = item.fullPath
+            val fileName = DownloadProtocol.safeFileName(item.suggestedName)
+            val mimeType = item.mimeType.ifBlank { "application/octet-stream" }
+            PUBLISH_EXECUTOR.execute {
+                try {
+                    publishCompletedFile(File(sourcePath), fileName, mimeType)
+                    notifyUser("Download saved to Downloads/Nova")
+                } catch (error: Exception) {
+                    notifyUser("Download completed but could not be moved to Downloads/Nova: ${error.localizedMessage ?: "unknown error"}")
+                } finally {
+                    publishingIds.remove(item.id)
+                }
+            }
+        }
+    }
+
+    private fun publishCompletedFile(source: File, fileName: String, mimeType: String) {
+        check(source.isFile) { "Cefrium's completed download file is unavailable" }
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, mimeType)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Nova")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = appContext.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("Android could not create the Downloads file")
+        try {
+            appContext.contentResolver.openOutputStream(uri)?.use { output ->
+                source.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("Android could not write the Downloads file")
+            val ready = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+            appContext.contentResolver.update(uri, ready, null, null)
+            check(source.delete()) { "Published download, but the private temporary file could not be removed" }
+        } catch (error: Exception) {
+            appContext.contentResolver.delete(uri, null, null)
+            throw error
+        }
+    }
+
+    private fun notifyUser(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private companion object {
+        val PUBLISH_EXECUTOR = Executors.newSingleThreadExecutor()
     }
 }
