@@ -16,13 +16,10 @@ val releaseKeyPassword = System.getenv("NOVA_RELEASE_KEY_PASSWORD")
 val releaseSigningReady = !releaseStorePath.isNullOrBlank() && file(releaseStorePath ?: "__missing_keystore__").isFile &&
     !releaseStorePassword.isNullOrBlank() && !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
 
-kotlin {
-    jvmToolchain(17)
-}
-
 android {
     namespace = "com.nova.browser"
     compileSdk = 37
+    compileSdkExtension = 1
 
     defaultConfig {
         applicationId = "com.nova.browser"
