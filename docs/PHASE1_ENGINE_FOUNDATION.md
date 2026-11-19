@@ -21,11 +21,11 @@ The current Cefrium release checked for this branch is **0.21.0**, tracking Chro
 | JDK | 17 | 25 |
 | Gradle | 9.3.1 | 9.7.1 |
 | Android Gradle Plugin | 9.1.1 | 9.4.0 |
-| compileSdk | 37 | 37 |
+| compileSdk | 37 | 37.1 (`minorApiLevel = 1`) |
 | minSdk | 29 | 29 |
 | ABIs | arm64-v8a, armeabi-v7a | arm64-v8a, armeabi-v7a, x86_64 |
 
-The Phase 1 branch updates CI and Gradle to the Cefrium toolchain and includes all three supported ABI splits. Cefrium's native engine has a substantial size and memory cost (its quickstart documents roughly 203 MB uncompressed for the ARM64 native library and about 89 MB download per architecture). APK/AAB size and memory must be measured before enabling it for all users.
+The Phase 1 branch updates CI and Gradle to the Cefrium toolchain and compiles against Android API 37.1 (`release(37) { minorApiLevel = 1 }`). CI installs `platforms;android-37.1`. It includes all three ABI splits declared by the integration build. Cefrium's native engine has a substantial size and memory cost (its quickstart documents roughly 203 MB uncompressed for the ARM64 native library and about 89 MB download per architecture). APK/AAB size and memory must be measured before enabling it for all users.
 
 Official integration references:
 
@@ -34,6 +34,11 @@ Official integration references:
 - [Cefrium adoption constraints](https://cefrium.com/guides/adopting-cefrium/)
 - [Cefrium Browser API](https://cefrium.com/docs/com/cefrium/CefriumBrowser.html)
 - [Cefrium Profile API](https://cefrium.com/docs/com/cefrium/CefriumProfile.html)
+
+
+## GeckoView + Chromium manifest compatibility
+
+The first combined-engine manifest merge exposed a conflict: GeckoView declares `org.mozilla.gecko.process.ZygotePreload`, while Cefrium declares `org.chromium.content_public.app.ZygotePreload`. Android exposes only one application-level `android:zygotePreloadName`. Android's API documentation defines this as an optional preloader for isolated services using the app zygote, not as the browser engine entry point. Phase 1 removes this optional attribute from the merged app manifest so neither engine's preload class is incorrectly invoked for the other engine. This may reduce startup optimization for app-zygote isolated processes; it does not select or disable either browser engine. Revisit only if device profiling shows a material regression and a safe composite preloader can be demonstrated.
 
 ## Foundation added in this branch
 
