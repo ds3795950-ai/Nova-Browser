@@ -65,6 +65,8 @@ import org.mozilla.geckoview.GeckoView
 /** Nova browser core. Engine selection is shared; GeckoView remains the safe fallback for unsupported features. */
 class MainActivity : ComponentActivity() {
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var cefriumPermissionLauncher: ActivityResultLauncher<Array<String>>
+    private var pendingCefriumPermissionDecision: ((Boolean) -> Unit)? = null
     private var notificationPermissionRequestPending = false
     private lateinit var runtime: GeckoRuntime
     private lateinit var browserView: GeckoView
@@ -132,6 +134,11 @@ class MainActivity : ComponentActivity() {
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationPermissionRequestPending = false
             if (!granted) toast("Downloads still work, but Android may hide their notifications until permission is enabled")
+        }
+        cefriumPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            val decision = pendingCefriumPermissionDecision
+            pendingCefriumPermissionDecision = null
+            decision?.invoke(results.isNotEmpty() && results.values.all { it })
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -526,6 +533,9 @@ class MainActivity : ComponentActivity() {
                         bytes = download.bytes
                     )
                 }
+            },
+            onPermissionRequest = { origin, permissions, respond ->
+                runOnUiThread { showCefriumPermissionPrompt(origin, permissions, respond) }
             }
         )
         tab.cefriumEngine = engine
@@ -534,6 +544,51 @@ class MainActivity : ComponentActivity() {
             tab.needsReload = false
         }
         return engine
+    }
+
+    private fun showCefriumPermissionPrompt(origin: String, permissions: List<String>, respond: (Boolean) -> Unit) {
+        val host = runCatching { Uri.parse(origin).host }.getOrNull() ?: origin
+        val labels = permissions.map { permission ->
+            when (permission.uppercase()) {
+                "CAMERA" -> "Camera"
+                "MICROPHONE" -> "Microphone"
+                "GEOLOCATION" -> "Location"
+                "NOTIFICATIONS" -> "Notifications"
+                "CLIPBOARD_READ" -> "Clipboard read"
+                "NFC" -> "NFC"
+                else -> permission.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Site permission request")
+            .setMessage("$host wants access to: ${labels.joinToString(", ")}. Allow only if you trust this site.")
+            .setPositiveButton("Allow") { _, _ ->
+                val required = linkedSetOf<String>()
+                permissions.forEach { permission ->
+                    when (permission.uppercase()) {
+                        "CAMERA" -> required += Manifest.permission.CAMERA
+                        "MICROPHONE" -> required += Manifest.permission.RECORD_AUDIO
+                        "GEOLOCATION" -> {
+                            required += Manifest.permission.ACCESS_FINE_LOCATION
+                            required += Manifest.permission.ACCESS_COARSE_LOCATION
+                        }
+                        "NOTIFICATIONS" -> if (Build.VERSION.SDK_INT >= 33) required += Manifest.permission.POST_NOTIFICATIONS
+                    }
+                }
+                val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+                if (missing.isEmpty()) {
+                    respond(true)
+                } else if (pendingCefriumPermissionDecision == null) {
+                    pendingCefriumPermissionDecision = respond
+                    cefriumPermissionLauncher.launch(missing.toTypedArray())
+                } else {
+                    respond(false)
+                    toast("Another site permission request is already being handled")
+                }
+            }
+            .setNegativeButton("Block") { _, _ -> respond(false) }
+            .setOnCancelListener { respond(false) }
+            .show()
     }
 
     private fun showPrimaryEngineView(view: View) {
