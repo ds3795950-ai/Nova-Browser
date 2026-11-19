@@ -17,11 +17,16 @@ object RelatedDomainAffinityPolicy {
         if (scheme != "http" && scheme != "https") return null
         if (uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null) return null
         if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return null
-        val host = uri.host?.trimEnd('.')?.takeIf { it.isNotBlank() } ?: return null
-        if (uri.port !in -1..65535) return null
+        val authority = uri.rawAuthority?.takeIf { it.isNotBlank() } ?: return null
+        if ('@' in authority || authority.startsWith('[') || authority.count { it == ':' } > 1) return null
+        val separator = authority.lastIndexOf(':')
+        val rawHost = if (separator >= 0) authority.substring(0, separator) else authority
+        val port = if (separator >= 0) authority.substring(separator + 1).toIntOrNull() ?: return null else -1
+        if (port !in -1..65535) return null
+        val host = rawHost.trimEnd('.').takeIf { it.isNotBlank() } ?: return null
         val asciiHost = runCatching { IDN.toASCII(host, IDN.USE_STD3_ASCII_RULES).lowercase(Locale.ROOT) }.getOrNull() ?: return null
         if (asciiHost.isBlank() || asciiHost.startsWith('.') || asciiHost.endsWith('.') || ".." in asciiHost) return null
-        val port = if (uri.port >= 0) ":${uri.port}" else ""
-        return "https://$asciiHost$port"
+        val portSuffix = if (port >= 0) ":$port" else ""
+        return "https://$asciiHost$portSuffix"
     }
 }
