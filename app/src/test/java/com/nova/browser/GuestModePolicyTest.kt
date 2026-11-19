@@ -19,6 +19,11 @@ class GuestModePolicyTest {
         assertTrue(GuestModePolicy.mayReadOwnerData(isGuest = false))
     }
 
+    @Test fun ownerCredentialsStayUnavailableWhileAnyEphemeralTabExists() {
+        assertFalse(GuestModePolicy.mayUseOwnerCredentials(hasPrivateOrGuestTab = true))
+        assertTrue(GuestModePolicy.mayUseOwnerCredentials(hasPrivateOrGuestTab = false))
+    }
+
     @Test fun guestRequiresAnEphemeralEngineContext() {
         assertTrue(GuestModePolicy.requiresEphemeralStorage(isGuest = true))
         assertFalse(GuestModePolicy.requiresEphemeralStorage(isGuest = false))

@@ -11,4 +11,7 @@ internal object GuestModePolicy {
     fun mayReadOwnerData(isGuest: Boolean): Boolean = !isGuest
 
     fun requiresEphemeralStorage(isGuest: Boolean): Boolean = isGuest
+
+    /** Runtime-level credential callbacks must stay disabled while any ephemeral tab exists. */
+    fun mayUseOwnerCredentials(hasPrivateOrGuestTab: Boolean): Boolean = !hasPrivateOrGuestTab
 }
