@@ -17,11 +17,13 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Private and Guest tabs deliberately remain on GeckoView. Cefrium's shared incognito profile cannot currently provide the separate, independently erasable Private and Guest storage contexts required by Nova.
 - Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases. Enabling Shield or Protected DNS while a Cefrium tab is active also switches that tab to GeckoView and warns that website state is not migrated.
 - Desktop-site and Reader actions that require GeckoView switch the active tab to GeckoView before attaching a Gecko session.
+- Cefrium site permission requests use the typed `CefriumChromeClient` callback. Nova displays the requesting origin and permission names, then asks for any required Android runtime permissions only after the user chooses Allow. Denial is the default if no UI callback is supplied.
+- Cefrium surface browsers use the SDK's built-in file chooser for `<input type=file>`; Nova does not replace it with an unverified custom picker.
 
 ### Remaining production work
 - `MainActivity.BrowserTab` still retains a `GeckoSession?` for Gecko-specific delegates and features; the common interface is not yet the sole production tab owner.
-- Split-pane is still GeckoView-only. Re-home Gecko-specific prompts, permissions, extension APIs, translation, downloads, autofill and Shield behind engine capability adapters; preserve parity or clearly expose unsupported behavior.
-- Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Add secure password save/fill before removing the corresponding Gecko fallback. Cefrium downloads now publish completed files to Downloads/Nova and register them in Nova's persisted download list; pause/resume/cancel controls are not yet available for in-progress Cefrium transfers.
+- Split-pane is still GeckoView-only. Gecko-specific extension APIs, translation, Reader and some prompts remain engine-specific; keep those actions on GeckoView until capability adapters exist.
+- Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Cefrium downloads are now published to `Downloads/Nova` and registered in Nova's persisted download list. Cefrium password save/fill is not exposed by the current SDK's documented public API; origins with saved logins continue to use GeckoView's encrypted vault and autofill.
 - Add isolated, erasable Cefrium profiles for Private and Guest before enabling those modes on Cefrium.
 - Validate engine switching, lifecycle and crash recovery on Android devices; CI and device acceptance remain required.
 
@@ -30,18 +32,18 @@ Branch: `feature/phase-1-dual-engine-foundation`
 ### Implemented foundation and shared state
 - `SiteEngineAffinityStore` persists exact-host choices for Normal mode only. It is wired to a Settings action and does not guess registrable domains or share affinity with Private/Guest.
 - Normal-tab URLs, tab groups/session metadata, history and bookmarks remain in Nova-owned app storage, so both engine paths can use the same browser-level records.
-- The existing password vault remains app-owned; Cefrium is conservatively avoided for origins with saved logins until a Cefrium autofill adapter is available.
+- The existing password vault remains app-owned; Cefrium is conservatively avoided for origins with saved logins because the current Cefrium SDK does not document an equivalent native password-autofill delegate.
 - `WebsiteDataMigrationCoordinator` requires explicit consent, exports only through engine adapters, verifies destination import, and never deletes source data. It is still a contract, not an end-to-end migration feature.
 
 ### Remaining production work
-- No concrete GeckoView/Cefrium `WebsiteDataPort` adapters are wired. Cross-engine cookies, localStorage and IndexedDB are not yet migrated.
-- Integrate Cefrium permission prompts with Nova's app-level permission repository; implement secure password save/fill in Cefrium before treating the vault as fully shared.
-- Keep engine-native data distinct; do not claim service workers, Cache Storage, sessionStorage, passkeys or device-bound credentials are portable. Require re-fetch or reauthentication where needed.
+- No concrete GeckoView/Cefrium `WebsiteDataPort` adapters are wired. The current GeckoView public `StorageController` exposes clearing and permission operations, not a general cookie/storage export API. A complete, lossless cross-engine session migration therefore cannot be implemented against the documented public APIs; source profiles must remain intact and users may need to reauthenticate.
+- Permission prompts are wired into Nova's Activity, and completed Cefrium downloads are wired into Nova's download repository. Secure password save/fill remains GeckoView-only; do not expose saved credentials to arbitrary page JavaScript as a substitute.
+- Keep engine-native data distinct; service workers, Cache Storage, sessionStorage, HttpOnly/partitioned cookies, passkeys and device-bound credentials are not guaranteed portable. Require re-fetch or reauthentication where needed.
 - Add related-domain affinity for authentication flows without broadly grouping unrelated origins.
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates
-- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. Production wiring CI is running; prior lint runs exposed missing-class diagnostics in Cefrium-generated service manifest entries.
+- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. The latest integration CI exposed a constructor mismatch in the debug Engine Lab; a fix is committed and the rerun is pending.
 - Instrumented tests cover both engines in one process, multiple tabs, split-pane, pause/resume, crash recovery and close.
 - Device tests cover Android 10+ ARM64, Cefrium memory/APK footprint, site compatibility and GeckoView regressions.
 - Migration tests use disposable profiles and confirm destination state before any optional source cleanup.
