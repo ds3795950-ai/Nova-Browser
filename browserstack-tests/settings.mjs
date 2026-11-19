@@ -171,16 +171,23 @@ try {
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
   await driver.pause(1500);
-  const homeAfterRestart = driver.$('android=new UiSelector().textContains("Nova Browser")');
-  await homeAfterRestart.waitForDisplayed({ timeout: 30000 });
-  await tapToolbar('Settings', 1);
-  const vpnMenuAfterRestart = await scrollToSetting('VPN & Firewall · 1VPN');
-  await vpnMenuAfterRestart.click();
-  await driver.pause(1200);
+  const vpnScreenAfterRestart = driver.$('android=new UiSelector().text("Nova VPN & Firewall")');
+  const restoredVpnScreen = await vpnScreenAfterRestart.isDisplayed().catch(() => false);
+  if (!restoredVpnScreen) {
+    const homeAfterRestart = driver.$('android=new UiSelector().textContains("Nova Browser")');
+    await homeAfterRestart.waitForDisplayed({ timeout: 30000 });
+    await tapToolbar('Settings', 1);
+    const vpnMenuAfterRestart = await scrollToSetting('VPN & Firewall · 1VPN');
+    await vpnMenuAfterRestart.click();
+    await driver.pause(1200);
+  }
   const vpnAfterRestart = await driver.$('android=new UiSelector().text("Enable 1VPN for Nova")');
   const firewallAfterRestart = await driver.$('android=new UiSelector().text("Enable browser firewall")');
-  record('VPN preference persists after app restart', (await checked(vpnAfterRestart)) === finalVpn);
-  record('Firewall preference persists after app restart', (await checked(firewallAfterRestart)) === finalFirewall);
+  const vpnPersistedAfterRestart = (await checked(vpnAfterRestart)) === finalVpn;
+  const firewallPersistedAfterRestart = (await checked(firewallAfterRestart)) === finalFirewall;
+  record('VPN preference persists after app restart', vpnPersistedAfterRestart);
+  record('Firewall preference persists after app restart', firewallPersistedAfterRestart);
+  if (!vpnPersistedAfterRestart || !firewallPersistedAfterRestart) throw new Error('VPN or firewall preference did not persist after app restart');
   const serverAfterRestart = await driver.$('android=new UiSelector().className("android.widget.Button").textStartsWith("Server:")');
   const serverPersisted = (await serverAfterRestart.getText()).toLowerCase().includes('los angeles');
   record('Selected free server persists after app restart', serverPersisted);
