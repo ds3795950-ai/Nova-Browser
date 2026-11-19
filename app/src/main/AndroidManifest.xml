@@ -18,6 +18,7 @@
         </intent>
     </queries>
     <application
+        android:name=".NovaApplication"
         tools:remove="android:zygotePreloadName"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"

@@ -134,9 +134,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Cefrium component updates use a separate system network context, not a profile proxy.
-        // Nova ships a pinned engine, so disable those out-of-profile background requests.
-        Cefrium.setComponentUpdatesEnabled(false)
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationPermissionRequestPending = false
             if (!granted) toast("Downloads still work, but Android may hide their notifications until permission is enabled")
