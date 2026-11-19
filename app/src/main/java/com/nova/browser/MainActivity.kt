@@ -1698,8 +1698,9 @@ class MainActivity : ComponentActivity() {
         if (currentTab()?.isGuest == true) {
             AlertDialog.Builder(this).setTitle("Guest Mode settings")
                 .setMessage("Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden while Guest Mode is active.")
-                .setItems(arrayOf("Tor routing · Orbot", "Exit Guest Mode")) { _, which -> if (which == 0) openOrbotTorRouting() else confirmExitGuestMode() }
-                .setNegativeButton("Close", null).show()
+                .setPositiveButton("Tor routing · Orbot") { _, _ -> openOrbotTorRouting() }
+                .setNegativeButton("Exit Guest Mode") { _, _ -> confirmExitGuestMode() }
+                .setNeutralButton("Close", null).show()
             return
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
