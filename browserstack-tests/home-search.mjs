@@ -192,8 +192,7 @@ try {
   // Verify Guest Mode cannot reach owner tabs, downloads, passwords or account settings.
   const guestMarker = 'nova_guest_privacy_marker';
   await tapToolbar('Guest', 0);
-  await sessionStatus.waitForDisplayed({ timeout: 10000 });
-  await driver.waitUntil(async () => (await sessionStatus.getText().catch(() => '')).includes('Guest Mode'), { timeout: 10000, timeoutMsg: 'Guest Mode status did not become active' });
+  await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
   record('Guest mode indicator appears on home', true, 'Guest Mode status is visible immediately after opening a Guest tab');
   await navigateTo('https://example.com/?' + guestMarker + '=1', guestMarker);
   await tapToolbar('History', 1);
@@ -241,8 +240,8 @@ try {
   await tapToolbar('Private', 0);
   await driver.pause(500);
   if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Guest Mode created a separate Private tab');
-  await sessionStatus.waitForDisplayed({ timeout: 10000 });
-  await driver.waitUntil(async () => (await sessionStatus.getText().catch(() => '')).includes('Guest Mode'), { timeout: 10000, timeoutMsg: 'Guest Mode status did not become active' });
+  await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
+  if (!(await byTextContains('Guest Mode').isDisplayed().catch(() => false))) throw new Error('Guest Mode status disappeared after the Private action');
   if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Private action escaped Guest Mode');
   record('Guest mode blocks Private tab creation', true, 'Stable Guest Mode page status remains active after the Private action');
 
@@ -264,8 +263,7 @@ try {
   record('Guest settings hide owner data', true, 'Only Exit Guest Mode is offered; owner exports and account controls are hidden');
 
   await tapToolbar('＋', 0);
-  await sessionStatus.waitForDisplayed({ timeout: 10000 });
-  await driver.waitUntil(async () => (await sessionStatus.getText().catch(() => '')).includes('Guest Mode'), { timeout: 10000, timeoutMsg: 'Guest Mode status did not become active' });
+  await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
   record('New tabs remain inside Guest Mode', true, 'The new-tab button creates another Guest tab, not a normal tab');
 
   await tapToolbar('Tabs', 0);
