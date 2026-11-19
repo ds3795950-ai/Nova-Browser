@@ -32,6 +32,9 @@ object NovaBrowserVpnController {
             preferences?.edit()?.putString("nova_vpn_status", message)?.apply()
             statusListener?.invoke()
         }
+        // Restore the persisted toggle before any Cefrium profile is opened. Profiles
+        // registered later will receive a fail-closed proxy until the extension handshake.
+        CefriumVpnController.setEnabled(preferences?.getBoolean("nova_vpn_enabled", false) == true)
 
         geckoRuntime.getWebExtensionController()
             .ensureBuiltIn(EXTENSION_URI, EXTENSION_ID)
