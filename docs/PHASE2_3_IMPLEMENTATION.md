@@ -22,7 +22,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 
 ### Remaining production work
 - `MainActivity.BrowserTab` still retains a `GeckoSession?` for Gecko-specific delegates and features; the common interface is not yet the sole production tab owner.
-- Split-pane is still GeckoView-only. Gecko-specific extension APIs, translation, Reader and some prompts remain engine-specific; keep those actions on GeckoView until capability adapters exist.
+- Split-pane can host either GeckoView or Cefrium in the secondary pane. Gecko-specific extension APIs, translation, Reader and some prompts remain engine-specific; keep those actions on GeckoView until capability adapters exist.
 - Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Cefrium downloads are now published to `Downloads/Nova` and registered in Nova's persisted download list. Cefrium password save/fill is not exposed by the current SDK's documented public API; origins with saved logins continue to use GeckoView's encrypted vault and autofill.
 - Add isolated, erasable Cefrium profiles for Private and Guest before enabling those modes on Cefrium.
 - Validate engine switching, lifecycle and crash recovery on Android devices; CI and device acceptance remain required.
