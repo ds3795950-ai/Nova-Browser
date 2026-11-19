@@ -161,7 +161,7 @@ try {
     await option.click();
     await driver.pause(400);
     const selectedText = await serverButton.getText();
-    const selected = selectedText.includes(city);
+    const selected = selectedText.toLowerCase().includes(city.toLowerCase());
     record(`Select ${city} free server`, selected, selected ? '' : `Displayed: ${selectedText}`);
     if (!selected) throw new Error(`Server selection did not update to ${city}`);
   }
@@ -182,7 +182,9 @@ try {
   record('VPN preference persists after app restart', (await checked(vpnAfterRestart)) === finalVpn);
   record('Firewall preference persists after app restart', (await checked(firewallAfterRestart)) === finalFirewall);
   const serverAfterRestart = await driver.$('android=new UiSelector().className("android.widget.Button").textStartsWith("Server:")');
-  record('Selected free server persists after app restart', (await serverAfterRestart.getText()).includes('Los Angeles'));
+  const serverPersisted = (await serverAfterRestart.getText()).toLowerCase().includes('los angeles');
+  record('Selected free server persists after app restart', serverPersisted);
+  if (!serverPersisted) throw new Error('Selected free server did not persist after app restart');
 
   // Exercise every entry in Nova Settings on the real Android device.
   await driver.back();
