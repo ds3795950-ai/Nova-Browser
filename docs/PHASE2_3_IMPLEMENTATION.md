@@ -5,34 +5,42 @@ Branch: `feature/phase-1-dual-engine-foundation`
 ## Phase 2: engine selection and production tab migration
 
 ### Implemented foundation
-- `BrowserEnginePreferenceStore` persists the global mode and optional Guest override. It resolves through the policy and exact-host affinity repository; it is not yet wired into `MainActivity`.
+- `BrowserEnginePreferenceStore` persists the global mode and optional Guest override. It is wired into the production Settings menu and normal-tab creation.
 - `EngineSelectionPolicy` is pure and unit-testable. Automatic normal/private mode prefers Cefrium, honors exact-site affinity, and falls back to GeckoView when Cefrium is unavailable or the site is known incompatible. Explicit global GeckoView/Cefrium modes take precedence over site affinity.
 - Guest mode defaults to GeckoView; Cefrium is selected only when an explicit Guest override is supplied. Cefrium unavailable/incompatible still falls back safely.
 - `BrowserEngineProfilePolicy` reserves `nova-normal-v1` for persistent Normal Cefrium browsing and requires Private/Guest Cefrium profiles to be ephemeral. Gecko Guest context IDs remain separate.
 
+### Production integration landed (partial)
+- Normal tabs now resolve their engine through `BrowserEnginePreferenceStore`; the Settings menu exposes Automatic, Cefrium and GeckoView modes.
+- Normal-tab rendering, navigation, back/forward, reload, tab switching, session-budget eviction and Activity pause/resume route through the Cefrium adapter when Cefrium is selected.
+- Normal-tab engine selection is persisted with session restore. The Settings menu can save an exact-host engine affinity for the current Normal site.
+- Private and Guest tabs deliberately remain on GeckoView. Cefrium's shared incognito profile cannot currently provide the separate, independently erasable Private and Guest storage contexts required by Nova.
+- Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases.
+
 ### Remaining production work
-- `MainActivity.BrowserTab` still contains a `GeckoSession?`; many feature delegates and browser actions access Gecko APIs directly. The common interface is not yet the production tab owner.
-- Migrate tab records to engine-neutral `BrowserTab` + `BrowserEngine`, and route rendering, back/forward, navigation, lifecycle and close through the interface.
-- Re-home Gecko-specific prompts, permissions, extension APIs, translation, downloads, autofill and Shield behind capability adapters. Unsupported features must be explicit, not silently dropped.
-- Add the user-facing engine selector only after the production tab manager uses the policy.
-- Preserve split-pane, tab groups, session restore, Private and Guest isolation.
+- `MainActivity.BrowserTab` still retains a `GeckoSession?` for Gecko-specific delegates and features; the common interface is not yet the sole production tab owner.
+- Split-pane is still GeckoView-only. Re-home Gecko-specific prompts, permissions, extension APIs, translation, downloads, autofill and Shield behind engine capability adapters; preserve parity or clearly expose unsupported behavior.
+- Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Add secure password save/fill and download integration before removing the corresponding Gecko fallback.
+- Add isolated, erasable Cefrium profiles for Private and Guest before enabling those modes on Cefrium.
+- Validate engine switching, lifecycle and crash recovery on Android devices; CI and device acceptance remain required.
 
 ## Phase 3: shared browser data and site migration
 
-### Implemented foundation
-- `SiteEngineAffinityStore` persists exact-host choices for Normal mode only. It does not guess registrable domains or share affinity with Private/Guest.
-- `WebsiteDataMigrationCoordinator` requires explicit consent, exports only through engine adapters, verifies destination import, and never deletes source data.
-- Portable data contract covers cookies, localStorage and opaque adapter-provided IndexedDB payloads.
+### Implemented foundation and shared state
+- `SiteEngineAffinityStore` persists exact-host choices for Normal mode only. It is wired to a Settings action and does not guess registrable domains or share affinity with Private/Guest.
+- Normal-tab URLs, tab groups/session metadata, history and bookmarks remain in Nova-owned app storage, so both engine paths can use the same browser-level records.
+- The existing password vault remains app-owned; Cefrium is conservatively avoided for origins with saved logins until a Cefrium autofill adapter is available.
+- `WebsiteDataMigrationCoordinator` requires explicit consent, exports only through engine adapters, verifies destination import, and never deletes source data. It is still a contract, not an end-to-end migration feature.
 
 ### Remaining production work
-- Implement GeckoView and Cefrium `WebsiteDataPort` adapters and test real export/import semantics.
-- Wire existing app-level bookmarks, history, downloads, password vault, permissions, Shield and normal-tab/session metadata to engine-neutral repositories; keep secrets and Private/Guest data out of sync.
+- No concrete GeckoView/Cefrium `WebsiteDataPort` adapters are wired. Cross-engine cookies, localStorage and IndexedDB are not yet migrated.
+- Integrate Cefrium downloads and permission prompts with Nova's app-level repositories; implement secure password save/fill in Cefrium before treating the vault as fully shared.
+- Keep engine-native data distinct; do not claim service workers, Cache Storage, sessionStorage, passkeys or device-bound credentials are portable. Require re-fetch or reauthentication where needed.
 - Add related-domain affinity for authentication flows without broadly grouping unrelated origins.
-- Keep service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials out of the portable guarantee; require re-fetch or reauthentication.
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates
-- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. CI result is pending.
+- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. Production wiring CI is running; prior lint runs exposed missing-class diagnostics in Cefrium-generated service manifest entries.
 - Instrumented tests cover both engines in one process, multiple tabs, split-pane, pause/resume, crash recovery and close.
 - Device tests cover Android 10+ ARM64, Cefrium memory/APK footprint, site compatibility and GeckoView regressions.
 - Migration tests use disposable profiles and confirm destination state before any optional source cleanup.

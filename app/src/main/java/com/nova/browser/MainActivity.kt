@@ -1797,6 +1797,19 @@ class MainActivity : ComponentActivity() {
         startActivityForResult(intent, historyExportRequestCode)
     }
 
+    private fun rememberCurrentSiteEngine() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Site engine preferences are saved only for Normal browsing")
+            return
+        }
+        if (tab.lastUrl == HOME_URL || !enginePreferences.setSiteAffinity(tab.lastUrl, tab.engineType)) {
+            toast("Open a website first to save its engine preference")
+            return
+        }
+        toast("${tab.engineType.name} remembered for this site in Automatic mode")
+    }
+
     private fun showBrowserEngineSettings() {
         val modes = arrayOf("Automatic · Cefrium preferred", "Cefrium · Chromium", "GeckoView · Firefox")
         val values = BrowserEngineMode.values()
@@ -1824,10 +1837,15 @@ class MainActivity : ComponentActivity() {
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
         val items = mutableListOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "VPN & Firewall · 1VPN")
         val enginePreferenceIndex = items.size.also { items.add("Browser engine · ${enginePreferences.normalMode().name.lowercase().replaceFirstChar { it.uppercase() }}") }
+        val siteEngineIndex = items.size.also { items.add("Remember this site's current engine") }
         val engineProbeIndex = if (BuildConfig.DEBUG) items.size.also { items.add("Developer · Cefrium engine test") } else -1
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items.toTypedArray()) { _, which ->
             if (which == enginePreferenceIndex) {
                 showBrowserEngineSettings()
+                return@setItems
+            }
+            if (which == siteEngineIndex) {
+                rememberCurrentSiteEngine()
                 return@setItems
             }
             if (which == engineProbeIndex) {
