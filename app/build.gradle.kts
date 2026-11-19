@@ -6,6 +6,7 @@ import java.util.zip.ZipInputStream
 
 plugins {
     id("com.android.application")
+    id("com.cefrium")
 }
 
 val releaseStorePath = System.getenv("NOVA_RELEASE_KEYSTORE_PATH")
@@ -39,7 +40,7 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a")
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = false
         }
     }
@@ -87,8 +88,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
-    // GeckoView is the sole browser engine.
+    // GeckoView remains the production engine while the Cefrium adapter is evaluated.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
+    implementation("com.cefrium:cefrium-sdk:0.21.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
+    implementation("androidx.core:core:1.16.0")
+    implementation("androidx.browser:browser:1.8.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 }

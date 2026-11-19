@@ -25,3 +25,12 @@ Nova uses GeckoView WebExtensions. Firefox-compatible signed extensions that sup
 ## Sync
 
 Cloud sync is end-to-end encrypted with a passphrase that is not uploaded. Each device must use the same passphrase. Bookmark, workspace and saved-password deletions plus history-clear timestamps now merge across devices. Supabase updated_at triggers plus compare-and-swap writes detect simultaneous-device edits instead of silently overwriting a newer revision; retry Sync now after a conflict. Private/Guest data is excluded. Automatic sync remains opt-in and requires the encrypted passphrase to be stored locally under Android Keystore protection; the passphrase is never stored in plaintext or sent to Supabase.
+
+
+## Dual-engine transition — Phase 1 findings
+
+The production `MainActivity` still uses GeckoView for all tabs. Phase 1 introduces Cefrium as an isolated engine adapter and debug-only Engine Lab; it does not yet change the production engine or add a user-facing selector.
+
+Cefrium 0.21.0 is a pre-1.0 Chromium 156 SDK. Its named profiles persist cookies, local storage, IndexedDB, service workers and cache; its in-memory `incognito()` profile is separate. Its fixed profile proxy fails requests rather than falling back directly, but Cefrium explicitly documents that WebRTC is not covered by the proxy. Tor mode must therefore also enforce and test WebRTC/IP-handling policy and DNS behavior.
+
+Guest-only Tor is not solved by adding an app-wide Android VPN: that can route normal-mode traffic too. The final design must prove a per-engine/profile route for Cefrium and a separately isolated route for GeckoView, including DNS, UDP/WebRTC and failure cases. GeckoView's public API does not expose a simple per-session proxy setting; runtime arguments/configuration and process isolation require a dedicated proof-of-concept. Arti's official Android guide currently requires custom JNI bindings because it does not provide a stable Rust API. No Tor implementation is selected or claimed complete in Phase 1.

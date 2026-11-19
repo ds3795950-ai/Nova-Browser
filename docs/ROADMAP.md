@@ -2,6 +2,13 @@
 
 Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitHub workflow passed; **DEVICE TEST REQUIRED** means real Android interaction remains unverified; **DASHBOARD SETUP REQUIRED** means a Supabase project setting must be completed by the project owner.
 
+## Current dual-engine transition
+
+- **Phase 1 branch:** adds Cefrium 0.21.0, a common `BrowserEngine` contract, GeckoView and Cefrium adapters, a debug-only Cefrium Engine Lab, and the Cefrium-compatible build toolchain.
+- **Not yet implemented:** production tab-manager migration, Automatic/Cefrium/GeckoView user selector, unified cross-engine storage, session migration and embedded Tor.
+- **Current production behavior:** `MainActivity` still renders normal, private and Guest tabs with GeckoView. The Cefrium Engine Lab is diagnostic only.
+- **Verification:** CI and debug-device smoke testing are required before this foundation is considered verified. BrowserStack real-device testing remains blocked until App Automate access is restored.
+
 ## Core browser and privacy
 
 - GeckoView is the only browser engine; no Chromium or WebView fallback.

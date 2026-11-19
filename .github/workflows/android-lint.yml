@@ -17,10 +17,10 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '25'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.3.1'
+          gradle-version: '9.7.1'
       - name: Run Android lint (bounded)
         run: timeout 8m gradle :app:lintDebug --no-daemon --continue
       - name: Upload lint reports

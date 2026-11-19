@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".CefriumEngineProbeActivity"
+            android:exported="false"
+            android:label="Cefrium Engine Lab" />
+    </application>
+</manifest>
