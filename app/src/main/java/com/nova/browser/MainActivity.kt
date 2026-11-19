@@ -800,7 +800,7 @@ class MainActivity : ComponentActivity() {
             splitTabId = splitTabId
         )
         tabs.forEach { tab ->
-            if (tab !in keep && (tab.session != null || tab.cefriumEngine != null) && tab.id != splitTabId) {
+            if (tab.id !in keep && (tab.session != null || tab.cefriumEngine != null) && tab.id != splitTabId) {
                 tab.session?.setActive(false)
                 tab.session?.setFocused(false)
                 tab.session?.close()
