@@ -15,7 +15,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Normal-tab rendering, navigation, back/forward, reload, tab switching, session-budget eviction and Activity pause/resume route through the Cefrium adapter when Cefrium is selected.
 - Normal-tab engine selection is persisted with session restore. The Settings menu can save an exact-host engine affinity for the current Normal site.
 - Private and Guest tabs deliberately remain on GeckoView. Cefrium's shared incognito profile cannot currently provide the separate, independently erasable Private and Guest storage contexts required by Nova.
-- Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases. Enabling Shield or Protected DNS while a Cefrium tab is active also switches that tab to GeckoView and warns that website state is not migrated.
+- Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases. Saving or syncing a login for the active Cefrium site's origin also switches that tab to GeckoView. Enabling Shield or Protected DNS while a Cefrium tab is active switches that tab to GeckoView and warns that website state is not migrated.
 - Desktop-site and Reader actions that require GeckoView switch the active tab to GeckoView before attaching a Gecko session.
 - Cefrium site permission requests use the typed `CefriumChromeClient` callback. Nova displays the requesting origin and permission names, then asks for any required Android runtime permissions only after the user chooses Allow. Denial is the default if no UI callback is supplied.
 - Cefrium surface browsers use the SDK's built-in file chooser for `<input type=file>`; Nova does not replace it with an unverified custom picker.
@@ -43,7 +43,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates
-- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. The latest integration CI exposed a constructor mismatch in the debug Engine Lab; a fix is committed and the rerun is pending.
+- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. The latest debug Engine Lab constructor fix, typed Cefrium permission handler and password fallback are committed; the CI/lint reruns are pending.
 - Instrumented tests cover both engines in one process, multiple tabs, split-pane, pause/resume, crash recovery and close.
 - Device tests cover Android 10+ ARM64, Cefrium memory/APK footprint, site compatibility and GeckoView regressions.
 - Migration tests use disposable profiles and confirm destination state before any optional source cleanup.
