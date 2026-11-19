@@ -14,6 +14,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Normal tabs now resolve their engine through `BrowserEnginePreferenceStore`; the Settings menu exposes Automatic, Cefrium and GeckoView modes.
 - Normal-tab rendering, navigation, back/forward, reload, tab switching, session-budget eviction and Activity pause/resume route through the Cefrium adapter when Cefrium is selected.
 - Normal-tab engine selection is persisted with session restore. The Settings menu can save an exact-host engine affinity for the current Normal site.
+- Normal tabs can explicitly switch the current tab between GeckoView and Cefrium from Settings. The action warns that engine-native cookies and website storage are not migrated, preserves the source engine's stored profile, and blocks Cefrium when Nova Shield, Protected DNS, desktop-site mode, Reader view or saved-login autofill requires GeckoView.
 - Private and Guest tabs deliberately remain on GeckoView. Cefrium's shared incognito profile cannot currently provide the separate, independently erasable Private and Guest storage contexts required by Nova.
 - Cefrium is marked incompatible when Gecko-only Nova Shield, Protected DNS or a saved-login site would otherwise lose its existing protection/autofill path. Automatic mode falls back to GeckoView in those cases. Saving or syncing a login for the active Cefrium site's origin also switches that tab to GeckoView. Enabling Shield or Protected DNS while a Cefrium tab is active switches that tab to GeckoView and warns that website state is not migrated.
 - Desktop-site and Reader actions that require GeckoView switch the active tab to GeckoView before attaching a Gecko session.
@@ -25,7 +26,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Split-pane can host either GeckoView or Cefrium in the secondary pane. Gecko-specific extension APIs, translation, Reader and some prompts remain engine-specific; keep those actions on GeckoView until capability adapters exist.
 - Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Cefrium downloads are now published to `Downloads/Nova` and registered in Nova's persisted download list. Cefrium password save/fill is not exposed by the current SDK's documented public API; origins with saved logins continue to use GeckoView's encrypted vault and autofill.
 - Add isolated, erasable Cefrium profiles for Private and Guest before enabling those modes on Cefrium.
-- Validate engine switching, lifecycle and crash recovery on Android devices; CI and device acceptance remain required.
+- Complete automated regression coverage for explicit per-tab engine switching, lifecycle and crash recovery; physical Android device acceptance remains required.
 
 ## Phase 3: shared browser data and site migration
 

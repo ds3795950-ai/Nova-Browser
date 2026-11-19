@@ -4,29 +4,34 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 
 ## Current dual-engine transition
 
-- **Phase 1 branch:** adds Cefrium 0.21.0, a common `BrowserEngine` contract, GeckoView and Cefrium adapters, a debug-only Cefrium Engine Lab, and the Cefrium-compatible build toolchain.
-- **Not yet implemented:** production tab-manager migration, Automatic/Cefrium/GeckoView user selector, unified cross-engine storage, session migration and embedded Tor.
-- **Current production behavior:** `MainActivity` still renders normal, private and Guest tabs with GeckoView. The Cefrium Engine Lab is diagnostic only.
-- **Verification:** CI and debug-device smoke testing are required before this foundation is considered verified. BrowserStack real-device testing remains blocked until App Automate access is restored.
+- **Active branch:** `feature/phase-1-dual-engine-foundation`; Cefrium SDK 0.21.0 is integrated alongside GeckoView.
+- **Production behavior:** compatible Normal tabs can use Cefrium or GeckoView through Automatic/Cefrium/GeckoView settings. Automatic prefers Cefrium and falls back to GeckoView when Cefrium is unavailable or a Gecko-only protection/autofill feature is required.
+- **Per-tab switching:** Normal tabs can be explicitly reloaded in the other engine after a warning. Website cookies, storage and login sessions are not transferred; the source engine's profile remains intact. Switching to Cefrium is blocked when Nova Shield, Protected DNS, desktop-site mode, Reader view or saved-login autofill requires GeckoView.
+- **Integrated Cefrium features:** normal-tab navigation/lifecycle, secondary split-pane rendering, site permission prompts and completed-download publication into Nova's download repository.
+- **Privacy boundary:** Private and Guest tabs remain on GeckoView. Cefrium's built-in incognito profile is shared, and named profiles are persistent until safely deleted; Nova does not enable Cefrium in those modes until independently erasable contexts can meet the privacy requirement.
+- **Still outstanding:** native Cefrium equivalents for Nova Shield and Protected DNS, documented password save/fill integration, concrete cross-engine data export/import adapters, full engine-neutral tab ownership, and end-to-end device validation.
+- **Verification:** the previous Android CI run passed on commit `189b9a0`; the lint run failed on a missing optional camera feature declaration, which was fixed in commit `6df5861`. New checks for the current branch head are running. BrowserStack real-device testing remains blocked because the trial quota expired.
 
-### Phase 2 — engine selection and tab migration foundation
+### Phase 2 — engine selection and production integration
 
-- **Committed in this continuation:** pure engine-selection policy for Automatic / Cefrium / GeckoView, Automatic-mode site-affinity precedence, Cefrium-unavailable/incompatible fallback, and the Guest GeckoView default with explicit Guest Cefrium override.
-- **Committed:** profile-lifetime policy that reserves a persistent Cefrium profile for Normal mode and requires ephemeral engine profiles for Private and Guest.
-- **Not yet production-integrated:** `MainActivity` still owns `GeckoSession` directly; the engine-neutral tab manager, UI selector, Cefrium tab rendering in the production tab strip, Gecko-only feature delegation, and full navigation/permission/download/extension parity remain outstanding. Do not expose the selector as an operational production setting until that migration and regression tests land.
+- **Implemented:** common engine contract and GeckoView/Cefrium adapters; Automatic/Cefrium/GeckoView selector; exact-host site affinity; safe fallback; explicit per-tab switching with a data-loss warning; Cefrium normal-tab navigation, lifecycle, split-pane, permissions and downloads.
+- **Not enabled by design:** Cefrium Private/Guest contexts, because the SDK's built-in incognito profile is shared and named profiles do not guarantee immediate erasure during a running process. GeckoView remains the privacy-mode engine.
+- **Gecko-only routes:** Nova Shield, Protected DNS, desktop-site mode, Reader view and saved-login autofill continue to use GeckoView. Do not bypass these guards just to increase Cefrium coverage.
+- **Remaining:** native Cefrium protection equivalents, a supported password/autofill delegate, more complete engine-neutral tab ownership, crash/lifecycle regression tests and physical-device acceptance.
 
-### Phase 3 — shared data and cross-engine migration foundation
+### Phase 3 — shared data and cross-engine migration
 
-- **Committed in this continuation:** exact-host site-engine affinity persistence for Normal mode only, plus a persistent engine preference repository and a consent-gated migration coordinator contract for portable cookies, localStorage and adapter-provided IndexedDB payloads. New unit tests cover migration consent and verification failure.
-- **Safety invariant:** source engine data is never deleted by migration; destination import must verify before the coordinator reports success. Guest/Private affinity is never persisted.
-- **Not yet production-integrated:** concrete GeckoView/Cefrium export/import adapters, browser-level tab/session/history/bookmark/password/permission/download repositories wired to both engines, identity-provider related-domain affinity, and end-to-end migration verification remain outstanding. Service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials are not promised to migrate.
+- **Implemented foundation:** app-level tabs/session metadata, history, bookmarks and download records are shared through Nova-owned storage; exact-host engine affinity is stored only for Normal mode.
+- **Migration contract:** requires explicit consent, destination verification and preserves source data. It is not a full end-to-end migration implementation.
+- **Hard limitation:** GeckoView's documented public storage API does not provide general cookie/storage export. HttpOnly/partitioned cookies, service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials are not guaranteed portable. Users may need to reauthenticate after switching engines.
+- **Remaining:** concrete export/import adapters where APIs permit, recovery UX for partial migration, more cross-engine integration tests and device acceptance.
 
 ## Core browser and privacy
 
-- GeckoView is the only browser engine; no Chromium or WebView fallback.
+- GeckoView is the privacy/protection fallback and the engine for Private/Guest tabs; Cefrium serves compatible Normal tabs.
 - Address/search, search provider selection, navigation, tabs, normal session restore, private tabs and isolated ephemeral Guest context.
 - Bookmarks, history, downloads/uploads, workspaces, desktop-site mode, reader mode, translation, sharing and split-pane tab workflow.
-- Nova Shield uses GeckoView native tracking protection, cookie isolation, Safe Browsing, GPC/fingerprinting controls and per-site permissions. Coverage depends on GeckoView's shipped lists; it is not a DNS firewall and does not guarantee every ad is blocked.
+- Nova Shield currently uses GeckoView native tracking protection, cookie isolation, Safe Browsing, GPC/fingerprinting controls and per-site permissions. Cefrium is not selected while these protections are enabled.
 - ChatGPT, Claude and Perplexity handoff use official websites. Prompt content is user-entered; page URL context is opt-in; page content is not scraped or sent automatically.
 - GeckoView WebExtension management and AES-GCM local password vault. Extension compatibility depends on the embedded GeckoView version. Private/Guest browsing does not save or retrieve passwords.
 - Guest Mode is local ephemeral isolation, not Tor routing or Tor-level anonymity.
