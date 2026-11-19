@@ -9,6 +9,18 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 - **Current production behavior:** `MainActivity` still renders normal, private and Guest tabs with GeckoView. The Cefrium Engine Lab is diagnostic only.
 - **Verification:** CI and debug-device smoke testing are required before this foundation is considered verified. BrowserStack real-device testing remains blocked until App Automate access is restored.
 
+### Phase 2 — engine selection and tab migration foundation
+
+- **Committed in this continuation:** pure engine-selection policy for Automatic / Cefrium / GeckoView, Automatic-mode site-affinity precedence, Cefrium-unavailable/incompatible fallback, and the Guest GeckoView default with explicit Guest Cefrium override.
+- **Committed:** profile-lifetime policy that reserves a persistent Cefrium profile for Normal mode and requires ephemeral engine profiles for Private and Guest.
+- **Not yet production-integrated:** `MainActivity` still owns `GeckoSession` directly; the engine-neutral tab manager, UI selector, Cefrium tab rendering in the production tab strip, Gecko-only feature delegation, and full navigation/permission/download/extension parity remain outstanding. Do not expose the selector as an operational production setting until that migration and regression tests land.
+
+### Phase 3 — shared data and cross-engine migration foundation
+
+- **Committed in this continuation:** exact-host site-engine affinity persistence for Normal mode only, plus a consent-gated migration coordinator contract for portable cookies, localStorage and adapter-provided IndexedDB payloads.
+- **Safety invariant:** source engine data is never deleted by migration; destination import must verify before the coordinator reports success. Guest/Private affinity is never persisted.
+- **Not yet production-integrated:** concrete GeckoView/Cefrium export/import adapters, browser-level tab/session/history/bookmark/password/permission/download repositories wired to both engines, identity-provider related-domain affinity, and end-to-end migration verification remain outstanding. Service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials are not promised to migrate.
+
 ## Core browser and privacy
 
 - GeckoView is the only browser engine; no Chromium or WebView fallback.
