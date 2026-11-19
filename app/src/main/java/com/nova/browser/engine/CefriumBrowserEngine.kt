@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
 import android.os.Environment
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -17,15 +18,25 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
+/** Metadata for a Cefrium download after it has been published to Android Downloads. */
+data class CefriumDownloadInfo(
+    val url: String,
+    val fileName: String,
+    val mimeType: String,
+    val bytes: Long,
+    val savedUri: String
+)
+
 /** Cefrium implementation of the shared per-tab engine contract. */
 class CefriumBrowserEngine(
     activity: Activity,
     profile: CefriumProfile,
-    private val listener: BrowserEngineListener? = null
+    private val listener: BrowserEngineListener? = null,
+    private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {}
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     private val browser = CefriumBrowser.createWithSurface(activity, profile)
-    private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext)
+    private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()
     private var currentState = BrowserEngineState(
         url = browser.getUrl(),
@@ -113,7 +124,10 @@ class CefriumBrowserEngine(
  * The engine writes to its app-private Downloads directory first; only completed files
  * are copied to MediaStore, and the private source is deleted only after publication.
  */
-private class CefriumDownloadPublisher(context: Context) {
+private class CefriumDownloadPublisher(
+    context: Context,
+    private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit
+) {
     private val appContext = context.applicationContext
     private val publishingIds = ConcurrentHashMap.newKeySet<Int>()
 
@@ -129,24 +143,38 @@ private class CefriumDownloadPublisher(context: Context) {
 
         override fun onDownloadUpdated(browser: CefriumBrowser, item: CefriumBrowser.DownloadItem) {
             if (!item.isComplete || !publishingIds.add(item.id)) return
+            val downloadId = item.id
             val sourcePath = item.fullPath
+            val downloadUrl = item.url
             val fileName = DownloadProtocol.safeFileName(item.suggestedName)
             val mimeType = item.mimeType.ifBlank { "application/octet-stream" }
             PUBLISH_EXECUTOR.execute {
+                var publishedSuccessfully = false
                 try {
-                    publishCompletedFile(File(sourcePath), fileName, mimeType)
+                    val published = publishCompletedFile(File(sourcePath), fileName, mimeType)
+                    publishedSuccessfully = true
+                    runCatching {
+                        onDownloadCompleted(CefriumDownloadInfo(
+                            url = downloadUrl,
+                            fileName = fileName,
+                            mimeType = mimeType,
+                            bytes = published.second,
+                            savedUri = published.first.toString()
+                        ))
+                    }
                     notifyUser("Download saved to Downloads/Nova")
                 } catch (error: Exception) {
                     notifyUser("Download completed but could not be moved to Downloads/Nova: ${error.localizedMessage ?: "unknown error"}")
                 } finally {
-                    publishingIds.remove(item.id)
+                    if (!publishedSuccessfully) publishingIds.remove(downloadId)
                 }
             }
         }
     }
 
-    private fun publishCompletedFile(source: File, fileName: String, mimeType: String) {
+    private fun publishCompletedFile(source: File, fileName: String, mimeType: String): Pair<Uri, Long> {
         check(source.isFile) { "Cefrium's completed download file is unavailable" }
+        val byteCount = source.length()
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
             put(MediaStore.Downloads.MIME_TYPE, mimeType)
@@ -161,7 +189,9 @@ private class CefriumDownloadPublisher(context: Context) {
             } ?: throw IllegalStateException("Android could not write the Downloads file")
             val ready = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
             appContext.contentResolver.update(uri, ready, null, null)
-            check(source.delete()) { "Published download, but the private temporary file could not be removed" }
+            // A failed cleanup must not invalidate a successfully published public download.
+            runCatching { source.delete() }
+            return uri to byteCount
         } catch (error: Exception) {
             appContext.contentResolver.delete(uri, null, null)
             throw error
