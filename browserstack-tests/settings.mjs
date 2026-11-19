@@ -171,7 +171,7 @@ try {
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
   await driver.pause(1500);
-  const homeAfterRestart = driver.$('android=new UiSelector().text("NOVA")');
+  const homeAfterRestart = driver.$('android=new UiSelector().textContains("Nova Browser")');
   await homeAfterRestart.waitForDisplayed({ timeout: 30000 });
   await tapToolbar('Settings', 1);
   const vpnMenuAfterRestart = await scrollToSetting('VPN & Firewall · 1VPN');
