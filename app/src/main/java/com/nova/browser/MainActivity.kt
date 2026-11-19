@@ -495,24 +495,39 @@ class MainActivity : ComponentActivity() {
         tab.cefriumEngine?.let { return it }
         check(!tab.isPrivate && !tab.isGuest) { "Cefrium is not enabled for private profiles yet" }
         val profile = CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
-        val engine = CefriumBrowserEngine(this, profile) { state ->
-            runOnUiThread {
-                val previousUrl = tab.lastUrl
-                state.url?.takeIf { it.isNotBlank() }?.let { tab.lastUrl = it }
-                state.title?.takeIf { it.isNotBlank() }?.let { tab.title = it }
-                tab.canGoBack = state.canGoBack
-                tab.canGoForward = state.canGoForward
-                if (currentTab() === tab) {
-                    state.url?.takeIf { it.isNotBlank() }?.let { addressBar.setText(it) }
-                    state.title?.takeIf { it.isNotBlank() }?.let { tabLabel.text = it.take(32) }
-                    pageStatus.text = if (state.isLoading) "Loading · Cefrium" else "Cefrium · ${state.progress}%"
+        val engine = CefriumBrowserEngine(
+            activity = this,
+            profile = profile,
+            listener = { state ->
+                runOnUiThread {
+                    val previousUrl = tab.lastUrl
+                    state.url?.takeIf { it.isNotBlank() }?.let { tab.lastUrl = it }
+                    state.title?.takeIf { it.isNotBlank() }?.let { tab.title = it }
+                    tab.canGoBack = state.canGoBack
+                    tab.canGoForward = state.canGoForward
+                    if (currentTab() === tab) {
+                        state.url?.takeIf { it.isNotBlank() }?.let { addressBar.setText(it) }
+                        state.title?.takeIf { it.isNotBlank() }?.let { tabLabel.text = it.take(32) }
+                        pageStatus.text = if (state.isLoading) "Loading · Cefrium" else "Cefrium · ${state.progress}%"
+                    }
+                    if (state.url != null && state.url != previousUrl && !tab.isPrivate && !tab.isGuest && !state.url.startsWith("about:")) {
+                        addHistory(state.url)
+                        persistTabs()
+                    }
                 }
-                if (state.url != null && state.url != previousUrl && !tab.isPrivate && !tab.isGuest && !state.url.startsWith("about:")) {
-                    addHistory(state.url)
-                    persistTabs()
+            },
+            onDownloadCompleted = { download ->
+                runOnUiThread {
+                    novaDownloads.registerCompleted(
+                        url = download.url,
+                        fileName = download.fileName,
+                        mimeType = download.mimeType,
+                        savedUri = download.savedUri,
+                        bytes = download.bytes
+                    )
                 }
             }
-        }
+        )
         tab.cefriumEngine = engine
         if (tab.needsReload && tab.lastUrl != HOME_URL && tab.lastUrl.startsWith("http")) {
             engine.loadUrl(tab.lastUrl)
