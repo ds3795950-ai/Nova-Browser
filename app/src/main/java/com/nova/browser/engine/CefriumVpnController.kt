@@ -41,11 +41,14 @@ object CefriumVpnController {
     }
 
     fun updateCredentials(config: CefriumVpnCredentials?) {
+        if (!enabled) {
+            credentials = null
+            return
+        }
         credentials = config?.takeIf {
             it.host.isNotBlank() && it.port in 1..65535 &&
                 it.username.isNotBlank() && it.password.isNotBlank()
         }
-        if (!enabled) return
         applyAllProfiles()
         publish(if (credentials == null) "1VPN configuration unavailable; Cefrium traffic is blocked"
             else "1VPN proxy configured · " + credentials!!.location.uppercase())
