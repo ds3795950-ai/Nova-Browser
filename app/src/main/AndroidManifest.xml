@@ -22,6 +22,7 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name="com.sentinel.ui.SentinelActivity" android:exported="false" />
+        <activity android:name=".NovaVpnFirewallActivity" android:exported="false" />
         <service
             android:name=".NovaDownloadService"
             android:exported="false"

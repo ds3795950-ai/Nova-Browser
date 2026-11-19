@@ -239,8 +239,9 @@ try {
   await tapToolbar('Private', 0);
   await driver.pause(500);
   if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Guest Mode created a separate Private tab');
-  await byTextContains('Guest tab · temporary').waitForDisplayed({ timeout: 5000 });
-  record('Guest mode blocks Private tab creation', true, 'Guest tab remains active after the Private action');
+  await byTextContains('Guest Mode · temporary data').waitForDisplayed({ timeout: 10000 });
+  if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Private action escaped Guest Mode');
+  record('Guest mode blocks Private tab creation', true, 'Stable Guest Mode page status remains active after the Private action');
 
   await tapToolbar('Settings', 1);
   try {

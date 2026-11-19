@@ -1736,7 +1736,7 @@ class MainActivity : ComponentActivity() {
                     .setPositiveButton("OK", null).show()
                 14 -> showCloudAccount()
                 15 -> showProtectedDnsSettings()
-                16 -> startActivity(Intent(this, com.sentinel.ui.SentinelActivity::class.java))
+                16 -> startActivity(Intent(this, NovaVpnFirewallActivity::class.java))
             }
         }.show()
     }

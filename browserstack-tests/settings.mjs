@@ -92,9 +92,12 @@ try {
   await driver.saveScreenshot(`${out}/settings-menu.png`);
   const vpnMenuEntry = await scrollToSetting('VPN & Firewall · 1VPN');
   await vpnMenuEntry.click();
-  await driver.pause(1200);
 
   const heading = await driver.$('android=new UiSelector().text("Nova VPN & Firewall")');
+  await driver.waitUntil(async () => {
+    const activity = await driver.getCurrentActivity().catch(() => '');
+    return activity.endsWith('NovaVpnFirewallActivity') && await heading.isDisplayed().catch(() => false);
+  }, { timeout: 20000, timeoutMsg: 'Nova VPN & Firewall activity did not become visible after selecting its Settings entry' });
   const headingVisible = await heading.isDisplayed().catch(() => false);
   record('VPN and firewall settings screen opens from Nova Settings', headingVisible, headingVisible ? '' : 'Expected Nova VPN & Firewall heading');
   if (!headingVisible) throw new Error('VPN and firewall settings screen did not open from Nova Settings');
