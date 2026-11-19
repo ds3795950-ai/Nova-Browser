@@ -44,23 +44,36 @@ const sessionStatus = byA11y('Nova session status');
 
 async function tapToolbar(label, rowIndex) {
   const safeLabel = label.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
+  const selectors = [
+    `android=new UiSelector().description("${safeLabel}")`,
+    `android=new UiSelector().text("${safeLabel}")`
+  ];
+  for (const selector of selectors) {
+    try {
+      const direct = driver.$(selector);
+      if (await direct.isDisplayed()) {
+        await direct.click();
+        return;
+      }
+    } catch (_) {}
+  }
   const rows = await driver.$$('android.widget.HorizontalScrollView');
   const indices = [rowIndex];
   for (let i = 0; i < rows.length; i++) if (i !== rowIndex) indices.push(i);
   for (const i of indices) {
-    for (const match of ['description', 'text']) {
+    for (let j = 0; j < selectors.length; j++) {
       try {
-        const selector = match === 'description'
-          ? `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().description("${safeLabel}"))`
-          : `android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(new UiSelector().text("${safeLabel}"))`;
-        const target = driver.$(selector);
+        const match = j === 0 ? `new UiSelector().description("${safeLabel}")` : `new UiSelector().text("${safeLabel}")`;
+        const scroller = driver.$(`android=new UiScrollable(new UiSelector().scrollable(true).className("android.widget.HorizontalScrollView").instance(${i})).setAsHorizontalList().scrollIntoView(${match})`);
+        await scroller.waitForDisplayed({ timeout: 3000 });
+        const target = driver.$(selectors[j]);
         await target.waitForDisplayed({ timeout: 3000 });
         await target.click();
         return;
       } catch (_) {}
     }
   }
-  throw new Error('Could not expose toolbar button: ' + label);
+  throw new Error('Could not find and click toolbar button: ' + label);
 }
 
 async function navigateTo(url, marker) {
