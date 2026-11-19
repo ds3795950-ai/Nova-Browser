@@ -1807,7 +1807,10 @@ class MainActivity : ComponentActivity() {
                 val url = if (raw.startsWith("https://") || raw.startsWith("http://")) raw else "https://$raw"
                 if (Uri.parse(url).host.isNullOrBlank() || username.text.isBlank() || password.text.isBlank()) { toast("Enter a valid site, username and password"); return@setPositiveButton }
                 runCatching { passwordVault.save(Autocomplete.LoginEntry.Builder().guid(UUID.randomUUID().toString()).origin("${Uri.parse(url).scheme}://${Uri.parse(url).host}").username(username.text.toString()).password(password.text.toString()).build()) }
-                    .onSuccess { toast("Login saved encrypted on this device") }
+                    .onSuccess {
+                        toast("Login saved encrypted on this device")
+                        switchCurrentTabToGeckoIfSavedLoginMatches()
+                    }
                     .onFailure { toast("Could not save login: ${it?.localizedMessage ?: "Unknown error"}") }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -1879,6 +1882,16 @@ class MainActivity : ComponentActivity() {
             addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-history.json")
         }
         startActivityForResult(intent, historyExportRequestCode)
+    }
+
+    private fun switchCurrentTabToGeckoIfSavedLoginMatches() {
+        val tab = currentTab() ?: return
+        if (tab.engineType != BrowserEngineType.CEFRIUM) return
+        val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull() ?: return
+        val hasSavedLogin = runCatching {
+            passwordVault.all().any { Uri.parse(it.origin).host.equals(host, ignoreCase = true) }
+        }.getOrDefault(false)
+        if (hasSavedLogin) switchCurrentTabToGecko("saved password autofill")
     }
 
     private fun switchCurrentTabToGecko(reason: String) {
@@ -2089,6 +2102,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 applySyncSnapshot(merged)
                 passwordVault.importSyncBundle(mergedVault)
+                switchCurrentTabToGeckoIfSavedLoginMatches()
                 prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
                 toast("Encrypted cloud sync completed")
             }
