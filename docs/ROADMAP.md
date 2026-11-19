@@ -17,7 +17,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 
 ### Phase 3 — shared data and cross-engine migration foundation
 
-- **Committed in this continuation:** exact-host site-engine affinity persistence for Normal mode only, plus a consent-gated migration coordinator contract for portable cookies, localStorage and adapter-provided IndexedDB payloads.
+- **Committed in this continuation:** exact-host site-engine affinity persistence for Normal mode only, plus a persistent engine preference repository and a consent-gated migration coordinator contract for portable cookies, localStorage and adapter-provided IndexedDB payloads. New unit tests cover migration consent and verification failure.
 - **Safety invariant:** source engine data is never deleted by migration; destination import must verify before the coordinator reports success. Guest/Private affinity is never persisted.
 - **Not yet production-integrated:** concrete GeckoView/Cefrium export/import adapters, browser-level tab/session/history/bookmark/password/permission/download repositories wired to both engines, identity-provider related-domain affinity, and end-to-end migration verification remain outstanding. Service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials are not promised to migrate.
 

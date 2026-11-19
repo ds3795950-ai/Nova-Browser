@@ -5,6 +5,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 ## Phase 2: engine selection and production tab migration
 
 ### Implemented foundation
+- `BrowserEnginePreferenceStore` persists the global mode and optional Guest override. It resolves through the policy and exact-host affinity repository; it is not yet wired into `MainActivity`.
 - `EngineSelectionPolicy` is pure and unit-testable. Automatic normal/private mode prefers Cefrium, honors exact-site affinity, and falls back to GeckoView when Cefrium is unavailable or the site is known incompatible. Explicit global GeckoView/Cefrium modes take precedence over site affinity.
 - Guest mode defaults to GeckoView; Cefrium is selected only when an explicit Guest override is supplied. Cefrium unavailable/incompatible still falls back safely.
 - `BrowserEngineProfilePolicy` reserves `nova-normal-v1` for persistent Normal Cefrium browsing and requires Private/Guest Cefrium profiles to be ephemeral. Gecko Guest context IDs remain separate.
@@ -31,7 +32,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates
-- Unit tests for selection policy and profile isolation pass.
+- Unit tests cover selection policy, Guest defaults/overrides, profile isolation, migration consent, portable-state counts and failed destination verification. CI result is pending.
 - Instrumented tests cover both engines in one process, multiple tabs, split-pane, pause/resume, crash recovery and close.
 - Device tests cover Android 10+ ARM64, Cefrium memory/APK footprint, site compatibility and GeckoView regressions.
 - Migration tests use disposable profiles and confirm destination state before any optional source cleanup.
