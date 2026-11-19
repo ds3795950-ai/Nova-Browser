@@ -269,6 +269,7 @@ class MainActivity : ComponentActivity() {
         }
         pageStatus = TextView(this).apply {
             text = "Ready"
+            contentDescription = "Nova session status"
             textSize = 11f
             setTextColor(0xFFB9AEC8.toInt())
             setPadding(dp(4), 0, dp(4), dp(4))
