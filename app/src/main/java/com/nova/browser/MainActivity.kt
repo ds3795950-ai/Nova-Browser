@@ -434,7 +434,7 @@ class MainActivity : ComponentActivity() {
             tab.lastUrl = HOME_URL
             tab.title = "Nova Home"
             tab.needsReload = false
-            if (!tab.isPrivate && !tab.isGuest) persistTabs()
+            if (GuestModePolicy.mayPersistBrowsingData(tab.isPrivate, tab.isGuest)) persistTabs()
         }
         showHomeScreen()
     }
@@ -531,7 +531,7 @@ class MainActivity : ComponentActivity() {
                         state.url?.takeIf { it.isNotBlank() }?.let { secondaryAddressBar.setText(it) }
                     }
                     if (state.url != null && state.url != previousUrl && !tab.isPrivate && !tab.isGuest && !state.url.startsWith("about:")) {
-                        addHistory(state.url)
+                        addHistory(state.url, tab)
                         persistTabs()
                     }
                 }
@@ -652,7 +652,7 @@ class MainActivity : ComponentActivity() {
     private fun ensureSession(tab: BrowserTab): GeckoSession {
         tab.session?.let { return it }
         val settings = GeckoSessionSettings.Builder()
-            .usePrivateMode(tab.isPrivate || tab.isGuest)
+            .usePrivateMode(tab.isPrivate || GuestModePolicy.requiresEphemeralStorage(tab.isGuest))
             .contextId(if (tab.isGuest) guestContextId else null)
             .userAgentMode(if (tab.desktopSite) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(if (tab.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
@@ -778,7 +778,7 @@ class MainActivity : ComponentActivity() {
                 tab.contentPermissions = perms
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 tab.title = Uri.parse(url).host ?: url.take(48)
-                if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
+                if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url, tab); persistTabs() }
                 if (currentTab() === tab) {
                     addressBar.setText(url)
                     pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
@@ -897,7 +897,7 @@ class MainActivity : ComponentActivity() {
         if (tab.engineType == BrowserEngineType.CEFRIUM) ensureCefriumEngine(tab).loadUrl(target)
         else ensureSession(tab).loadUri(target)
         secondaryAddressBar.setText(target)
-        if (!tab.isPrivate && !tab.isGuest) persistTabs()
+        if (GuestModePolicy.mayPersistBrowsingData(tab.isPrivate, tab.isGuest)) persistTabs()
     }
 
     private fun submitAddressBar() {
@@ -914,7 +914,7 @@ class MainActivity : ComponentActivity() {
         prepareDesktopModeForNavigation(tab, target)
         tab.lastUrl = target
         tab.title = Uri.parse(target).host ?: target.take(48)
-        if (!tab.isPrivate && !tab.isGuest) persistTabs()
+        if (GuestModePolicy.mayPersistBrowsingData(tab.isPrivate, tab.isGuest)) persistTabs()
         showBrowserPage()
         addressBar.setText(target)
         pageStatus.text = when { tab.isGuest -> "Guest Mode · history disabled"; tab.isPrivate -> "Private browsing · history disabled"; else -> "Loading…" }
@@ -923,7 +923,7 @@ class MainActivity : ComponentActivity() {
                 tab.needsReload = false
                 ensureCefriumEngine(tab).loadUrl(target)
             } else ensureSession(tab).loadUri(target)
-            if (!tab.isPrivate && !tab.isGuest) addHistory(target)
+            if (GuestModePolicy.mayPersistBrowsingData(tab.isPrivate, tab.isGuest)) addHistory(target, tab)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
             toast("Could not open page: ${error?.localizedMessage ?: "Unknown error"}")
@@ -1073,11 +1073,11 @@ class MainActivity : ComponentActivity() {
 
     private fun persistTabs() {
         val saved = JSONArray()
-        tabs.filter { !it.isPrivate && !it.isGuest }.forEach { tab ->
+        tabs.filter { GuestModePolicy.mayPersistBrowsingData(it.isPrivate, it.isGuest) }.forEach { tab ->
             saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title)
                 .put("readerOriginalUrl", tab.readerOriginalUrl ?: "").put("engine", tab.engineType.name))
         }
-        val normalTabs = tabs.filter { !it.isPrivate && !it.isGuest }
+        val normalTabs = tabs.filter { GuestModePolicy.mayPersistBrowsingData(it.isPrivate, it.isGuest) }
         val active = currentTab()
         val selectedNormalIndex = if (active != null && !active.isPrivate && !active.isGuest) {
             normalTabs.indexOf(active).coerceAtLeast(0)
@@ -1219,6 +1219,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showBookmarks() {
+        if (!GuestModePolicy.mayReadOwnerData(currentTab()?.isGuest == true)) {
+            denyGuestAccess("Bookmarks")
+            return
+        }
         val items = readBookmarks()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
         val search = EditText(this).apply { hint = "Search bookmarks"; isSingleLine = true }
@@ -1315,7 +1319,8 @@ class MainActivity : ComponentActivity() {
         prefs.edit().putLong("history_cleared_at", System.currentTimeMillis()).remove("history").remove("history_v2").apply()
     }
 
-    private fun addHistory(url: String) {
+    private fun addHistory(url: String, sourceTab: BrowserTab?) {
+        if (sourceTab == null || !GuestModePolicy.mayPersistBrowsingData(sourceTab.isPrivate, sourceTab.isGuest)) return
         if (url.isBlank() || url == HOME_URL) return
         val items = readHistory().filterNot { it.url == url }.toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
