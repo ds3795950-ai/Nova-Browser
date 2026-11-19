@@ -7,6 +7,7 @@ class RelatedDomainAffinityPolicyTest {
     @Test fun acceptsExactHostnamesAndOrigins() {
         assertEquals("https://accounts.example.com", RelatedDomainAffinityPolicy.normalizeOrigin("accounts.example.com"))
         assertEquals("https://login.example.com:8443", RelatedDomainAffinityPolicy.normalizeOrigin("https://login.example.com:8443/"))
+        assertEquals("http://example.com:80", RelatedDomainAffinityPolicy.normalizeOrigin("http://example.com:80"))
     }
 
     @Test fun normalizesCaseAndInternationalHostnames() {

@@ -27,6 +27,6 @@ object RelatedDomainAffinityPolicy {
         val asciiHost = runCatching { IDN.toASCII(host, IDN.USE_STD3_ASCII_RULES).lowercase(Locale.ROOT) }.getOrNull() ?: return null
         if (asciiHost.isBlank() || asciiHost.startsWith('.') || asciiHost.endsWith('.') || ".." in asciiHost) return null
         val portSuffix = if (port >= 0) ":$port" else ""
-        return "https://$asciiHost$portSuffix"
+        return "$scheme://$asciiHost$portSuffix"
     }
 }
