@@ -254,9 +254,12 @@ try {
   await driver.pause(500);
   if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Guest Mode created a separate Private tab');
   await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
-  if (!(await byTextContains('Guest Mode').isDisplayed().catch(() => false))) throw new Error('Guest Mode status disappeared after the Private action');
-  if (await byTextContains('Private session').isDisplayed().catch(() => false)) throw new Error('Private action escaped Guest Mode');
-  record('Guest mode blocks Private tab creation', true, 'Stable Guest Mode page status remains active after the Private action');
+  await tapToolbar('Tabs', 0);
+  const tabsAfterPrivateAttempt = await driver.getPageSource();
+  if (tabsAfterPrivateAttempt.includes('PRIVATE TABS') || tabsAfterPrivateAttempt.includes('NORMAL TABS')) throw new Error('Private action escaped Guest Mode and exposed owner tabs');
+  await byText('Done').click();
+  await byTextContains('Guest Mode').waitForDisplayed({ timeout: 10000 });
+  record('Guest mode blocks Private tab creation', true, 'Guest status remains visible and tab manager still hides normal/private tabs');
 
   await tapToolbar('Settings', 1);
   try {
