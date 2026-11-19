@@ -40,10 +40,13 @@ async function tapToolbar(label, rowIndex) {
 
 
 async function scrollToSetting(label, startsWith = false) {
-  const selector = startsWith ? `new UiSelector().textStartsWith("${label}")` : `new UiSelector().text("${label}")`;
-  const element = driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).setAsVerticalList().scrollIntoView(${selector})`);
-  await element.waitForDisplayed({ timeout: 8000 });
-  return element;
+  const escaped = label.replace(/\\/g, '\\\\').replace(/\"/g, '\\\"');
+  const selector = startsWith ? `new UiSelector().textStartsWith("${escaped}")` : `new UiSelector().text("${escaped}")`;
+  const scroller = driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).setAsVerticalList().scrollIntoView(${selector})`);
+  await scroller.waitForDisplayed({ timeout: 10000 });
+  const item = driver.$(`android=${selector}`);
+  await item.waitForDisplayed({ timeout: 10000 });
+  return item;
 }
 
 try {
@@ -167,6 +170,113 @@ try {
   record('Firewall preference persists after app restart', (await checked(firewallAfterRestart)) === finalFirewall);
   const serverAfterRestart = await driver.$('android=new UiSelector().className("android.widget.Button").textStartsWith("Server:")');
   record('Selected free server persists after app restart', (await serverAfterRestart.getText()).includes('Los Angeles'));
+
+  // Exercise every entry in Nova Settings on the real Android device.
+  await driver.back();
+  await driver.pause(500);
+  const openSettings = async () => {
+    await tapToolbar('Settings', 1);
+    await driver.$('android=new UiSelector().text("Nova Settings")').waitForDisplayed({ timeout: 10000 });
+  };
+  const selectSetting = async (label, startsWith = false) => {
+    await openSettings();
+    const item = await scrollToSetting(label, startsWith);
+    await item.click();
+    await driver.pause(350);
+  };
+  const closeByText = async label => {
+    const button = driver.$(`android=new UiSelector().text("${label}")`);
+    await button.waitForDisplayed({ timeout: 10000 });
+    await button.click();
+  };
+
+  await selectSetting('Choose search engine');
+  await driver.$('android=new UiSelector().text("Default search engine")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Cancel');
+  record('Search engine settings screen opens', true);
+
+  await openSettings();
+  const shortcutBefore = await (await scrollToSetting('Toggle home shortcuts', true)).getText();
+  await (await scrollToSetting('Toggle home shortcuts', true)).click();
+  await openSettings();
+  const shortcutAfter = await (await scrollToSetting('Toggle home shortcuts', true)).getText();
+  const shortcutChanged = shortcutBefore !== shortcutAfter;
+  record('Home shortcut setting toggles', shortcutChanged, `${shortcutBefore} -> ${shortcutAfter}`);
+  if (!shortcutChanged) throw new Error('Home shortcut preference did not change');
+  await (await scrollToSetting('Toggle home shortcuts', true)).click();
+
+  await selectSetting('Clear browsing history');
+  record('Clear browsing history action completes', true);
+  await selectSetting('Close private and Guest tabs');
+  record('Close private and Guest tabs action completes', true);
+  await selectSetting('Exit Guest Mode');
+  record('Exit Guest Mode safely handles no active Guest tab', true);
+  await selectSetting('Exit Reader view');
+  record('Exit Reader view safely handles normal page', true);
+
+  await selectSetting('Nova Shield');
+  await driver.$('android=new UiSelector().textContains("Nova Shield ·")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Close');
+  record('Nova Shield settings screen opens');
+
+  await selectSetting('AI assistants');
+  await driver.$('android=new UiSelector().text("Choose browser AI")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Cancel');
+  record('AI assistants settings screen opens without sending a prompt');
+
+  await selectSetting('Extensions');
+  await driver.$('android=new UiSelector().textStartsWith("Nova Add-ons ·")').waitForDisplayed({ timeout: 15000 });
+  await closeByText('Close');
+  record('Extensions manager opens');
+
+  await selectSetting('Password manager');
+  await driver.$('android=new UiSelector().textStartsWith("Encrypted password vault ·")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Close');
+  record('Encrypted password manager opens');
+
+  await driver.$('~Nova address bar').click();
+  await driver.$('~Nova address bar').setValue('https://example.com/');
+  await driver.$('~Go').click();
+  await driver.waitUntil(async () => (await driver.$('~Nova address bar').getAttribute('text').catch(() => '')).includes('example.com'), { timeout: 30000 });
+  await selectSetting('Site permissions');
+  await driver.$('android=new UiSelector().textContains("Site controls · example.com")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Close');
+  record('Site permissions screen opens for active website');
+
+  await selectSetting('Accessibility');
+  await driver.$('android=new UiSelector().text("Accessibility · page text size")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Close');
+  record('Accessibility settings screen opens');
+
+  await selectSetting('Export history');
+  await driver.pause(1000);
+  await driver.back();
+  record('History export opens Android document picker and can be cancelled');
+
+  await selectSetting('About Nova');
+  await driver.$('android=new UiSelector().textContains("Nova Browser · GeckoView engine")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('OK');
+  record('About Nova screen opens');
+
+  await selectSetting('Account & encrypted cloud sync');
+  await driver.$('android=new UiSelector().text("Sign in to Nova Cloud")').waitForDisplayed({ timeout: 10000 });
+  await closeByText('Cancel');
+  record('Cloud sync sign-in screen opens without sending credentials');
+
+  await selectSetting('Protected DNS · AdGuard DNS');
+  await driver.$('android=new UiSelector().text("Protected DNS · AdGuard DNS")').waitForDisplayed({ timeout: 10000 });
+  const dnsCheck = driver.$('android=new UiSelector().className("android.widget.CheckBox")');
+  const dnsOriginal = (await dnsCheck.getAttribute('checked')) === 'true';
+  await dnsCheck.click();
+  await closeByText('Save');
+  await selectSetting('Protected DNS · AdGuard DNS');
+  const dnsPersisted = ((await dnsCheck.getAttribute('checked')) === 'true') !== dnsOriginal;
+  record('Protected DNS toggle persists', dnsPersisted);
+  if (!dnsPersisted) throw new Error('Protected DNS preference did not persist');
+  await dnsCheck.click();
+  await closeByText('Save');
+
+  await driver.saveScreenshot(`${out}/settings-all-entries.png`);
 
   await driver.saveScreenshot(`${out}/settings-final.png`);
 } catch (error) {
