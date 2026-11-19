@@ -41,7 +41,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - No concrete GeckoView/Cefrium `WebsiteDataPort` adapters are wired. The current GeckoView public `StorageController` exposes clearing and permission operations, not a general cookie/storage export API. A complete, lossless cross-engine session migration therefore cannot be implemented against the documented public APIs; source profiles must remain intact and users may need to reauthenticate.
 - Permission prompts are wired into Nova's Activity, and completed Cefrium downloads are wired into Nova's download repository. Secure password save/fill remains GeckoView-only; do not expose saved credentials to arbitrary page JavaScript as a substitute.
 - Keep engine-native data distinct; service workers, Cache Storage, sessionStorage, HttpOnly/partitioned cookies, passkeys and device-bound credentials are not guaranteed portable. Require re-fetch or reauthentication where needed.
-- Add related-domain affinity for authentication flows without broadly grouping unrelated origins.
+- Related sign-in affinity is user-managed: users can explicitly list exact authentication hostnames for the current engine. No registrable-domain or sibling-subdomain guessing is performed; it is stored for Normal browsing only and considered only in Automatic mode.
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates

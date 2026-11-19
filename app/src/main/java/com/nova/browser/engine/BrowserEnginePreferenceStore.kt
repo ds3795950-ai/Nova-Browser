@@ -18,6 +18,10 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
 
     fun setSiteAffinity(url: String, engine: BrowserEngineType): Boolean = affinity.set(url, engine)
 
+    /** Saves the same preference for only the exact sign-in hosts explicitly entered by the user. */
+    fun setRelatedSiteAffinities(hosts: Collection<String>, engine: BrowserEngineType): Int =
+        RelatedDomainAffinityPolicy.normalizeOrigins(hosts).count { affinity.set(it, engine) }
+
     fun clearSiteAffinity(url: String): Boolean = affinity.remove(url)
 
     fun resolve(

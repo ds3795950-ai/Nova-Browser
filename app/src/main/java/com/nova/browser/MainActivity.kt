@@ -2023,6 +2023,36 @@ class MainActivity : ComponentActivity() {
         toast("${tab.engineType.name} remembered for this site in Automatic mode")
     }
 
+    private fun rememberRelatedSignInDomains() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Related-site engine preferences are saved only for Normal browsing")
+            return
+        }
+        if (tab.lastUrl == HOME_URL) {
+            toast("Open a sign-in website first")
+            return
+        }
+        val input = android.widget.EditText(this).apply {
+            hint = "accounts.example.com, login.example.com"
+            setSingleLine(false)
+            minLines = 2
+            maxLines = 4
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Related sign-in domains")
+            .setMessage("Enter exact hostnames used by this site's sign-in flow, separated by commas or new lines. Nova will not guess sibling or registrable domains. Saved only for Normal tabs in Automatic mode.")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val hosts = input.text.toString().split(',', '\n').map(String::trim).filter(String::isNotEmpty)
+                val saved = enginePreferences.setRelatedSiteAffinities(hosts, tab.engineType)
+                if (saved == 0) toast("No valid exact hostnames were saved")
+                else toast("${tab.engineType.name} remembered for $saved exact sign-in host(s)")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun showBrowserEngineSettings() {
         val modes = arrayOf("Cefrium · Chromium (default)", "Automatic · Cefrium preferred", "GeckoView · Firefox")
         val values = arrayOf(BrowserEngineMode.CEFRIUM, BrowserEngineMode.AUTOMATIC, BrowserEngineMode.GECKOVIEW)
@@ -2051,6 +2081,7 @@ class MainActivity : ComponentActivity() {
         val items = mutableListOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "VPN & Firewall · 1VPN")
         val enginePreferenceIndex = items.size.also { items.add("Browser engine · ${enginePreferences.normalMode().name.lowercase().replaceFirstChar { it.uppercase() }}") }
         val siteEngineIndex = items.size.also { items.add("Remember this site's current engine") }
+        val relatedSiteEngineIndex = items.size.also { items.add("Remember related sign-in domains") }
         val switchEngineIndex = items.size.also { items.add("Switch this tab's engine") }
         val engineProbeIndex = if (BuildConfig.DEBUG) items.size.also { items.add("Developer · Cefrium engine test") } else -1
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items.toTypedArray()) { _, which ->
@@ -2060,6 +2091,10 @@ class MainActivity : ComponentActivity() {
             }
             if (which == siteEngineIndex) {
                 rememberCurrentSiteEngine()
+                return@setItems
+            }
+            if (which == relatedSiteEngineIndex) {
+                rememberRelatedSignInDomains()
                 return@setItems
             }
             if (which == switchEngineIndex) {
