@@ -10,7 +10,7 @@ Nova applies AdGuard DNS-over-HTTPS in strict mode to GeckoView and Cefrium brow
 
 Protected DNS is browser-only. It does not create a system VPN, hide the device IP address, or change DNS for other Android apps. When an authenticated browser proxy is active, that proxy may resolve the remote website hostnames instead of the local DoH resolver.
 
-The existing 1VPN browser proxy is a GeckoView WebExtension. Its proxy selection and authentication are currently handled inside that extension. Nova has not yet connected the extension's authenticated credentials to Cefrium's native profile proxy API, so Cefrium 1VPN support is not implemented yet. Do not assume Cefrium traffic is routed through 1VPN until that integration and leak testing are complete.
+The existing 1VPN browser proxy remains a GeckoView WebExtension and is the source of truth for host selection and credentials. Its own authentication callback now relays the challenged proxy host and resolved credentials through Nova's native bridge to Cefrium in memory. Cefrium uses a fixed profile proxy and disables non-proxied WebRTC UDP. Runtime proxy, DNS and IP-leak acceptance is still required; until then, do not treat a successful UI toggle as proof of a verified VPN tunnel.
 
 ## Guest Mode and Tor
 

@@ -20,7 +20,7 @@ If Nova Shield or saved-password autofill is required, Cefrium is considered inc
 | Desktop Site | Implemented through desktop UA and viewport handling |
 | Reader Mode | Implemented through sanitized article extraction |
 | Private browsing | Uses an in-memory Cefrium incognito profile |
-| 1VPN browser proxy | PENDING — authenticated credential hand-off is not available yet |
+| 1VPN browser proxy | Implemented in code — extension credentials are relayed to Cefrium in memory; device/network acceptance pending |
 
 Cefrium component updates are disabled because the SDK uses a separate network context for those requests.
 

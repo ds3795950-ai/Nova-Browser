@@ -62,10 +62,12 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Desktop Site applies a desktop Chromium user agent and document-start desktop viewport handling. Per-site Normal preferences are retained; Private changes are session-only.
 - Cefrium Reader Mode extracts the article DOM, removes scripts, forms, event handlers, embedded frames and unsafe resource URLs, then renders a simplified reading page. GeckoView retains its built-in Reader Mode.
 
-### Phase 1 blocker: Cefrium 1VPN
-- The current 1VPN implementation is a GeckoView WebExtension. Its proxy selection and authentication are handled inside the extension; the native bridge currently reports status and configuration but does not expose an authenticated proxy credential hand-off to Cefrium.
-- Cefrium 0.21.0 exposes profile-level fixed proxy configuration and a proxy-auth callback, but Nova has not connected that callback to a supported 1VPN credential source. No static provider credentials have been copied into the app, and no unauthenticated proxy is being presented as 1VPN.
-- Therefore 1VPN remains available only on GeckoView for now. Cefrium VPN integration is NOT complete and is the remaining Phase 1 item. The required next step is a supported native credential hand-off from the packaged extension or an approved 1VPN provider API, followed by proxy-auth, fail-closed, DNS and WebRTC leak tests.
+### Phase 1: Cefrium 1VPN adapter
+- The bundled 1VPN WebExtension remains the source of truth for proxy host selection and authentication. Its existing `onAuthRequired` handler now forwards the challenged proxy host and resolved credentials to Nova's native bridge.
+- A short-lived hidden Gecko session triggers that existing authentication path; credentials are held in memory only and are not copied into app constants or persisted.
+- Cefrium applies the authenticated HTTPS proxy to Normal and Private profiles, answers only matching proxy-auth challenges, disables non-proxied WebRTC UDP, and uses a fixed proxy with no direct fallback. Guest remains GeckoView.
+- The VPN settings screen exposes the free Singapore, Amsterdam and Los Angeles locations. If the bridge cannot obtain credentials, Cefrium remains fail-closed.
+- Android build, lint, emulator and real-device network/leak acceptance must pass before Phase 1 is declared complete.
 
 ### Validation status
 - Source changes and policy tests are staged on feature/phase-1-dual-engine-foundation.
