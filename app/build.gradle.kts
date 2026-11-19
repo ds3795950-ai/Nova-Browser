@@ -88,7 +88,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
-    // GeckoView remains the production engine while the Cefrium adapter is evaluated.
+    // GeckoView remains the compatibility/security fallback; Cefrium serves compatible Normal tabs.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
     implementation("com.cefrium:cefrium-sdk:0.21.0")
     implementation("androidx.appcompat:appcompat:1.7.0")

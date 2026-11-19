@@ -496,6 +496,7 @@ class MainActivity : ComponentActivity() {
             cefriumCompatible = (tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")) &&
                 !prefs.getBoolean("protected_dns_enabled", false) &&
                 NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) == ShieldMode.OFF &&
+                !tab.desktopSite && tab.readerOriginalUrl == null &&
                 !runCatching { passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) } }.getOrDefault(false)
         ).engine
     }
@@ -1931,6 +1932,53 @@ class MainActivity : ComponentActivity() {
         toast("Switched to GeckoView for $reason. This site may require you to sign in again; website data is not migrated yet.")
     }
 
+    private fun switchCurrentTabEngine() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Manual engine switching is available only in Normal tabs")
+            return
+        }
+        if (tab.lastUrl == HOME_URL || !(tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://"))) {
+            toast("Open a website before switching engines")
+            return
+        }
+        val switchingToCefrium = tab.engineType != BrowserEngineType.CEFRIUM
+        if (switchingToCefrium) {
+            val reason = when {
+                prefs.getBoolean("protected_dns_enabled", false) -> "Protected DNS currently requires GeckoView"
+                NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) != ShieldMode.OFF -> "Nova Shield currently requires GeckoView"
+                tab.desktopSite -> "Desktop-site mode currently requires GeckoView"
+                tab.readerOriginalUrl != null -> "Reader view currently requires GeckoView"
+                runCatching { passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) } }.getOrDefault(false) -> "Saved-login autofill currently requires GeckoView"
+                else -> null
+            }
+            if (reason != null) {
+                toast("Cannot switch this tab to Cefrium: $reason")
+                return
+            }
+        }
+        val target = if (switchingToCefrium) "Cefrium (Chromium)" else "GeckoView (Firefox)"
+        AlertDialog.Builder(this)
+            .setTitle("Switch this tab's engine?")
+            .setMessage("Reload this site in $target? Cookies, website storage and sign-in sessions are not transferred between engines. The original engine's stored data is left untouched; you may need to sign in again.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Switch and reload") { _, _ ->
+                if (switchingToCefrium) {
+                    tab.session?.setActive(false)
+                    tab.session?.setFocused(false)
+                    tab.session?.close()
+                    tab.session = null
+                    tab.engineType = BrowserEngineType.CEFRIUM
+                    tab.needsReload = true
+                    activateTab(tab)
+                    toast("Switched to Cefrium. Website data was not migrated.")
+                } else {
+                    switchCurrentTabToGecko("manual engine switch")
+                }
+            }
+            .show()
+    }
+
     private fun rememberCurrentSiteEngine() {
         val tab = currentTab() ?: return
         if (tab.isPrivate || tab.isGuest) {
@@ -1949,7 +1997,7 @@ class MainActivity : ComponentActivity() {
         val values = BrowserEngineMode.values()
         val selected = values.indexOf(enginePreferences.normalMode()).coerceAtLeast(0)
         AlertDialog.Builder(this).setTitle("Browser engine")
-            .setMessage("This setting applies to new Normal tabs. Existing tabs keep their current engine. Private and Guest tabs remain on GeckoView until isolated Cefrium privacy profiles are implemented. Nova Shield, Protected DNS and saved-login sites currently require GeckoView, so Automatic falls back there. Website sign-in data is not migrated when switching engines.")
+            .setMessage("This setting applies to new Normal tabs. Existing tabs keep their current engine; use Settings → Switch this tab's engine to reload the current Normal tab. Private and Guest tabs remain on GeckoView until independently erasable Cefrium privacy contexts are available. Nova Shield, Protected DNS, desktop-site mode, Reader view and saved-login sites currently require GeckoView. Website sign-in data is never migrated automatically between engines.")
             .setSingleChoiceItems(modes, selected) { dialog, which ->
                 val mode = values[which]
                 enginePreferences.setNormalMode(mode)
@@ -1972,6 +2020,7 @@ class MainActivity : ComponentActivity() {
         val items = mutableListOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "VPN & Firewall · 1VPN")
         val enginePreferenceIndex = items.size.also { items.add("Browser engine · ${enginePreferences.normalMode().name.lowercase().replaceFirstChar { it.uppercase() }}") }
         val siteEngineIndex = items.size.also { items.add("Remember this site's current engine") }
+        val switchEngineIndex = items.size.also { items.add("Switch this tab's engine") }
         val engineProbeIndex = if (BuildConfig.DEBUG) items.size.also { items.add("Developer · Cefrium engine test") } else -1
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items.toTypedArray()) { _, which ->
             if (which == enginePreferenceIndex) {
@@ -1980,6 +2029,10 @@ class MainActivity : ComponentActivity() {
             }
             if (which == siteEngineIndex) {
                 rememberCurrentSiteEngine()
+                return@setItems
+            }
+            if (which == switchEngineIndex) {
+                switchCurrentTabEngine()
                 return@setItems
             }
             if (which == engineProbeIndex) {
