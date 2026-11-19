@@ -12,7 +12,7 @@ import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
 
-class NovaVpnFirewallActivity : Activity() {
+open class NovaVpnFirewallActivity : Activity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var status: TextView
     private lateinit var vpnSwitch: Switch
