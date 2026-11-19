@@ -199,7 +199,8 @@ private class CefriumDownloadPublisher(
                 source.inputStream().use { input -> input.copyTo(output) }
             } ?: throw IllegalStateException("Android could not write the Downloads file")
             val ready = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-            appContext.contentResolver.update(uri, ready, null, null)
+            val publishedRows = appContext.contentResolver.update(uri, ready, null, null)
+            check(publishedRows > 0) { "Android could not publish the completed download" }
             // A failed cleanup must not invalidate a successfully published public download.
             runCatching { source.delete() }
             return uri to byteCount
