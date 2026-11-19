@@ -727,7 +727,7 @@ class MainActivity : ComponentActivity() {
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
         showBrowserPage()
         addressBar.setText(target)
-        pageStatus.text = if (tab.isPrivate || tab.isGuest) "Private browsing · history disabled" else "Loading…"
+        pageStatus.text = when { tab.isGuest -> "Guest Mode · history disabled"; tab.isPrivate -> "Private browsing · history disabled"; else -> "Loading…" }
         try {
             ensureSession(tab).loadUri(target)
             if (!tab.isPrivate && !tab.isGuest) addHistory(target)
