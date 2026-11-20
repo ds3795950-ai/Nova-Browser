@@ -18,7 +18,12 @@ class GeckoViewBrowserEngine(
     // Gecko's SDK path is wired by Nova for downloads and site-permission prompts.
     override val capabilities = setOf(
         BrowserEngineCapability.DOWNLOADS,
-        BrowserEngineCapability.SITE_PERMISSIONS
+        BrowserEngineCapability.SITE_PERMISSIONS,
+        BrowserEngineCapability.TRANSLATION,
+        BrowserEngineCapability.PASSWORD_AUTOFILL,
+        BrowserEngineCapability.NOVA_SHIELD,
+        BrowserEngineCapability.READER_MODE,
+        BrowserEngineCapability.DESKTOP_MODE
     )
     private var attachedView: GeckoView = initialView
     private var isAttached = false

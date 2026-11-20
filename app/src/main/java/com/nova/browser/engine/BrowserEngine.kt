@@ -28,7 +28,10 @@ enum class BrowserEngineCapability {
     SITE_PERMISSIONS,
     READER_MODE,
     DESKTOP_MODE,
-    VPN_PROXY
+    VPN_PROXY,
+    TRANSLATION,
+    PASSWORD_AUTOFILL,
+    NOVA_SHIELD
 }
 
 fun interface BrowserEngineListener {

@@ -36,6 +36,7 @@ import com.nova.browser.engine.BrowserEngineType
 import com.nova.browser.engine.BrowserEngineProfilePolicy
 import com.nova.browser.engine.BrowserEnginePreferenceStore
 import com.nova.browser.engine.BrowserEngine
+import com.nova.browser.engine.BrowserEngineCapability
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.BrowserProfileKind
@@ -1568,6 +1569,11 @@ class MainActivity : ComponentActivity() {
     private fun translatePage() {
         val tab = currentTab() ?: return
         if (!tab.lastUrl.startsWith("http")) { toast("Open a webpage first"); return }
+        val engine = runCatching { ensureBrowserEngine(tab) }.getOrNull()
+        if (engine == null || BrowserEngineCapability.TRANSLATION !in engine.capabilities) {
+            toast("Translation is unavailable in this browser engine")
+            return
+        }
         val languages = arrayOf(
             "English" to "en", "Hindi" to "hi", "Bengali" to "bn",
             "Japanese" to "ja", "Chinese" to "zh", "Spanish" to "es", "French" to "fr",
@@ -1726,7 +1732,12 @@ class MainActivity : ComponentActivity() {
                         toast("Nova Shield: ${mode.name.lowercase().replaceFirstChar { it.uppercase() }}")
                     }
                     3 -> {
-                        val permission = (tab?.browserEngine as? GeckoViewBrowserEngine)?.trackingPermission
+                        val activeEngine = tab?.browserEngine
+                        if (activeEngine == null || BrowserEngineCapability.NOVA_SHIELD !in activeEngine.capabilities) {
+                            toast("Per-site Shield controls require GeckoView")
+                            return@setItems
+                        }
+                        val permission = (activeEngine as? GeckoViewBrowserEngine)?.trackingPermission
                         if (permission == null) { toast("Open a website first; site tracking controls are not available on this page"); return@setItems }
                         val allow = permission.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                         runtime.storageController.setPermission(permission, if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
@@ -1734,6 +1745,11 @@ class MainActivity : ComponentActivity() {
                         geckoSession(tab)?.reload()
                     }
                     4 -> {
+                        val activeEngine = tab?.browserEngine
+                        if (activeEngine == null || BrowserEngineCapability.NOVA_SHIELD !in activeEngine.capabilities) {
+                            toast("Protection logs require GeckoView")
+                            return@setItems
+                        }
                         val session = tab?.let(::geckoSession)
                         if (session == null) { toast("Open a page first"); return@setItems }
                         runtime.getContentBlockingController().getLog(session).accept({ entries ->
