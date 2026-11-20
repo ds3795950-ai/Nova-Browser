@@ -408,6 +408,7 @@ try {
   }
   await byText('OK').click();
   record('Guest-only Tor fails closed until an isolated transport exists', true, 'No Orbot launch or app-wide VPN toggle is offered from Guest Mode');
+  await tapToolbar('Settings', 1);
   await byText('Exit Guest Mode').click();
   await byText('Exit Guest').click();
 
