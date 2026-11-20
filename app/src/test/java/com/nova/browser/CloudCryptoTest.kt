@@ -23,6 +23,50 @@ class CloudCryptoTest {
         } catch (_: javax.crypto.AEADBadTagException) { }
     }
 
+    @Test fun modifiedCiphertextCannotDecryptBackup() {
+        val envelope = CloudCrypto.encrypt("authenticated browser backup", "correct-horse-battery".toCharArray())
+        val bytes = java.util.Base64.getDecoder().decode(envelope.getString("ciphertext"))
+        bytes[0] = (bytes[0].toInt() xor 1).toByte()
+        envelope.put("ciphertext", java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes))
+        try {
+            CloudCrypto.decrypt(envelope, "correct-horse-battery".toCharArray())
+            throw AssertionError("Modified ciphertext unexpectedly decrypted")
+        } catch (_: javax.crypto.AEADBadTagException) { }
+    }
+
+    @Test fun eachBackupUsesFreshSaltAndIv() {
+        val passphrase = "correct-horse-battery".toCharArray()
+        val first = CloudCrypto.encrypt("same backup", passphrase)
+        val second = CloudCrypto.encrypt("same backup", passphrase)
+        assertNotEquals(first.getString("salt"), second.getString("salt"))
+        assertNotEquals(first.getString("iv"), second.getString("iv"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun unsupportedKeyDerivationRejected() {
+        val envelope = CloudCrypto.encrypt("data", "correct-horse-battery".toCharArray())
+        envelope.put("kdf", "PBKDF2-SHA1")
+        CloudCrypto.decrypt(envelope, "correct-horse-battery".toCharArray())
+    }
+
+    @Test fun encryptedBundleKeepsBrowserAndVaultInOneRevision() {
+        val browser = JSONObject().put("ciphertext", "browser-ciphertext")
+        val vault = JSONObject().put("ciphertext", "vault-ciphertext")
+        val bundle = NovaCloudBundle.pack(browser, vault)
+        val unpacked = NovaCloudBundle.unpack(bundle, null)
+        assertEquals(browser.toString(), unpacked.first?.toString())
+        assertEquals(vault.toString(), unpacked.second?.toString())
+        assertEquals(NovaCloudBundle.FORMAT, bundle.getString("format"))
+    }
+
+    @Test fun legacyTwoRowBackupRemainsReadable() {
+        val browser = JSONObject().put("version", 1).put("ciphertext", "old-browser")
+        val vault = JSONObject().put("version", 1).put("ciphertext", "old-vault")
+        val unpacked = NovaCloudBundle.unpack(browser, vault)
+        assertEquals(browser.toString(), unpacked.first?.toString())
+        assertEquals(vault.toString(), unpacked.second?.toString())
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun weakPassphraseRejected() {
         CloudCrypto.encrypt("data", "short".toCharArray())

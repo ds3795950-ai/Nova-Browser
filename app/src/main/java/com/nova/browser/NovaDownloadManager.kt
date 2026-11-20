@@ -94,6 +94,23 @@ class NovaDownloadManager(
         }
     }
 
+    /** Records a file already downloaded by a browser engine and published to MediaStore. */
+    fun registerCompleted(url: String, fileName: String, mimeType: String, savedUri: String, bytes: Long): String {
+        require(savedUri.isNotBlank()) { "A published download URI is required" }
+        val id = "engine-${UUID.randomUUID()}"
+        put(Item(
+            id = id,
+            url = url,
+            fileName = sanitize(fileName),
+            mimeType = mimeType.ifBlank { "application/octet-stream" },
+            downloaded = bytes.coerceAtLeast(0L),
+            total = bytes.coerceAtLeast(0L),
+            state = "COMPLETE",
+            savedUri = savedUri
+        ))
+        return id
+    }
+
     fun enqueue(url: String, fileName: String? = null, mimeType: String = "application/octet-stream"): String {
         val parsed = URL(url)
         require(parsed.protocol == "http" || parsed.protocol == "https") { "Only HTTP(S) downloads are supported" }

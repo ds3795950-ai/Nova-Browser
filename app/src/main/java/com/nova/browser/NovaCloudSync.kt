@@ -45,6 +45,7 @@ internal object CloudCrypto {
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
+        require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported cloud backup key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
         val salt = unb64(envelope.getString("salt"))
@@ -61,6 +62,22 @@ internal object CloudCrypto {
     }
 }
 
+
+/** One revision contains both encrypted payloads, so a sync cannot update only half the backup. */
+internal object NovaCloudBundle {
+    const val FORMAT = "nova-encrypted-sync-bundle-v1"
+
+    fun pack(snapshot: JSONObject, vault: JSONObject): JSONObject =
+        JSONObject().put("format", FORMAT).put("browser", snapshot).put("vault", vault)
+
+    fun unpack(snapshot: JSONObject?, legacyVault: JSONObject?): Pair<JSONObject?, JSONObject?> {
+        if (snapshot?.optString("format") == FORMAT) {
+            return Pair(snapshot.optJSONObject("browser"), snapshot.optJSONObject("vault"))
+        }
+        return Pair(snapshot, legacyVault)
+    }
+}
+
 /** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
 class CloudSyncConflictException(message: String) : IllegalStateException(message)
 
@@ -73,7 +90,6 @@ class NovaCloudSync(context: Context) {
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
     @Volatile private var snapshotVersion: String? = null
-    @Volatile private var vaultVersion: String? = null
 
     fun sendEmailOtp(email: String) {
         val clean = email.trim().lowercase()
@@ -108,30 +124,35 @@ class NovaCloudSync(context: Context) {
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
         val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
-        val vault = fetchRow("nova_encrypted_vault", "payload", userId, token)
-        return Pair(snapshot, vault)
+        if (snapshot?.optString("format") == NovaCloudBundle.FORMAT) {
+            return NovaCloudBundle.unpack(snapshot, null)
+        }
+        // Read backups written by older Nova builds before the atomic bundle format.
+        val legacyVault = fetchRow("nova_encrypted_vault", "payload", userId, token)
+        return NovaCloudBundle.unpack(snapshot, legacyVault)
     }
 
     fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        upsertRow("nova_sync_state", "snapshot", userId, snapshot, token, snapshotVersion)
-        upsertRow("nova_encrypted_vault", "payload", userId, vault, token, vaultVersion)
+        // Keep browser data and password-vault ciphertext in one compare-and-swap row.
+        // This prevents a conflict between two separate writes from leaving a half-updated backup.
+        val bundle = NovaCloudBundle.pack(snapshot, vault)
+        upsertRow("nova_sync_state", "snapshot", userId, bundle, token, snapshotVersion)
         snapshotVersion = null
-        vaultVersion = null
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
         val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
         val rows = org.json.JSONArray(result)
         if (rows.length() == 0) {
-            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
+            if (column == "snapshot") snapshotVersion = null
             return null
         }
         val row = rows.getJSONObject(0)
         val version = row.optString("updated_at").takeIf { it.isNotBlank() }
-        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
+        if (column == "snapshot") snapshotVersion = version
         return row.optJSONObject(column)
     }
 

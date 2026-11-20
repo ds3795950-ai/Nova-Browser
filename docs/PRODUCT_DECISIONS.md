@@ -58,8 +58,14 @@ These are the previously agreed product choices. Do not replace them with generi
 - Phishing/malware protection.
 - Also retain the previously discussed desktop-site mode with per-site preferences, downloads, file uploads, reader mode, translation, password manager/autofill and session restore as roadmap items.
 
-## Engine constraint
-- Current rebuild target is Android/Kotlin with GeckoView as the only browser engine. Do not add Chromium or Android WebView as a fallback.
+## Engine strategy (supersedes the earlier single-engine constraint)
+- Nova will use Cefrium (embedded Chromium) as the primary engine for normal browsing.
+- Automatic mode prefers Cefrium and falls back to GeckoView when a site is incompatible or Cefrium fails.
+- Users can explicitly choose Automatic, Cefrium or GeckoView in Settings.
+- GeckoView is the default engine in Guest Mode. The user may explicitly switch Guest Mode to Cefrium; Nova must not silently change that choice.
+- Normal and Guest browsing use separate engine profiles. Guest data remains temporary and isolated regardless of the selected engine.
+- Tor is an optional Guest-only feature, off by default. When enabled, both Guest engines must be forced through Tor with fail-closed behavior; normal browsing must remain on the ordinary route.
+- Cefrium is pre-1.0. Keep it behind an adapter and do not make it the production default until compatibility, security, performance and real-device tests pass.
 
 ## Implementation policy
 These decisions define the target product, not the current implementation status. Update docs/ROADMAP.md as features are implemented and tested. A feature is not complete until its acceptance tests pass. Never claim Tor routing, security protection, encryption, login or sync is working without technical verification.

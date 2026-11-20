@@ -1,0 +1,45 @@
+name: Android Emulator Smoke
+
+on:
+  push:
+    branches: [feature/phase-1-dual-engine-foundation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Some hosted runners do not expose KVM. Allow the emulator to fall back
+      # to the Android emulator's software CPU translator instead of timing out.
+      ANDROID_I_WANT_TCG: "yes"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.1'
+      - name: Install Android SDK 37.1 platform
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.1"
+      - name: Run Android 16 emulator smoke tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          # Leave animations enabled: the runner's post-boot animation/settings
+          # commands intermittently lose ADB on this hosted emulator image.
+          disable-animations: false
+          script: gradle :app:connectedDebugAndroidTest --stacktrace

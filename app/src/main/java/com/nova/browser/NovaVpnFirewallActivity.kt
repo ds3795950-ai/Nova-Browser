@@ -1,145 +1,83 @@
 package com.nova.browser
 
-import android.app.AlertDialog
+import android.app.Activity
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
-import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
-import androidx.activity.ComponentActivity
 
-/** Browser-only VPN and firewall controls. No Android VpnService is started here. */
-open class NovaVpnFirewallActivity : ComponentActivity() {
+open class NovaVpnFirewallActivity : Activity() {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var status: TextView
-    private lateinit var vpnToggle: CheckBox
-    private lateinit var firewallToggle: CheckBox
-    private lateinit var locationButton: Button
+    private lateinit var vpnSwitch: Switch
+    private lateinit var locations: Spinner
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "VPN & Firewall"
-
+        title = "VPN & Firewall · 1VPN"
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(28, 28, 28, 28)
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(22), dp(24), dp(22), dp(20))
         }
-        val heading = TextView(this).apply {
-            text = "Nova VPN & Firewall"
-            textSize = 23f
-            setPadding(0, 0, 0, dp(12))
-        }
-        val intro = TextView(this).apply {
-            text = "Both controls affect Nova Browser only. Other Android apps continue using your normal network."
+        root.addView(TextView(this).apply { text = "1VPN browser proxy"; textSize = 22f })
+        root.addView(TextView(this).apply {
+            text = "Routes Nova browser traffic only. It is not a full-device VPN."
             textSize = 14f
-            setPadding(0, 0, 0, dp(18))
-        }
-        status = TextView(this).apply {
-            textSize = 14f
-            setPadding(0, 0, 0, dp(14))
-        }
-        vpnToggle = CheckBox(this).apply {
-            text = "Enable 1VPN for Nova"
-            textSize = 17f
+            setPadding(0, 12, 0, 20)
+        })
+        vpnSwitch = Switch(this).apply {
+            text = "Enable 1VPN"
             isChecked = NovaBrowserVpnController.isVpnEnabled()
             setOnCheckedChangeListener { _, enabled ->
                 NovaBrowserVpnController.setVpnEnabled(enabled)
-                refreshStatus()
+                renderStatus()
             }
         }
-        locationButton = Button(this).apply {
-            text = "Server: ${selectedLocationLabel()}  ▾"
-            setOnClickListener { chooseLocation() }
-        }
-        val vpnDetails = TextView(this).apply {
-            text = "Free 1VPN locations: Singapore, Amsterdam and Los Angeles. India server locations are premium on the provider's free catalogue. 1VPN advertises unlimited free traffic without an account."
-            textSize = 13f
-            setPadding(dp(4), 0, dp(4), dp(16))
-        }
-        val firewallHeading = TextView(this).apply {
-            text = "Nova Firewall"
-            textSize = 19f
-            setPadding(0, dp(14), 0, dp(4))
-        }
-        firewallToggle = CheckBox(this).apply {
-            text = "Enable browser firewall"
-            textSize = 17f
-            isChecked = NovaBrowserVpnController.isFirewallEnabled()
-            setOnCheckedChangeListener { _, enabled ->
-                NovaBrowserVpnController.setFirewallEnabled(enabled)
-                refreshStatus()
+        root.addView(vpnSwitch)
+        root.addView(TextView(this).apply {
+            text = "Server location"; textSize = 16f; setPadding(0, 24, 0, 8)
+        })
+        locations = Spinner(this)
+        locations.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            NovaVpnLocations.all.map { it.name + " · " + it.country + " · Free" }
+        )
+        locations.setSelection(NovaVpnLocations.all.indexOfFirst {
+            it.id == NovaBrowserVpnController.selectedLocationId()
+        }.coerceAtLeast(0))
+        locations.isEnabled = !NovaBrowserVpnController.isVpnEnabled()
+        root.addView(locations)
+        root.addView(Button(this).apply {
+            text = "Apply location"
+            setOnClickListener {
+                val selected = NovaVpnLocations.all[locations.selectedItemPosition]
+                NovaBrowserVpnController.setLocation(selected.id)
+                if (NovaBrowserVpnController.isVpnEnabled()) NovaBrowserVpnController.setVpnEnabled(true)
+                renderStatus()
             }
-        }
-        val firewallDetails = TextView(this).apply {
-            text = "Uses GeckoView's built-in Enhanced Tracking Protection to block known trackers and tracking content. NovaShield's Aggressive mode adds stricter fingerprinting and cryptomining protection. It does not filter other apps or act as a device-wide packet firewall."
-            textSize = 13f
-            setPadding(dp(4), 0, dp(4), dp(16))
-        }
-        val privacy = TextView(this).apply {
-            text = "1VPN is a third-party provider. When enabled, browser requests are routed through its free proxy servers. See 1vpn.org/privacy-policy for its privacy terms. WebRTC protection is applied where supported. If all proxy servers fail, GeckoView may fall back to the browser's default route; treat this as best-effort browser proxying, not a leak-proof tunnel."
-            textSize = 12f
-            setPadding(0, dp(12), 0, 0)
-        }
-
-        listOf(heading, intro, status, vpnToggle, locationButton, vpnDetails, firewallHeading, firewallToggle, firewallDetails, privacy).forEach {
-            root.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(8)
-            })
-        }
+        })
+        status = TextView(this).apply { textSize = 14f; setPadding(0, 24, 0, 16) }
+        root.addView(status)
+        root.addView(Button(this).apply { text = "Close"; setOnClickListener { finish() } })
         setContentView(root)
-        NovaBrowserVpnController.setStatusListener { runOnUiThread { refreshStatus() } }
-        refreshStatus()
+        NovaBrowserVpnController.setStatusListener { mainHandler.post { renderStatus() } }
+        renderStatus()
     }
 
-    override fun onResume() {
-        super.onResume()
-        refreshStatus()
+    private fun renderStatus() {
+        status.text = NovaBrowserVpnController.statusText()
+        locations.isEnabled = !NovaBrowserVpnController.isVpnEnabled()
     }
 
     override fun onDestroy() {
         NovaBrowserVpnController.setStatusListener(null)
         super.onDestroy()
     }
-
-    private fun chooseLocation() {
-        val servers = NovaVpnLocations.free
-        val labels = servers.map { "${it.city}, ${it.country} · Free" }.toTypedArray()
-        val current = servers.indexOfFirst { it.id == NovaBrowserVpnController.selectedLocationId() }.coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle("Choose 1VPN free server")
-            .setSingleChoiceItems(labels, current) { dialog, which ->
-                NovaBrowserVpnController.setLocation(servers[which].id)
-                locationButton.text = "Server: ${selectedLocationLabel()}  ▾"
-                dialog.dismiss()
-                refreshStatus()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun selectedLocationLabel(): String {
-        val location = NovaVpnLocations.find(NovaBrowserVpnController.selectedLocationId())
-            ?: NovaVpnLocations.find(NovaVpnLocations.DEFAULT_ID)!!
-        return "${location.city}, ${location.country}"
-    }
-
-    private fun refreshStatus() {
-        if (!::status.isInitialized) return
-        val enabled = NovaBrowserVpnController.isVpnEnabled()
-        val raw = NovaBrowserVpnController.statusText()
-        status.text = when {
-            !enabled -> "VPN: Off"
-            raw.contains("error", ignoreCase = true) || raw.contains("disconnected", ignoreCase = true) || raw.contains("unavailable", ignoreCase = true) -> "VPN: $raw"
-            !NovaBrowserVpnController.isProxySupported() -> "VPN: Waiting for the 1VPN proxy backend. $raw"
-            else -> "VPN: On · ${selectedLocationLabel()} · browser proxy configured. Open an IP-check page to verify the exit IP."
-        }
-        if (::locationButton.isInitialized) {
-            locationButton.text = "Server: ${selectedLocationLabel()}  ▾"
-            locationButton.isEnabled = true
-        }
-    }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }

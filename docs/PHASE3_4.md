@@ -1,35 +1,32 @@
-# Nova Browser — Phase 3 and Phase 4 completion update
+# Nova Browser — Phase 3 and Phase 4 implementation status
+
+Last reconciled: 2026-11-20. This document describes the current feature branch. It does not claim device acceptance.
 
 ## Phase 3: bookmarks, history, downloads, uploads and page tools
 
-- Bookmarks: structured title/URL/folder/time records; search; folder grouping; edit; delete; create folders; JSON import/export via Android document picker. Legacy URL-only bookmarks are migrated on read.
-- History: timestamped entries, title/host labels, search, date grouping, deduplicated visits, 500-entry cap, and clear-history. Private and Guest tabs never write history.
-- Downloads: replaced the limited platform DownloadManager path with an app-controlled HTTP downloader. It persists job metadata and partial files, supports pause/resume/cancel, uses HTTP Range and If-Range validators when the server supports them, shows byte progress, and publishes completed files to Downloads/Nova using MediaStore on Android 10+. On Android 8/9, it uses the app-specific Downloads directory. Resume requires a server that honors byte-range requests; if a server ignores Range, the downloader safely restarts from byte zero.
-- Webpage download interception: GeckoView ContentDelegate.onExternalResponse consumes the actual response body stream and saves it, preserving the browser's already-authenticated response rather than issuing a second unauthenticated request. These downloads appear in the downloads list and can be cancelled while saving. Private and Guest response streams are closed without saving.
-- Uploads: Android Storage Access Framework picker supports single and multiple file inputs. GeckoView folder-upload prompts now receive an explicit Allow/Deny confirmation instead of being silently rejected. Folder upload is controlled by GeckoView's folder-upload prompt; it is not an unrestricted filesystem picker.
-- Desktop site: per-site mobile/desktop preference uses GeckoView user-agent and viewport settings. Preferences are stored only for normal browsing.
-- Reader mode: uses GeckoView's built-in `about:reader` article extraction and reader UI, with an in-app explanation and Exit Reader action. The original URL is retained for exit.
-- Translation: now invokes GeckoView's native translation controller, offers source and target language selection, and allows GeckoView to download required translation models. Actual language availability depends on the GeckoView translation engine and model support on the device; unsupported pairs report an error rather than silently switching to an external website.
-- Sharing remains available via Android share sheet.
+- **Bookmarks:** structured title/URL/folder/time records; search; folder grouping; edit/delete; create folders; JSON import/export through Android's document picker. Legacy URL-only bookmarks are migrated on read.
+- **History:** timestamped entries, title/host labels, search, date grouping, deduplicated visits, 500-entry cap and clear-history. Private and Guest tabs do not write history.
+- **Downloads:** app-controlled HTTP downloader with persisted job metadata and partial files, pause/resume/cancel, HTTP Range and If-Range validation, byte progress, safe filenames and publication to Downloads/Nova through MediaStore on Android 10+. Servers that ignore Range cause a safe restart from byte zero.
+- **Webpage downloads:** GeckoView response interception saves the authenticated response body instead of issuing a second unauthenticated request. Private and Guest response streams are closed without saving.
+- **Uploads:** Android Storage Access Framework supports single/multiple file selection. GeckoView folder-upload requests receive explicit Allow/Deny confirmation and use Android's directory picker.
+- **Desktop site:** per-site mobile/desktop preference. Cefrium applies a desktop user agent and viewport; GeckoView retains its native path.
+- **Reader mode:** GeckoView uses its built-in reader. Cefrium extracts article content and renders a simplified reading page.
+- **Translation:** GeckoView native translation controller with source/target selection. Model availability depends on the GeckoView build and device.
+- **Sharing:** Android share sheet.
 
-## Phase 4: private browsing and Guest Mode
+## Phase 4: Private browsing and Guest Mode
 
-- Private tabs use GeckoView private mode and are excluded from normal history, bookmarks, workspaces, and session restore.
-- Guest Mode is a distinct tab category using private mode plus a dedicated Gecko session storage context. Guest tabs are excluded from normal persistence, workspaces, history, bookmarks, and downloads.
-- Guest storage context is cleared at startup (cleaning up after process death), after the final Guest tab closes, and during activity teardown after its sessions close. The context ID rotates for the next Guest session.
-- Tab switcher keeps normal, private, and Guest tabs separate; split-screen remains restricted to normal tabs.
+- **Private:** Private tabs use Cefrium's in-memory incognito profile when Cefrium is selected, or GeckoView's private session when GeckoView is selected. They are excluded from normal history, bookmarks, workspaces and session restore. Cefrium Private tabs share the in-memory Private profile, which is cleared when the final Private Cefrium browser closes.
+- **Guest:** Guest is a distinct tab category locked to GeckoView. It uses a dedicated isolated Gecko session context and is excluded from normal tabs/session restore, workspaces, history, bookmarks and saved downloads. Guest does not read owner browsing records. Owner credential callbacks are disabled while a Private or Guest tab exists.
+- **Cleanup:** Guest context cleanup runs at startup to recover after process death, after the final Guest tab closes, and during Activity teardown after sessions close. The context ID rotates for the next Guest session.
+- **Tab switcher:** normal, Private and Guest tabs remain separate; split-screen is restricted to normal tabs.
 
-## Verification and remaining limits
+## Verification status and limitations
 
-- Earlier combined Phase 3/4 commit passed GitHub Actions unit tests, debug APK assembly, and artifact upload.
-- The downloader now validates HTTP Content-Range offsets and final byte counts, rejects unsafe filenames, and has JVM regression tests. A foreground dataSync service keeps active downloads visible while Nova is backgrounded. The changes still require a fresh CI build and physical-device verification.
-- Device tests are still required on Android 16 / Realme RMX5313 for downloads, cookies/session isolation, folder upload, translation model downloads, and reader mode. No physical-device test is claimed here.
-- HTTP Range support is server-dependent; non-range servers restart rather than resume. Downloads do not yet run in a dedicated foreground service, so active transfers may stop if Android kills the app process. Partial data and metadata remain so the user can resume after reopening Nova.
-- GeckoView native translation requires its translation toolkit/model support; available language pairs vary by GeckoView build and device.
-
-
-## Follow-up build fix
-
-- Translation failure callback now handles GeckoResult nullable Throwable safely.
-
-- Folder input now opens Android's actual directory picker and returns the chosen tree URI to GeckoView before the separate folder-upload consent prompt.
+- Unit tests cover guest persistence/read boundaries, profile/engine selection, session retention and related privacy policies.
+- Android CI and lint passed on commit `5c83f759b5aeef9f310d04498070fcede1f1af96`.
+- The latest Android Emulator Smoke run failed during emulator setup/ADB configuration after boot completion and before the instrumentation test command. ADB returned a broken-pipe/exit-224 error; this is not a test assertion result. A workflow reliability change is being applied and must be rerun.
+- Device acceptance is still required on Android 16 / Realme RMX5313 for downloads, cookie/session isolation, folder upload, translation models, Reader Mode, Private/Guest storage cleanup and process-death recovery.
+- HTTP Range resume remains server-dependent. Do not claim all downloads can resume.
+- Translation language pairs depend on the bundled GeckoView translation engine and downloaded model support.
+- Guest Mode is ephemeral local browsing, not Tor routing or Tor-level anonymity.
