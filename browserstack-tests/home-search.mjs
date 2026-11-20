@@ -176,9 +176,26 @@ try {
   await byText('Close').click();
   record('Normal browsing history is recorded', true, 'Normal marker appears in History');
 
+  // Verify that the engine's persistent Normal cookie jar is not visible to ephemeral profiles.
+  await navigateTo('https://httpbin.org/cookies/set?nova_owner_cookie=owner', 'httpbin.org/cookies');
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const normalCookieSource = await driver.getPageSource();
+  if (!normalCookieSource.includes('nova_owner_cookie')) throw new Error('Normal profile cookie was not retained');
+  record('Normal cookies persist in the owner profile', true, 'httpbin reflects the Normal-only cookie');
+
   await tapToolbar('Private', 0);
   await byTextContains('Private session').waitForDisplayed({ timeout: 10000 });
   record('Private mode indicator appears on home', true, 'Private session status is visible immediately after opening a Private tab');
+
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const privateCookiesBefore = await driver.getPageSource();
+  if (privateCookiesBefore.includes('nova_owner_cookie')) throw new Error('Private mode exposed a Normal profile cookie');
+  await navigateTo('https://httpbin.org/cookies/set?nova_private_cookie=private', 'httpbin.org/cookies');
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const privateCookieSource = await driver.getPageSource();
+  if (!privateCookieSource.includes('nova_private_cookie')) throw new Error('Private profile did not retain its own cookie during the session');
+  if (privateCookieSource.includes('nova_owner_cookie')) throw new Error('Private profile read a Normal cookie after setting its own cookie');
+  record('Private cookies are isolated from Normal browsing', true, 'Private sees its own cookie but not the owner-profile cookie');
   await navigateTo('https://example.com/?' + privateMarker + '=1', privateMarker);
   await tapToolbar('History', 1);
   await driver.pause(1000);
@@ -207,6 +224,16 @@ try {
   await tapToolbar('Guest', 0);
   await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
   record('Guest mode indicator appears on home', true, 'Guest Mode status is visible immediately after opening a Guest tab');
+
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestCookiesBefore = await driver.getPageSource();
+  if (guestCookiesBefore.includes('nova_owner_cookie')) throw new Error('Guest Mode exposed a Normal profile cookie');
+  await navigateTo('https://httpbin.org/cookies/set?nova_guest_cookie=guest', 'httpbin.org/cookies');
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestCookieSource = await driver.getPageSource();
+  if (!guestCookieSource.includes('nova_guest_cookie')) throw new Error('Guest profile did not retain its own cookie during the session');
+  if (guestCookieSource.includes('nova_owner_cookie')) throw new Error('Guest profile read a Normal cookie after setting its own cookie');
+  record('Guest cookies are isolated from the owner profile', true, 'Guest sees its own cookie but not the owner-profile cookie');
   await navigateTo('https://example.com/?' + guestMarker + '=1', guestMarker);
   await tapToolbar('History', 1);
   await driver.pause(500);
@@ -287,6 +314,13 @@ try {
   await byText('Exit Guest').click();
   await driver.waitUntil(async () => !(await sessionStatus.getText().catch(() => '')).includes('Guest Mode'), { timeout: 10000, timeoutMsg: 'Guest Mode did not exit after confirmation' });
   record('Guest exit requires confirmation', true, 'The tab manager warns before returning to owner tabs');
+
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const cookiesAfterGuestExit = await driver.getPageSource();
+  if (!cookiesAfterGuestExit.includes('nova_owner_cookie')) throw new Error('Normal cookie was lost after Guest exit');
+  if (cookiesAfterGuestExit.includes('nova_guest_cookie')) throw new Error('Guest cookie leaked into the owner profile after Guest exit');
+  if (cookiesAfterGuestExit.includes('nova_private_cookie')) throw new Error('Private cookie leaked into the owner profile after Private exit');
+  record('Private and Guest cookies are cleared from the owner view after exit', true, 'Owner cookie remains; ephemeral cookies are absent');
 
   const historyAfterGuest = await openHistoryAndReadSource();
   if (historyAfterGuest.includes(guestMarker)) throw new Error('Guest URL leaked into normal history');
