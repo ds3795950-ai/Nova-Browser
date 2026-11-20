@@ -176,6 +176,51 @@ try {
   await byText('Close').click();
   record('Normal browsing history is recorded', true, 'Normal marker appears in History');
 
+  // Engine-neutral tab ownership: switch the live tab in both directions, then split Gecko + Cefrium.
+  await tapToolbar('Shield', 2);
+  await byText('Off').click();
+  await tapToolbar('Settings', 1);
+  await byTextContains('Browser engine ·').click();
+  await byText('Cefrium · Chromium (default)').click();
+
+  await tapToolbar('Settings', 1);
+  await byText("Switch this tab's engine").click();
+  await byTextContains('Cefrium (Chromium)').waitForDisplayed({ timeout: 10000 });
+  await byText('Switch and reload').click();
+  await driver.waitUntil(async () => (await addressBar.getAttribute('text').catch(() => '')).includes('example.com'), {
+    timeout: 20000, timeoutMsg: 'Tab did not reload after switching to Cefrium'
+  });
+  record('Manual engine switch to Cefrium', true, 'Existing tab reloaded through the Cefrium BrowserEngine adapter');
+
+  await tapToolbar('Settings', 1);
+  await byText("Switch this tab's engine").click();
+  await byTextContains('GeckoView (Firefox)').waitForDisplayed({ timeout: 10000 });
+  await byText('Switch and reload').click();
+  await driver.waitUntil(async () => (await addressBar.getAttribute('text').catch(() => '')).includes('example.com'), {
+    timeout: 20000, timeoutMsg: 'Tab did not reload after switching back to GeckoView'
+  });
+  record('Manual engine switch back to GeckoView', true, 'Existing tab reloaded through the GeckoView BrowserEngine adapter');
+
+  // New Normal tabs now default to Cefrium while this existing tab remains GeckoView.
+  await tapToolbar('＋', 0);
+  await navigateTo('https://example.org/', 'example.org');
+  await tapToolbar('Split', 0);
+  await byText('Open second pane').waitForDisplayed({ timeout: 10000 });
+  await byTextContains('GECKOVIEW').click();
+  await byA11y('Secondary address bar').waitForDisplayed({ timeout: 10000 });
+  const splitSource = await driver.getPageSource();
+  if (!splitSource.includes('example.com')) throw new Error('GeckoView secondary pane did not retain its page after attach');
+  const secondaryAddress = byA11y('Secondary address bar');
+  await secondaryAddress.setValue('https://example.net/');
+  await byA11y('Secondary Go').click();
+  await driver.waitUntil(async () => (await secondaryAddress.getAttribute('text').catch(() => '')).includes('example.net'), {
+    timeout: 20000, timeoutMsg: 'Secondary pane did not navigate through its BrowserEngine adapter'
+  });
+  await byA11y('Close split').click();
+  record('Mixed-engine split pane attaches, navigates and detaches', true, 'Cefrium remains primary; GeckoView attaches to secondary, navigates, then detaches cleanly');
+  await tapToolbar('Shield', 2);
+  await byText('Standard · recommended').click();
+
   // Verify that the engine's persistent Normal cookie jar is not visible to ephemeral profiles.
   await navigateTo('https://httpbin.org/cookies/set?nova_owner_cookie=owner', 'httpbin.org/cookies');
   await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');

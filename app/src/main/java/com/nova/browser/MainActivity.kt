@@ -304,6 +304,7 @@ class MainActivity : ComponentActivity() {
         browserView = GeckoView(this)
         secondaryBrowserView = GeckoView(this)
         secondaryAddressBar = EditText(this).apply {
+            contentDescription = "Secondary address bar"
             hint = "Second pane address"
             isSingleLine = true
             textSize = 12f
@@ -315,7 +316,9 @@ class MainActivity : ComponentActivity() {
         val secondaryControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(secondaryAddressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
-            addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
+            addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) }.apply {
+                contentDescription = "Secondary Go"
+            })
             addView(actionButton("Close split") { exitSplitScreen() })
         }
         secondaryPane = LinearLayout(this).apply {

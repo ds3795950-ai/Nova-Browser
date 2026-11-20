@@ -22,6 +22,7 @@
 - Split mode supports two distinct tab-owned engine views in stacked panes, each with its own address field and Go control.
 - The second pane can be selected from existing Normal tabs only; Private and Guest tabs are excluded.
 - Gecko sessions are attached to exactly one pane at a time. Switching or closing a tab detaches its Gecko view before it is re-used or released.
+- The secondary address field and Go control expose stable accessibility labels for automation and assistive technology.
 - Split state is temporary and is not restored after process recreation.
 
 ## Remaining Phase 2 work
