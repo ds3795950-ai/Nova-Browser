@@ -1,76 +1,110 @@
 # Nova Browser roadmap and verification status
 
-Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitHub workflow passed; **DEVICE TEST REQUIRED** means real Android interaction remains unverified; **DASHBOARD SETUP REQUIRED** means a Supabase project setting must be completed by the project owner.
+Last reconciled: 2026-11-20. This file describes the feature branch, not the default `main` branch.
 
-## Current dual-engine transition
+Status key:
+- **IMPLEMENTED + CI VERIFIED** — source is committed and the relevant GitHub Actions checks passed.
+- **IMPLEMENTED; DEVICE TEST REQUIRED** — code exists, but Android interaction and privacy behavior still need device validation.
+- **PARTIAL** — architecture or part of the feature exists; acceptance criteria are not yet met.
+- **EXTERNAL SETUP REQUIRED** — completion depends on a project-owner dashboard, provider account, or service quota.
 
-- **Active branch:** `feature/phase-1-dual-engine-foundation`; Cefrium SDK 0.21.0 is integrated alongside GeckoView.
-- **Production behavior:** Normal mode defaults to Cefrium. Users can select Automatic (Cefrium preferred with compatibility fallback) or GeckoView in Settings. Guest mode is locked to GeckoView regardless of the Normal-mode selection; Private mode also remains on GeckoView.
-- **Per-tab switching:** Normal tabs can be explicitly reloaded in the other engine after a warning. Website cookies, storage and login sessions are not transferred; the source engine's profile remains intact. Switching to Cefrium is blocked when Nova Shield, Protected DNS, desktop-site mode, Reader view or saved-login autofill requires GeckoView.
-- **Integrated Cefrium features:** normal-tab navigation/lifecycle, secondary split-pane rendering, site permission prompts and completed-download publication into Nova's download repository.
-- **Privacy boundary:** Private and Guest tabs remain on GeckoView. Cefrium's built-in incognito profile is shared, and named profiles are persistent until safely deleted; Nova does not enable Cefrium in those modes until independently erasable contexts can meet the privacy requirement.
-- **Still outstanding:** native Cefrium equivalents for Nova Shield and Protected DNS, documented password save/fill integration, concrete cross-engine data export/import adapters, full engine-neutral tab ownership, and end-to-end device validation.
-- **Verification:** the previous Android CI run passed on commit `189b9a0`; the lint run failed on a missing optional camera feature declaration, which was fixed in commit `6df5861`. New checks for the current branch head are running. BrowserStack real-device testing remains blocked because the trial quota expired.
+## Current repository state
 
-### Phase 2 — engine selection and production integration
+- Default branch: `main`.
+- Active implementation branch: `feature/phase-1-dual-engine-foundation`.
+- Latest inspected commit: `5c83f759b5aeef9f310d04498070fcede1f1af96`.
+- Pull request #1 is open and remains a draft. It has not been merged into `main`.
+- On the inspected commit, **Android CI** and **Android Lint** passed.
+- The Android Emulator Smoke workflow failed during emulator setup/ADB configuration after the emulator reported boot completion. The failure was an ADB broken-pipe/exit-224 error before the instrumentation test command ran; it is not evidence of an app test assertion failure. The workflow is being adjusted and must pass on a fresh run.
+- BrowserStack workflows are present, but no BrowserStack run is claimed as completed.
 
-- **Implemented:** common engine contract and GeckoView/Cefrium adapters; Automatic/Cefrium/GeckoView selector; exact-host site affinity; safe fallback; explicit per-tab switching with a data-loss warning; Cefrium normal-tab navigation, lifecycle, split-pane, permissions and downloads.
-- **Not enabled by design:** Cefrium Private/Guest contexts, because the SDK's built-in incognito profile is shared and named profiles do not guarantee immediate erasure during a running process. GeckoView remains the privacy-mode engine.
-- **Gecko-only routes:** Nova Shield, Protected DNS, desktop-site mode, Reader view and saved-login autofill continue to use GeckoView. Do not bypass these guards just to increase Cefrium coverage.
-- **Remaining:** native Cefrium protection equivalents, a supported password/autofill delegate, more complete engine-neutral tab ownership, crash/lifecycle regression tests and physical-device acceptance.
+## Phase 1 — dual-engine foundation
 
-### Phase 3 — shared data and cross-engine migration
+**Status: IMPLEMENTED; DEVICE TEST REQUIRED**
 
-- **Implemented foundation:** app-level tabs/session metadata, history, bookmarks and download records are shared through Nova-owned storage; exact-host engine affinity is stored only for Normal mode.
-- **Migration contract:** requires explicit consent, destination verification and preserves source data. It is not a full end-to-end migration implementation.
-- **Hard limitation:** GeckoView's documented public storage API does not provide general cookie/storage export. HttpOnly/partitioned cookies, service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials are not guaranteed portable. Users may need to reauthenticate after switching engines.
-- **Remaining:** concrete export/import adapters where APIs permit, recovery UX for partial migration, more cross-engine integration tests and device acceptance.
+- Cefrium SDK 0.21.0 is integrated alongside GeckoView.
+- A shared per-tab `BrowserEngine` contract and GeckoView/Cefrium adapters exist.
+- A debug-only Cefrium Engine Lab and emulator smoke tests exist.
+- Licensing, SDK compatibility, profile boundaries and Tor feasibility are documented.
+- Production rollout remains incremental; the draft PR must be reviewed and its emulator/device checks must pass before Phase 1 is accepted.
 
-## Core browser and privacy
+## Phase 2 — engine selection and production integration
 
-- Cefrium is the default engine for compatible Normal tabs; GeckoView is used for every Guest tab and for Private tabs, plus Normal sites that require Gecko-only protections or autofill.
-- Address/search, search provider selection, navigation, tabs, normal session restore, private tabs and isolated ephemeral Guest context.
-- Bookmarks, history, downloads/uploads, workspaces, desktop-site mode, reader mode, translation, sharing and split-pane tab workflow.
-- Nova Shield currently uses GeckoView native tracking protection, cookie isolation, Safe Browsing, GPC/fingerprinting controls and per-site permissions. Cefrium is not selected while these protections are enabled.
-- ChatGPT, Claude and Perplexity handoff use official websites. Prompt content is user-entered; page URL context is opt-in; page content is not scraped or sent automatically.
-- GeckoView WebExtension management and AES-GCM local password vault. Extension compatibility depends on the embedded GeckoView version. Private/Guest browsing does not save or retrieve passwords.
-- Guest Mode is local ephemeral isolation, not Tor routing or Tor-level anonymity.
+**Status: PARTIAL**
+
+- Normal tabs default to Cefrium; Automatic and GeckoView choices are available.
+- Automatic mode supports exact-host affinity and GeckoView fallback for unsupported features.
+- Normal tabs can be switched explicitly after a warning that engine-native website data is not transferred.
+- Private tabs use Cefrium's memory-only incognito profile; Guest tabs are locked to GeckoView and use their separate ephemeral context.
+- Cefrium supports normal-tab navigation/lifecycle, split-pane rendering, permission prompts and completed-download publication.
+- Protected DNS, desktop-site mode and Reader Mode have Cefrium paths; Nova Shield and saved-login autofill remain GeckoView-dependent.
+- `MainActivity.BrowserTab` still retains Gecko-specific session state. The common interface is not yet the sole tab owner.
+- Remaining: complete engine-neutral tab ownership, feature-capability routing, crash/lifecycle recovery tests, and device compatibility/performance acceptance. Do not bypass privacy or feature guards to increase Cefrium coverage.
+
+## Phase 3 — shared data and cross-engine migration
+
+**Status: PARTIAL**
+
+- Nova-owned bookmarks, history, tabs/session metadata and download records are shared at the browser-app layer.
+- Exact-host engine affinity is stored for Normal mode only.
+- A consent-gated migration coordinator validates an exact web origin, imports and verifies portable data, and never deletes the source profile after a failure.
+- The coordinator is a contract only: concrete GeckoView/Cefrium `WebsiteDataPort` adapters are not wired.
+- GeckoView's documented public storage APIs do not provide general cookie and website-storage export. HttpOnly/partitioned cookies, service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials cannot be promised portable.
+- Remaining: implement adapters only for data exposed by supported APIs, add user-facing partial-migration/re-authentication recovery, and run integration/device tests. Do not claim lossless website-session migration.
+
+## Phase 4 — Private and Guest privacy
+
+**Status: IMPLEMENTED IN CODE; DEVICE TEST REQUIRED**
+
+- Private tabs use Cefrium's in-memory incognito profile when Cefrium is selected and remain excluded from normal persistence.
+- Guest tabs are GeckoView-only and use a dedicated isolated Gecko context. Guest tabs are excluded from normal tabs/session restore, history, bookmarks, workspaces and saved downloads.
+- Guest context cleanup is designed to run at startup (to recover after process death), when the final Guest tab closes, and during Activity teardown. The context rotates for the next Guest session.
+- Owner credential autofill callbacks are disabled while any Private or Guest tab exists.
+- Guest Mode is local ephemeral isolation. It is **not Tor routing** and does not provide Tor anonymity.
+- Remaining: verify storage cleanup, downloads, credentials, tab isolation and process-death recovery on supported Android versions, including Android 16. Do not describe Guest privacy as independently audited until those checks pass.
+
+## VPN and Tor
+
+- The bundled 1VPN integration is a browser proxy path; it is not an Android-wide VPN service.
+- Cefrium's proxy path is designed to fail closed when credentials or the proxy bridge are unavailable. GeckoView uses the bundled extension path.
+- The requested Guest-only Tor route is not implemented or verified. Do not label 1VPN as Tor, and do not claim Tor routing until a separately supported Tor transport is integrated, scoped only to Guest traffic, and tested for DNS/WebRTC/leak behavior.
+
+## Core browser features
+
+The codebase includes address/search and provider selection, tabs, normal session restore, bookmarks, history, downloads/uploads, workspaces, desktop-site mode, Reader Mode, translation, sharing, split-pane, Nova Shield, GeckoView extensions, an encrypted local password vault, and ChatGPT/Claude/Perplexity website handoff. Availability and parity vary by engine; GeckoView-only features must remain on GeckoView until equivalent support is implemented and tested.
 
 ## Phase 8 — Supabase email OTP authentication
 
-**Implemented:**
-- Supabase Auth passwordless email OTP send and verify flow.
-- New-user creation is enabled by the Auth OTP request; no password is stored by Nova.
-- Access/refresh session is encrypted with AES-GCM using a non-exportable Android Keystore key and stored in no-backup app storage.
-- Expiring access tokens are refreshed through Supabase Auth; sign-out clears the local session.
-- The app embeds only the Supabase publishable key; no service-role/secret key is included.
+**Status: IMPLEMENTED; EXTERNAL SETUP AND DEVICE TEST REQUIRED**
 
-**Dashboard setup still required:** Supabase email OTP shares the Magic Link email template. In Supabase Dashboard → Authentication → Email Templates → Magic Link, make the template display `{{ .Token }}` so users receive the numeric code Nova asks them to enter. Confirm email provider delivery and Auth rate limits are configured for production. Nova's client-side code is ready, but an actual email delivery/login cannot be proven without a user email and the dashboard template setting.
+- Passwordless email OTP send/verify, encrypted local session storage using Android Keystore, token refresh and sign-out are implemented.
+- The app contains only the public/publishable key; no service-role secret belongs in the Android app.
+- The Supabase Magic Link email template must display `{{ .Token }}` for the numeric OTP UI. A verified custom SMTP provider must be configured for normal delivery; the default provider has recipient and rate restrictions.
+- Remaining: project owner configures the template and SMTP, then verifies real email delivery, OTP expiry, sign-in, refresh and sign-out on-device.
 
-## Phase 9 — Opt-in encrypted cloud sync
+## Phase 9 — opt-in encrypted cloud sync
 
-**Implemented:**
-- Uses the existing `nova_sync_state` and `nova_encrypted_vault` tables in the Nova Browser Supabase project.
-- Both tables have RLS enabled. SELECT/INSERT/UPDATE/DELETE policies are scoped to `auth.uid() = user_id`; UPDATE includes both USING and WITH CHECK.
-- Client encrypts the sync snapshot and password-vault payload separately with AES-256-GCM. Keys are derived from a user-chosen passphrase using PBKDF2-HMAC-SHA256 (310,000 iterations), with random per-payload salt and IV.
-- Passphrase is not stored or sent to Supabase. Losing it means the cloud backup cannot be decrypted.
-- Sync is user-initiated and merge-based. It includes bookmarks, normal browsing history, saved workspaces, selected preferences and saved passwords. Private/Guest tabs, private browsing state and Guest data are excluded. The current merge is additive: deleting an item on one device does not create a cloud tombstone, so that item may be restored from another device's backup on the next merge.
-- Supabase stores only encrypted envelopes. The existing password vault remains protected locally by Android Keystore.
-- Wrong passphrase/authentication-tag failure stops the sync rather than overwriting the cloud backup.
+**Status: IMPLEMENTED; MULTI-DEVICE ACCEPTANCE REQUIRED**
 
-**Current limitation:** Sync is manual from Settings → Account & encrypted cloud sync. It is not a background/continuous sync service. Use the same passphrase on every device. The first device can upload; another device can restore/merge after signing in with the same email and passphrase.
+- Sync snapshots and password-vault payloads are separately encrypted client-side with AES-256-GCM; passphrase-derived keys use PBKDF2-HMAC-SHA256.
+- The passphrase is not stored or sent to Supabase. Supabase stores encrypted envelopes and row-level policies scope records to the authenticated user.
+- Sync is manual, not continuous/background. It is additive: deletion tombstones are not implemented, so an item removed on one device may return from another device's snapshot.
+- Private and Guest browsing state is excluded.
+- Remaining: verify upload/restore across two devices, wrong-passphrase handling, conflicts, sign-out and account deletion. The project owner must provide the dashboard/device access needed for acceptance.
 
-## Phase 10 — Automated QA, security checks and release builds
+## Phase 10 — automated QA, security and release
 
-- GitHub Actions runs JVM unit tests, debug APK assembly and unsigned release APK assembly. Android lint was removed from the blocking pipeline after the Gradle lint task stalled; it remains a separate follow-up check.
-- Unit tests cover cloud-encryption round trip, ciphertext not matching plaintext, wrong-passphrase rejection and weak-passphrase rejection, alongside existing URL, AI-routing and download-protocol tests.
-- CI uploads debug and unsigned release APK artifacts for inspection.
-- Supabase security advisors returned no findings at the time of implementation; table policies were independently inspected.
+**Status: PARTIAL**
 
-**Device verification still required:** OTP email delivery and verification, session refresh after expiry, multi-device sync/restore, incorrect passphrase UX, password-vault migration and restore, Guest/Private exclusion, GeckoView extension prompts, Shield behavior and performance on the target Android device. Automated CI cannot substitute for hands-on Android testing.
+- JVM unit tests, debug/release builds and lint run in GitHub Actions. Android CI and lint passed on the inspected branch head.
+- The Android emulator smoke test must be rerun after the ADB setup reliability adjustment; the latest failure happened before instrumentation began.
+- BrowserStack App Automate workflows exist for home/search, privacy/settings and VPN/firewall settings. They require valid BrowserStack credentials in the repository secret `ROHANSAHA_NGXOSY` and available App Automate quota. No run is claimed until the workflow returns a completed result with test artifacts.
+- Remaining: passing emulator instrumentation, BrowserStack execution, Android 16 / target-device acceptance, OTP and two-device sync verification, privacy/security regression checks, and release APK review.
 
-## Build and security rules
+## Completion rules
 
-- Never place Supabase service-role/secret keys in Android code, Gradle config or APKs. The publishable key is intentionally public and RLS is the security boundary.
-- Never claim Guest Mode is Tor or anonymous unless a separately audited Tor transport is implemented.
-- Never silently replace an unreadable encrypted password vault or cloud backup.
+- Keep implementation on the feature branch until the owner explicitly approves merging.
+- Never mark a phase complete solely because its code compiles; required device, dashboard and service checks must pass.
+- Never place Supabase service-role credentials, SMTP credentials or BrowserStack access keys in source code or logs.
+- Never silently replace an unreadable local vault or encrypted cloud backup.
+- Never claim Guest Mode is Tor or anonymous without a separately implemented and audited Tor transport.
