@@ -5,9 +5,9 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
 /**
- * GeckoView adapter for a MainActivity-configured tab session. MainActivity retains ownership
- * of Gecko delegates (prompts, downloads, permissions and translations); this adapter owns the
- * shared navigation/lifecycle contract and safely moves one session between primary/split panes.
+ * GeckoView adapter for one tab session. It owns the Gecko session lifecycle and exposes a
+ * guarded delegate-installation boundary for Nova's host callbacks, while safely moving one
+ * session between primary/split panes.
  */
 class GeckoViewBrowserEngine(
     val session: GeckoSession,
@@ -31,12 +31,24 @@ class GeckoViewBrowserEngine(
     private var focused = false
     private var hostPaused = false
     private var closed = false
+    private var delegatesInstalled = false
 
     override val view: View
         get() = attachedView
 
     override val state: BrowserEngineState
         get() = currentState
+
+    /**
+     * Installs the host-provided Gecko delegates exactly once before the session is used.
+     * The adapter owns the registration boundary and guards against duplicate installation.
+     */
+    fun installDelegates(installer: (GeckoSession) -> Unit) {
+        checkOpen()
+        check(!delegatesInstalled) { "Gecko delegates have already been installed" }
+        installer(session)
+        delegatesInstalled = true
+    }
 
     override fun attachTo(view: View) {
         checkOpen()

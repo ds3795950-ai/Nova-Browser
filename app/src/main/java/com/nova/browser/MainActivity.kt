@@ -674,6 +674,155 @@ class MainActivity : ComponentActivity() {
     private fun tabKey(session: GeckoSession): String =
         tabs.firstOrNull { geckoSession(it) === session }?.id ?: ""
 
+    /**
+     * Host callbacks for Gecko are registered through the Gecko engine adapter. Keeping this
+     * installer separate prevents GeckoSession delegate wiring from leaking into tab lifecycle.
+     */
+    private fun installGeckoDelegates(tab: BrowserTab, session: GeckoSession) {
+            session.promptDelegate = object : GeckoSession.PromptDelegate {
+                override fun onFilePrompt(session: GeckoSession, prompt: FilePrompt): GeckoResult<PromptResponse> {
+                    pendingFilePrompt = prompt
+                    val result = GeckoResult<PromptResponse>()
+                    pendingFileResult = result
+                    val picker = if (prompt.type == FilePrompt.Type.FOLDER) {
+                        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                    } else {
+                        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = prompt.mimeTypes?.firstOrNull() ?: "*/*"
+                            if (!prompt.mimeTypes.isNullOrEmpty()) putExtra(Intent.EXTRA_MIME_TYPES, prompt.mimeTypes)
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, prompt.type == FilePrompt.Type.MULTIPLE)
+                        }
+                    }
+                    try { startActivityForResult(picker, uploadRequestCode) }
+                    catch (error: Exception) { pendingFilePrompt = null; pendingFileResult = null; result.complete(prompt.dismiss()); toast("Could not open file picker") }
+                    return result
+                }
+
+                override fun onLoginSave(session: GeckoSession, request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSaveOption>): GeckoResult<PromptResponse> {
+                    val tab = tabs.firstOrNull { geckoSession(it) === session }
+                    val option = request.options.firstOrNull()
+                    val result = GeckoResult<PromptResponse>()
+                    if (tab == null || tab.isPrivate || tab.isGuest || option == null) {
+                        result.complete(request.dismiss())
+                        return result
+                    }
+                    val login = option.value
+                    runOnUiThread {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Save password?")
+                            .setMessage("Save the login for ${Uri.parse(login.origin).host ?: login.origin} in Nova's encrypted on-device vault? The password stays on this device.")
+                            .setPositiveButton("Save securely") { _, _ -> result.complete(request.confirm(option)) }
+                            .setNegativeButton("Not now") { _, _ -> result.complete(request.dismiss()) }
+                            .setOnCancelListener { result.complete(request.dismiss()) }
+                            .show()
+                    }
+                    return result
+                }
+
+                override fun onLoginSelect(session: GeckoSession, request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>): GeckoResult<PromptResponse> {
+                    val tab = tabs.firstOrNull { geckoSession(it) === session }
+                    val result = GeckoResult<PromptResponse>()
+                    if (tab == null || tab.isPrivate || tab.isGuest || request.options.isEmpty()) {
+                        result.complete(request.dismiss())
+                        return result
+                    }
+                    val choices = request.options.map { it.value.username.ifBlank { Uri.parse(it.value.origin).host ?: "Saved login" } }.toTypedArray()
+                    runOnUiThread {
+                        AlertDialog.Builder(this@MainActivity).setTitle("Choose saved login")
+                            .setItems(choices) { _, which -> result.complete(request.confirm(request.options[which])) }
+                            .setNegativeButton("Cancel") { _, _ -> result.complete(request.dismiss()) }
+                            .setOnCancelListener { result.complete(request.dismiss()) }.show()
+                    }
+                    return result
+                }
+
+                override fun onFolderUploadPrompt(session: GeckoSession, prompt: FolderUploadPrompt): GeckoResult<PromptResponse> {
+                    val result = GeckoResult<PromptResponse>()
+                    runOnUiThread {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Upload folder?")
+                            .setMessage("The website is requesting access to upload the folder ${prompt.directoryName ?: "selected folder"}. Its files may be sent to this site.")
+                            .setPositiveButton("Allow") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
+                            .setNegativeButton("Deny") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                            .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                            .show()
+                    }
+                    return result
+                }
+            }
+            session.setTranslationsSessionDelegate(object : TranslationsController.SessionTranslation.Delegate {
+                override fun onOfferTranslate(session: GeckoSession) {
+                    val tab = tabs.firstOrNull { geckoSession(it) === session } ?: return
+                    if (currentTab() === tab) runOnUiThread { toast("This page may be available in another language · tap Translate") }
+                }
+                override fun onExpectedTranslate(session: GeckoSession) {
+                    val tab = tabs.firstOrNull { geckoSession(it) === session } ?: return
+                    if (currentTab() === tab) runOnUiThread { pageStatus.text = "Translation available" }
+                }
+                override fun onTranslationStateChange(session: GeckoSession, translationState: TranslationsController.SessionTranslation.TranslationState?) {
+                    val language = translationState?.detectedLanguages?.docLangTag
+                    if (!language.isNullOrBlank()) detectedPageLanguages[tabKey(session)] = language
+                }
+            })
+            session.contentDelegate = object : GeckoSession.ContentDelegate {
+                override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                    val tab = tabs.firstOrNull { geckoSession(it) === session }
+                    val body = response.body
+                    if (tab == null || tab.isPrivate || tab.isGuest) {
+                        runCatching { body?.close() }
+                        toast("Downloads are disabled in private and Guest Mode")
+                        return
+                    }
+                    if (body == null) { toast("This download has no readable response body"); return }
+                    val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
+                    val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
+                    requestDownloadNotificationPermission()
+                    novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
+                    toast("Webpage download received · saving to Downloads/Nova")
+                }
+                override fun onTitleChange(session: GeckoSession, title: String?) {
+                    if (!title.isNullOrBlank()) {
+                        val tab = tabs.firstOrNull { geckoSession(it) === session } ?: return
+                        tab.title = title
+                        (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
+                            engine.updateState(engine.state.copy(title = title))
+                        }
+                        if (currentTab() === tab) tabLabel.text = title.take(32)
+                    }
+                }
+            }
+            session.open(runtime)
+            session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+                override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                    tab.canGoBack = canGoBack
+                    (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
+                        engine.updateState(engine.state.copy(canGoBack = canGoBack))
+                    }
+                }
+                override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                    tab.canGoForward = canGoForward
+                    (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
+                        engine.updateState(engine.state.copy(canGoForward = canGoForward))
+                    }
+                }
+                override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
+                    if (url.isNullOrBlank()) return
+                    tab.lastUrl = url
+                    (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
+                        engine.updateState(engine.state.copy(url = url))
+                    }
+                    (tab.browserEngine as? GeckoViewBrowserEngine)?.updatePermissions(perms)
+                    tab.title = Uri.parse(url).host ?: url.take(48)
+                    if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url, tab); persistTabs() }
+                    if (currentTab() === tab) {
+                        addressBar.setText(url)
+                        pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
+                    }
+                }
+            }
+    }
+
     private fun ensureSession(tab: BrowserTab): GeckoSession {
         (tab.browserEngine as? GeckoViewBrowserEngine)?.let { return it.session }
         tab.browserEngine?.close()
@@ -685,149 +834,9 @@ class MainActivity : ComponentActivity() {
             .viewportMode(if (tab.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .build()
         val session = GeckoSession(settings)
-        session.promptDelegate = object : GeckoSession.PromptDelegate {
-            override fun onFilePrompt(session: GeckoSession, prompt: FilePrompt): GeckoResult<PromptResponse> {
-                pendingFilePrompt = prompt
-                val result = GeckoResult<PromptResponse>()
-                pendingFileResult = result
-                val picker = if (prompt.type == FilePrompt.Type.FOLDER) {
-                    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-                } else {
-                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = prompt.mimeTypes?.firstOrNull() ?: "*/*"
-                        if (!prompt.mimeTypes.isNullOrEmpty()) putExtra(Intent.EXTRA_MIME_TYPES, prompt.mimeTypes)
-                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, prompt.type == FilePrompt.Type.MULTIPLE)
-                    }
-                }
-                try { startActivityForResult(picker, uploadRequestCode) }
-                catch (error: Exception) { pendingFilePrompt = null; pendingFileResult = null; result.complete(prompt.dismiss()); toast("Could not open file picker") }
-                return result
-            }
-
-            override fun onLoginSave(session: GeckoSession, request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSaveOption>): GeckoResult<PromptResponse> {
-                val tab = tabs.firstOrNull { geckoSession(it) === session }
-                val option = request.options.firstOrNull()
-                val result = GeckoResult<PromptResponse>()
-                if (tab == null || tab.isPrivate || tab.isGuest || option == null) {
-                    result.complete(request.dismiss())
-                    return result
-                }
-                val login = option.value
-                runOnUiThread {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Save password?")
-                        .setMessage("Save the login for ${Uri.parse(login.origin).host ?: login.origin} in Nova's encrypted on-device vault? The password stays on this device.")
-                        .setPositiveButton("Save securely") { _, _ -> result.complete(request.confirm(option)) }
-                        .setNegativeButton("Not now") { _, _ -> result.complete(request.dismiss()) }
-                        .setOnCancelListener { result.complete(request.dismiss()) }
-                        .show()
-                }
-                return result
-            }
-
-            override fun onLoginSelect(session: GeckoSession, request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>): GeckoResult<PromptResponse> {
-                val tab = tabs.firstOrNull { geckoSession(it) === session }
-                val result = GeckoResult<PromptResponse>()
-                if (tab == null || tab.isPrivate || tab.isGuest || request.options.isEmpty()) {
-                    result.complete(request.dismiss())
-                    return result
-                }
-                val choices = request.options.map { it.value.username.ifBlank { Uri.parse(it.value.origin).host ?: "Saved login" } }.toTypedArray()
-                runOnUiThread {
-                    AlertDialog.Builder(this@MainActivity).setTitle("Choose saved login")
-                        .setItems(choices) { _, which -> result.complete(request.confirm(request.options[which])) }
-                        .setNegativeButton("Cancel") { _, _ -> result.complete(request.dismiss()) }
-                        .setOnCancelListener { result.complete(request.dismiss()) }.show()
-                }
-                return result
-            }
-
-            override fun onFolderUploadPrompt(session: GeckoSession, prompt: FolderUploadPrompt): GeckoResult<PromptResponse> {
-                val result = GeckoResult<PromptResponse>()
-                runOnUiThread {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Upload folder?")
-                        .setMessage("The website is requesting access to upload the folder ${prompt.directoryName ?: "selected folder"}. Its files may be sent to this site.")
-                        .setPositiveButton("Allow") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
-                        .setNegativeButton("Deny") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
-                        .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }
-                        .show()
-                }
-                return result
-            }
-        }
-        session.setTranslationsSessionDelegate(object : TranslationsController.SessionTranslation.Delegate {
-            override fun onOfferTranslate(session: GeckoSession) {
-                val tab = tabs.firstOrNull { geckoSession(it) === session } ?: return
-                if (currentTab() === tab) runOnUiThread { toast("This page may be available in another language · tap Translate") }
-            }
-            override fun onExpectedTranslate(session: GeckoSession) {
-                val tab = tabs.firstOrNull { geckoSession(it) === session } ?: return
-                if (currentTab() === tab) runOnUiThread { pageStatus.text = "Translation available" }
-            }
-            override fun onTranslationStateChange(session: GeckoSession, translationState: TranslationsController.SessionTranslation.TranslationState?) {
-                val language = translationState?.detectedLanguages?.docLangTag
-                if (!language.isNullOrBlank()) detectedPageLanguages[tabKey(session)] = language
-            }
-        })
-        session.contentDelegate = object : GeckoSession.ContentDelegate {
-            override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
-                val tab = tabs.firstOrNull { geckoSession(it) === session }
-                val body = response.body
-                if (tab == null || tab.isPrivate || tab.isGuest) {
-                    runCatching { body?.close() }
-                    toast("Downloads are disabled in private and Guest Mode")
-                    return
-                }
-                if (body == null) { toast("This download has no readable response body"); return }
-                val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
-                val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
-                requestDownloadNotificationPermission()
-                novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
-                toast("Webpage download received · saving to Downloads/Nova")
-            }
-            override fun onTitleChange(session: GeckoSession, title: String?) {
-                if (!title.isNullOrBlank()) {
-                    val tab = tabs.firstOrNull { geckoSession(it) === session } ?: return
-                    tab.title = title
-                    (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
-                        engine.updateState(engine.state.copy(title = title))
-                    }
-                    if (currentTab() === tab) tabLabel.text = title.take(32)
-                }
-            }
-        }
-        session.open(runtime)
-        session.navigationDelegate = object : GeckoSession.NavigationDelegate {
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                tab.canGoBack = canGoBack
-                (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
-                    engine.updateState(engine.state.copy(canGoBack = canGoBack))
-                }
-            }
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                tab.canGoForward = canGoForward
-                (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
-                    engine.updateState(engine.state.copy(canGoForward = canGoForward))
-                }
-            }
-            override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
-                if (url.isNullOrBlank()) return
-                tab.lastUrl = url
-                (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
-                    engine.updateState(engine.state.copy(url = url))
-                }
-                (tab.browserEngine as? GeckoViewBrowserEngine)?.updatePermissions(perms)
-                tab.title = Uri.parse(url).host ?: url.take(48)
-                if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url, tab); persistTabs() }
-                if (currentTab() === tab) {
-                    addressBar.setText(url)
-                    pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
-                }
-            }
-        }
-        tab.browserEngine = GeckoViewBrowserEngine(session, browserView)
+        val engine = GeckoViewBrowserEngine(session, browserView)
+        tab.browserEngine = engine
+        engine.installDelegates { configuredSession -> installGeckoDelegates(tab, configuredSession) }
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
             tab.browserEngine?.loadUrl(tab.lastUrl)
             tab.needsReload = false
