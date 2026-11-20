@@ -12,6 +12,10 @@ jobs:
   emulator-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Some hosted runners do not expose KVM. Allow the emulator to fall back
+      # to the Android emulator's software CPU translator instead of timing out.
+      ANDROID_I_WANT_TCG: "yes"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
