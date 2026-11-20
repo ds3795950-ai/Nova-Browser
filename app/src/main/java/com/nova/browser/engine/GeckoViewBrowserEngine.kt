@@ -15,6 +15,11 @@ class GeckoViewBrowserEngine(
     private val listener: BrowserEngineListener? = null
 ) : BrowserEngine {
     override val type = BrowserEngineType.GECKOVIEW
+    // Gecko's SDK path is wired by Nova for downloads and site-permission prompts.
+    override val capabilities = setOf(
+        BrowserEngineCapability.DOWNLOADS,
+        BrowserEngineCapability.SITE_PERMISSIONS
+    )
     private var attachedView: GeckoView = initialView
     private var isAttached = false
     private var currentState = BrowserEngineState()

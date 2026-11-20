@@ -43,6 +43,13 @@ class CefriumBrowserEngine(
     desktopMode: Boolean = false
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
+    override val capabilities = setOf(
+        BrowserEngineCapability.DOWNLOADS,
+        BrowserEngineCapability.SITE_PERMISSIONS,
+        BrowserEngineCapability.READER_MODE,
+        BrowserEngineCapability.DESKTOP_MODE,
+        BrowserEngineCapability.VPN_PROXY
+    )
     private val browser = CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()

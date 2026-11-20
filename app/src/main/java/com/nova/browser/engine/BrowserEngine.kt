@@ -19,6 +19,18 @@ data class BrowserEngineState(
     val error: String? = null
 )
 
+/**
+ * Optional features available from a concrete engine adapter. These describe engine capability,
+ * not permission or privacy policy; Nova must still enforce its own profile and user settings.
+ */
+enum class BrowserEngineCapability {
+    DOWNLOADS,
+    SITE_PERMISSIONS,
+    READER_MODE,
+    DESKTOP_MODE,
+    VPN_PROXY
+}
+
 fun interface BrowserEngineListener {
     fun onStateChanged(state: BrowserEngineState)
 }
@@ -31,6 +43,10 @@ interface BrowserEngine : AutoCloseable {
     val type: BrowserEngineType
     val view: View
     val state: BrowserEngineState
+
+    /** Features supported by this engine implementation. */
+    val capabilities: Set<BrowserEngineCapability>
+        get() = emptySet()
 
     fun loadUrl(url: String)
     fun goBack()
