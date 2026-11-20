@@ -45,6 +45,7 @@ internal object CloudCrypto {
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
+        require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported cloud backup key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
         val salt = unb64(envelope.getString("salt"))
