@@ -415,7 +415,20 @@ try {
   await tapToolbar('Settings', 1);
   await byText('Close private and Guest tabs').click();
   await tapToolbar('Private', 0);
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const privateAfterClose = await driver.getPageSource();
+  if (privateAfterClose.includes('nova_private_cookie') || privateAfterClose.includes('nova_guest_cookie')) {
+    throw new Error('A newly opened Private profile retained cookies from an earlier ephemeral session');
+  }
+  record('Private profile data clears after the final Private tab closes', true, 'A fresh Private profile has no prior Private or Guest cookies');
   await tapToolbar('Guest', 0);
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestAfterClose = await driver.getPageSource();
+  if (guestAfterClose.includes('nova_private_cookie') || guestAfterClose.includes('nova_guest_cookie')) {
+    throw new Error('A newly opened Guest profile retained cookies from an earlier ephemeral session');
+  }
+  record('Guest profile data clears after the final Guest tab closes', true, 'A fresh Guest context has no prior Private or Guest cookies');
+  await navigateTo('https://httpbin.org/cookies/set?nova_crash_guest_cookie=guest', 'httpbin.org/cookies');
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
   await byA11y('Nova address bar').waitForDisplayed({ timeout: 30000 });
@@ -426,6 +439,16 @@ try {
   }
   await byText('Done').click();
   record('Private and Guest tabs are not restored after app restart', true, 'Only normal tabs remain in the tab manager');
+  await tapToolbar('Guest', 0);
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestAfterProcessDeath = await driver.getPageSource();
+  if (guestAfterProcessDeath.includes('nova_crash_guest_cookie')) {
+    throw new Error('Guest cookies survived process death and were visible in the next Guest session');
+  }
+  record('Guest storage is cleared after process death', true, 'The next Guest session cannot read the previous process Guest cookie');
+  await tapToolbar('Settings', 1);
+  await byText('Exit Guest Mode').click();
+  await byText('Exit Guest').click();
 
   await tapToolbar('Shield', 2);
   await byTextContains('Nova Shield · STANDARD').waitForDisplayed({ timeout: 10000 });
