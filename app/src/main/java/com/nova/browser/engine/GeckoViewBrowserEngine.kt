@@ -18,6 +18,10 @@ class GeckoViewBrowserEngine(
     private var attachedView: GeckoView = initialView
     private var isAttached = false
     private var currentState = BrowserEngineState()
+    var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList()
+        private set
+    var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null
+        private set
     private var active = false
     private var focused = false
     private var hostPaused = false
@@ -80,6 +84,15 @@ class GeckoViewBrowserEngine(
     /** Allows the existing Gecko delegates to keep the shared state snapshot current. */
     fun updateState(state: BrowserEngineState) {
         if (!closed) publish(state)
+    }
+
+    /** Gecko-specific site permissions stay with the Gecko adapter, not the neutral tab model. */
+    fun updatePermissions(permissions: List<GeckoSession.PermissionDelegate.ContentPermission>) {
+        if (closed) return
+        contentPermissions = permissions.toList()
+        trackingPermission = permissions.firstOrNull {
+            it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING
+        }
     }
 
     override fun close() {

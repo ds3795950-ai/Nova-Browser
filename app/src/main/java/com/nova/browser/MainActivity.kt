@@ -127,8 +127,6 @@ class MainActivity : ComponentActivity() {
         var needsReload: Boolean = false,
         var desktopSite: Boolean = false,
         var readerOriginalUrl: String? = null,
-        var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
-        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList(),
         var engineType: BrowserEngineType = BrowserEngineType.GECKOVIEW,
         var browserEngine: BrowserEngine? = null
     )
@@ -817,8 +815,7 @@ class MainActivity : ComponentActivity() {
                 (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
                     engine.updateState(engine.state.copy(url = url))
                 }
-                tab.contentPermissions = perms
-                tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
+                (tab.browserEngine as? GeckoViewBrowserEngine)?.updatePermissions(perms)
                 tab.title = Uri.parse(url).host ?: url.take(48)
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url, tab); persistTabs() }
                 if (currentTab() === tab) {
@@ -1717,7 +1714,7 @@ class MainActivity : ComponentActivity() {
                         toast("Nova Shield: ${mode.name.lowercase().replaceFirstChar { it.uppercase() }}")
                     }
                     3 -> {
-                        val permission = tab?.trackingPermission
+                        val permission = (tab?.browserEngine as? GeckoViewBrowserEngine)?.trackingPermission
                         if (permission == null) { toast("Open a website first; site tracking controls are not available on this page"); return@setItems }
                         val allow = permission.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                         runtime.storageController.setPermission(permission, if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
@@ -1906,7 +1903,8 @@ class MainActivity : ComponentActivity() {
         val tab = currentTab() ?: return
         val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
         if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
-        val perms = tab.contentPermissions.filter { it.permission != GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
+        val perms = (tab.browserEngine as? GeckoViewBrowserEngine)?.contentPermissions.orEmpty()
+            .filter { it.permission != GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
         val permissionNames = mapOf(
             GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION to "Location",
             GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION to "Notifications",

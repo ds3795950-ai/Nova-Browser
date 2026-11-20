@@ -4,8 +4,8 @@
 
 - `BrowserTab` stores a `BrowserEngine` runtime, not a raw `GeckoSession` or a concrete Cefrium engine field.
 - `CefriumBrowserEngine` and `GeckoViewBrowserEngine` implement the same per-tab contract for URL loading, back/forward, reload, view, activation, host pause/resume, and close.
-- `GeckoViewBrowserEngine` owns the `GeckoSession` created for that tab. `MainActivity` resolves the session through a narrow Gecko-specific accessor only for APIs that do not yet have a cross-engine equivalent (translation, Gecko content permissions, prompt delegates, and download callbacks).
-- `MainActivity` routes shared navigation and lifecycle through `BrowserEngine`; it no longer calls `GeckoView.setSession`, `GeckoSession.loadUri`, or stores `GeckoSession` in `BrowserTab`.
+- `GeckoViewBrowserEngine` owns the `GeckoSession` and Gecko-specific permission snapshots created for that tab. `MainActivity` resolves the session through a narrow Gecko-specific accessor only for APIs that do not yet have a cross-engine equivalent (translation, prompt delegates, and download callbacks).
+- `BrowserTab` contains no `GeckoSession` or Gecko permission-object fields. `MainActivity` routes shared navigation and lifecycle through `BrowserEngine`; it no longer calls `GeckoView.setSession`, `GeckoSession.loadUri`, or stores Gecko-only permission state in the tab model.
 - Gecko adapter attach/detach moves a session between the primary and secondary panes and releases the old view before attaching the new one. Closing a tab closes its engine once; Cefrium's default attach/detach hooks leave its engine-owned view unchanged.
 - Cefrium-only reader extraction and desktop user-agent control remain explicit adapter-specific capabilities rather than being falsely advertised as common features.
 
