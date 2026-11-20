@@ -1759,18 +1759,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openOrbotTorRouting() {
-        if (currentTab()?.isGuest != true) { toast("Tor routing is available only in Guest Mode"); return }
-        val launch = packageManager.getLaunchIntentForPackage("org.torproject.android")
-        if (launch == null) {
-            AlertDialog.Builder(this).setTitle("Orbot is not installed")
-                .setMessage("Install Orbot from the official Tor Project distribution, then return here. Nova does not bundle Tor.")
-                .setPositiveButton("OK", null).show()
+        if (currentTab()?.isGuest != true) {
+            toast("Tor routing status is available only in Guest Mode")
             return
         }
-        AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
-            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
-            .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
-            .setNegativeButton("Cancel", null).show()
+        AlertDialog.Builder(this).setTitle("Guest-only Tor is not available yet")
+            .setMessage("Nova Guest Mode currently provides local ephemeral isolation, not a Tor connection. Orbot's Android VPN selection applies to the whole Nova app rather than an individual Guest tab. Enabling Orbot for Nova could therefore route Normal and Private traffic too. To preserve the requested Guest-only boundary, Nova will not enable or launch Orbot from this screen.")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun showAiAssistant() {
@@ -2063,7 +2059,7 @@ class MainActivity : ComponentActivity() {
         val values = arrayOf(BrowserEngineMode.CEFRIUM, BrowserEngineMode.AUTOMATIC, BrowserEngineMode.GECKOVIEW)
         val selected = values.indexOf(enginePreferences.normalMode()).coerceAtLeast(0)
         AlertDialog.Builder(this).setTitle("Browser engine")
-            .setMessage("Normal browsing defaults to Cefrium (Chromium). Automatic prefers Cefrium and falls back to GeckoView when a site or enabled protection requires it; you can also choose GeckoView. Guest and Private tabs always use GeckoView. Existing tabs keep their current engine; use Switch this tab's engine to reload a Normal tab. Website cookies, storage and sign-in sessions are not transferred between engines.")
+            .setMessage("Normal browsing defaults to Cefrium (Chromium). Automatic prefers Cefrium and falls back to GeckoView when a site or enabled protection requires it; you can also choose GeckoView. Guest tabs always use GeckoView with a dedicated ephemeral context. Private tabs use Cefrium's in-memory incognito profile when supported and fall back to GeckoView when required. Existing tabs keep their current engine; use Switch this tab's engine on a compatible Normal or Private tab to reload it. Website cookies, storage and sign-in sessions are not transferred between engines.")
             .setSingleChoiceItems(modes, selected) { dialog, which ->
                 val mode = values[which]
                 enginePreferences.setNormalMode(mode)
@@ -2077,7 +2073,7 @@ class MainActivity : ComponentActivity() {
         if (currentTab()?.isGuest == true) {
             AlertDialog.Builder(this).setTitle("Guest Mode settings")
                 .setMessage("Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden while Guest Mode is active.")
-                .setPositiveButton("Tor routing · Orbot") { _, _ -> openOrbotTorRouting() }
+                .setPositiveButton("Tor routing status") { _, _ -> openOrbotTorRouting() }
                 .setNegativeButton("Exit Guest Mode") { _, _ -> confirmExitGuestMode() }
                 .setNeutralButton("Close", null).show()
             return
@@ -2362,7 +2358,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         persistTabs()
-        tabs.forEach { it.session?.close() }
+        tabs.forEach { tab ->
+            tab.session?.close()
+            // Cefrium owns native browser/profile resources too. Close every engine before
+            // shutting down GeckoRuntime so Private incognito profiles do not outlive Nova.
+            tab.cefriumEngine?.close()
+        }
         tabs.clear()
         if (::runtime.isInitialized) {
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
