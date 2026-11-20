@@ -23,6 +23,24 @@ class CloudCryptoTest {
         } catch (_: javax.crypto.AEADBadTagException) { }
     }
 
+    @Test fun encryptedBundleKeepsBrowserAndVaultInOneRevision() {
+        val browser = JSONObject().put("ciphertext", "browser-ciphertext")
+        val vault = JSONObject().put("ciphertext", "vault-ciphertext")
+        val bundle = NovaCloudBundle.pack(browser, vault)
+        val unpacked = NovaCloudBundle.unpack(bundle, null)
+        assertEquals(browser.toString(), unpacked.first?.toString())
+        assertEquals(vault.toString(), unpacked.second?.toString())
+        assertEquals(NovaCloudBundle.FORMAT, bundle.getString("format"))
+    }
+
+    @Test fun legacyTwoRowBackupRemainsReadable() {
+        val browser = JSONObject().put("version", 1).put("ciphertext", "old-browser")
+        val vault = JSONObject().put("version", 1).put("ciphertext", "old-vault")
+        val unpacked = NovaCloudBundle.unpack(browser, vault)
+        assertEquals(browser.toString(), unpacked.first?.toString())
+        assertEquals(vault.toString(), unpacked.second?.toString())
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun weakPassphraseRejected() {
         CloudCrypto.encrypt("data", "short".toCharArray())
