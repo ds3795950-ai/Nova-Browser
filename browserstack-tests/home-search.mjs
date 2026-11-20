@@ -263,7 +263,7 @@ try {
 
   await tapToolbar('Settings', 1);
   try {
-    await byText('Tor routing · Orbot').waitForDisplayed({ timeout: 10000 });
+    await byText('Tor routing status').waitForDisplayed({ timeout: 10000 });
     await byText('Exit Guest Mode').waitForDisplayed({ timeout: 5000 });
   } catch (error) {
     console.error('Guest settings screen after tapping Settings:', await driver.getPageSource());
@@ -276,7 +276,7 @@ try {
   if (!guestSettingsSource.includes('Tor routing status') || !guestSettingsSource.includes('Exit Guest Mode')) throw new Error('Guest Mode settings actions are missing');
   await byText('Close').waitForDisplayed({ timeout: 10000 });
   await byText('Close').click();
-  record('Guest settings hide owner data', true, 'Only Exit Guest Mode is offered; owner exports and account controls are hidden');
+  record('Guest settings hide owner data', true, 'Only Guest-specific Tor status and Exit Guest Mode are offered; owner exports and account controls are hidden');
 
   await tapToolbar('＋', 0);
   await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
@@ -362,28 +362,22 @@ try {
   await byText('Cancel').click();
   record('Cloud sync sign-in uses email OTP UI', true, 'One email field; no password requested and no OTP sent');
 
-  await tapToolbar('Shield', 2);
-  await byText('Open Orbot · system VPN routing').click();
-  const noOrbot = byText('Orbot is not installed');
-  const routeOrbot = byText('Route traffic through Orbot');
-  await driver.waitUntil(async () =>
-    (await noOrbot.isDisplayed().catch(() => false)) ||
-    (await routeOrbot.isDisplayed().catch(() => false)),
-    { timeout: 10000, timeoutMsg: 'Orbot handoff dialog did not appear' }
-  );
-  if (await noOrbot.isDisplayed().catch(() => false)) {
-    await byText('OK').click();
-    record('Tor handoff states Orbot dependency', true, 'Orbot is not installed on this test device; Nova does not bundle Tor');
-  } else {
-    const vpnCopy = await driver.getPageSource();
-    if (!vpnCopy.includes('Always-on VPN') || !vpnCopy.includes('Nova cannot verify')) throw new Error('Orbot handoff omits VPN fail-closed and verification limitations');
-    await byText('Cancel').click();
-    record('Tor handoff requires explicit approval', true, 'Orbot routing requires user action and explains Always-on VPN and verification limits');
-  }
-
-  // Close ephemeral tabs, then confirm they are not restored after an app restart.
+  // Verify the Guest-only Tor boundary is honest: Orbot's app-wide VPN cannot isolate one tab.
+  await tapToolbar('Guest', 0);
+  await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
   await tapToolbar('Settings', 1);
+  await byText('Tor routing status').click();
+  await byTextContains('Guest-only Tor is not available yet').waitForDisplayed({ timeout: 10000 });
+  const torStatusSource = await driver.getPageSource();
+  if (!torStatusSource.includes('whole Nova app') || !torStatusSource.includes('Normal and Private traffic too')) {
+    throw new Error('Guest-only Tor status does not explain the app-wide Orbot routing limitation');
+  }
+  await byText('OK').click();
+  record('Guest-only Tor fails closed until an isolated transport exists', true, 'No Orbot launch or app-wide VPN toggle is offered from Guest Mode');
   await byText('Exit Guest Mode').click();
+  await byText('Exit Guest').click();
+
+  // Close ephemeral tabs, then create fresh ones and confirm they are not restored after restart.
   await tapToolbar('Settings', 1);
   await byText('Close private and Guest tabs').click();
   await tapToolbar('Private', 0);
