@@ -1970,9 +1970,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         persistTabs()
         tabs.forEach { it.session?.close() }
-        tabs.clear()
         if (::runtime.isInitialized) {
             tabs.filter { it.isPrivate }.forEach(::clearPrivateContext)
+        }
+        tabs.clear()
+        if (::runtime.isInitialized) {
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
             runtime.shutdown()
         }
