@@ -2009,8 +2009,8 @@ class MainActivity : ComponentActivity() {
 
     private fun switchCurrentTabEngine() {
         val tab = currentTab() ?: return
-        if (tab.isGuest) {
-            toast("Guest Mode always uses GeckoView")
+        if (tab.isGuest || tab.isPrivate) {
+            toast(if (tab.isGuest) "Guest Mode always uses GeckoView" else "Private Mode always uses GeckoView")
             return
         }
         if (tab.lastUrl == HOME_URL || !(tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://"))) {
@@ -2096,7 +2096,7 @@ class MainActivity : ComponentActivity() {
         val values = arrayOf(BrowserEngineMode.CEFRIUM, BrowserEngineMode.AUTOMATIC, BrowserEngineMode.GECKOVIEW)
         val selected = values.indexOf(enginePreferences.normalMode()).coerceAtLeast(0)
         AlertDialog.Builder(this).setTitle("Browser engine")
-            .setMessage("Normal browsing defaults to Cefrium (Chromium). Automatic prefers Cefrium and falls back to GeckoView when a site or enabled protection requires it; you can also choose GeckoView. Guest tabs always use GeckoView with a dedicated ephemeral context. Private tabs use Cefrium's in-memory incognito profile when supported and fall back to GeckoView when required. Existing tabs keep their current engine; use Switch this tab's engine on a compatible Normal or Private tab to reload it. Website cookies, storage and sign-in sessions are not transferred between engines.")
+            .setMessage("Normal browsing defaults to Cefrium (Chromium). Automatic prefers Cefrium and falls back to GeckoView when a site or enabled protection requires it; you can also choose GeckoView. Private and Guest tabs always use GeckoView with ephemeral storage; their engine cannot be changed. Existing Normal tabs keep their current engine; use Switch this tab's engine on a compatible Normal tab to reload it. Website cookies, storage and sign-in sessions are not transferred between engines.")
             .setSingleChoiceItems(modes, selected) { dialog, which ->
                 val mode = values[which]
                 enginePreferences.setNormalMode(mode)

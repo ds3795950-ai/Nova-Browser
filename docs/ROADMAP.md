@@ -12,7 +12,7 @@ Status key:
 
 - Default branch: `main`.
 - Active implementation branch: `feature/phase-1-dual-engine-foundation`.
-- Latest inspected implementation commit: `9735117d3bdd426a230973da2f701303e82862ae` (cloud-sync hardening); the latest CI runs for this commit are pending at the time of this update.
+- Latest inspected implementation commit: `c343442de9a9a6ac860898e5990901c7a82d2752` (privacy/profile enforcement and documentation); the latest CI runs for this commit are pending at the time of this update.
 - Pull request #1 is open and remains a draft. It has not been merged into `main`.
 - Android CI and Android Lint passed on commit `df04644f69492d3b1fcff83f1b9acd74d8914940`. Newer runs for the 2026-11-21 privacy and sync hardening commits are pending; do not treat the earlier green checks as validation of the latest code.
 - The Android Emulator Smoke workflow failed during emulator setup/ADB configuration after the emulator reported boot completion. The failure was an ADB broken-pipe/exit-224 error before the instrumentation test command ran; it is not evidence of an app test assertion failure. The workflow is being adjusted and must pass on a fresh run.
