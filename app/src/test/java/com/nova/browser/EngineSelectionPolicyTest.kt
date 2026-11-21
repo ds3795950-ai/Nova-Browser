@@ -27,16 +27,16 @@ class EngineSelectionPolicyTest {
         assertEquals("Guest Mode always uses GeckoView", result.reason)
     }
 
-    @Test fun privateUsesCefriumWhenItsRequiredFeaturesAreAvailable() {
-        val result = EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.GECKOVIEW, profile = BrowserProfileKind.PRIVATE, cefriumAvailable = true, cefriumCompatible = true))
-        assertEquals(BrowserEngineType.CEFRIUM, result.engine)
+    @Test fun privateAlwaysUsesGeckoViewRegardlessOfNormalModeOrCefriumAvailability() {
+        val result = EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.CEFRIUM, profile = BrowserProfileKind.PRIVATE, cefriumAvailable = true, cefriumCompatible = true))
+        assertEquals(BrowserEngineType.GECKOVIEW, result.engine)
+        assertEquals("Private Mode always uses GeckoView", result.reason)
         assertFalse(result.usedFallback)
     }
 
-    @Test fun privateFallsBackToGeckoViewWhenCefriumCannotProvideARequiredFeature() {
-        val result = EngineSelectionPolicy.resolve(EngineSelectionRequest(profile = BrowserProfileKind.PRIVATE, cefriumAvailable = true, cefriumCompatible = false))
-        assertEquals(BrowserEngineType.GECKOVIEW, result.engine)
-        assertTrue(result.usedFallback)
+    @Test fun privateEngineChoiceIgnoresCefriumIncompatibilityAndNormalGeckoPreference() {
+        assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.GECKOVIEW, profile = BrowserProfileKind.PRIVATE, cefriumAvailable = false)).engine)
+        assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(profile = BrowserProfileKind.PRIVATE, cefriumAvailable = true, cefriumCompatible = false)).engine)
     }
 
     @Test fun siteAffinityAppliesOnlyInAutomaticNormalMode() {
@@ -46,11 +46,11 @@ class EngineSelectionPolicyTest {
         assertEquals(BrowserEngineType.CEFRIUM, forced.engine)
     }
 
-    @Test fun privateAndGuestNeverUsePersistentCefriumProfile() {
+    @Test fun onlyNormalMayUsePersistentCefriumProfile() {
         assertEquals(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE, BrowserEngineProfilePolicy.cefriumPersistentProfile(BrowserProfileKind.NORMAL))
         assertNull(BrowserEngineProfilePolicy.cefriumPersistentProfile(BrowserProfileKind.PRIVATE))
         assertNull(BrowserEngineProfilePolicy.cefriumPersistentProfile(BrowserProfileKind.GUEST))
-        assertTrue(BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(BrowserProfileKind.PRIVATE))
+        assertFalse(BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(BrowserProfileKind.PRIVATE))
         assertFalse(BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(BrowserProfileKind.GUEST))
         assertTrue(BrowserEngineProfilePolicy.isEphemeral(BrowserProfileKind.PRIVATE))
         assertTrue(BrowserEngineProfilePolicy.isEphemeral(BrowserProfileKind.GUEST))

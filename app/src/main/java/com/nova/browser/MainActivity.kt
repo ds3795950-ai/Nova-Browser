@@ -489,9 +489,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resolveEngineForTab(tab: BrowserTab): BrowserEngineType {
-        // Guest is intentionally GeckoView-only. Private uses Cefrium's isolated in-memory
-        // incognito profile whenever the page does not require a Gecko-only feature.
-        if (tab.isGuest) return BrowserEngineType.GECKOVIEW
+        // Privacy profiles are fixed to GeckoView; Normal-mode preferences cannot override them.
+        if (tab.isGuest || tab.isPrivate) return BrowserEngineType.GECKOVIEW
         val profileKind = if (tab.isPrivate) BrowserProfileKind.PRIVATE else BrowserProfileKind.NORMAL
         val webUrl = tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")
         val hasSavedLogin = runCatching {
@@ -509,11 +508,8 @@ class MainActivity : ComponentActivity() {
 
     private fun ensureCefriumEngine(tab: BrowserTab): CefriumBrowserEngine {
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
-        check(!tab.isGuest) { "Guest tabs must remain on GeckoView" }
-        val profile = if (BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(
-                if (tab.isPrivate) BrowserProfileKind.PRIVATE else BrowserProfileKind.NORMAL
-            )
-        ) CefriumProfile.incognito() else CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
+        check(!tab.isGuest && !tab.isPrivate) { "Private and Guest tabs must remain on GeckoView" }
+        val profile = CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
         val engine = CefriumBrowserEngine(
             activity = this,
             profile = profile,

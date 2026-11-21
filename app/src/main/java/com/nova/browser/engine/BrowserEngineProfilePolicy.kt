@@ -1,21 +1,18 @@
 package com.nova.browser.engine
 
-/**
- * Names and lifetimes for engine-native profiles. Normal uses a named persistent profile;
- * Private uses Cefrium's in-memory incognito profile. Guest remains GeckoView-only.
- */
+/** Fixed storage rules for browser profiles. Only Normal Mode may use Cefrium. */
 object BrowserEngineProfilePolicy {
     const val NORMAL_CEFRIUM_PROFILE = "nova-normal-v1"
 
     fun cefriumPersistentProfile(profile: BrowserProfileKind): String? =
         if (profile == BrowserProfileKind.NORMAL) NORMAL_CEFRIUM_PROFILE else null
 
-    fun cefriumUsesIncognitoProfile(profile: BrowserProfileKind): Boolean =
-        profile == BrowserProfileKind.PRIVATE
+    /** Private and Guest profiles are GeckoView-only; neither may open a Cefrium profile. */
+    fun cefriumUsesIncognitoProfile(profile: BrowserProfileKind): Boolean = false
 
     fun geckoContextId(profile: BrowserProfileKind, guestContextId: String): String? = when (profile) {
         BrowserProfileKind.NORMAL -> null
-        BrowserProfileKind.PRIVATE -> null // Gecko private mode is per-session, not a shared context.
+        BrowserProfileKind.PRIVATE -> null
         BrowserProfileKind.GUEST -> guestContextId.takeIf { it.isNotBlank() }
     }
 

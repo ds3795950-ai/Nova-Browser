@@ -27,8 +27,10 @@ object EngineSelectionPolicy {
             return EngineSelection(BrowserEngineType.GECKOVIEW, "Guest Mode always uses GeckoView")
         }
 
+        // Private and Guest are hard privacy boundaries, not preferences. Normal-mode
+        // engine choices and site affinities must never select Cefrium for these profiles.
         val requested = when (request.profile) {
-            BrowserProfileKind.PRIVATE -> BrowserEngineType.CEFRIUM
+            BrowserProfileKind.PRIVATE -> BrowserEngineType.GECKOVIEW
             BrowserProfileKind.GUEST -> BrowserEngineType.GECKOVIEW
             BrowserProfileKind.NORMAL -> when (request.mode) {
                 BrowserEngineMode.CEFRIUM -> BrowserEngineType.CEFRIUM
@@ -40,7 +42,7 @@ object EngineSelectionPolicy {
         if (requested == BrowserEngineType.GECKOVIEW) {
             return EngineSelection(
                 BrowserEngineType.GECKOVIEW,
-                if (request.profile == BrowserProfileKind.PRIVATE) "Private Cefrium is not currently compatible; using GeckoView" else "GeckoView selected"
+                if (request.profile == BrowserProfileKind.PRIVATE) "Private Mode always uses GeckoView" else "GeckoView selected"
             )
         }
         if (!request.cefriumAvailable) {
@@ -51,11 +53,7 @@ object EngineSelectionPolicy {
         }
         return EngineSelection(
             BrowserEngineType.CEFRIUM,
-            when (request.profile) {
-                BrowserProfileKind.PRIVATE -> "Private Mode uses Cefrium's in-memory incognito profile"
-                BrowserProfileKind.GUEST -> "Guest Mode always uses GeckoView"
-                BrowserProfileKind.NORMAL -> if (request.mode == BrowserEngineMode.AUTOMATIC && request.siteAffinity == null) "Automatic mode prefers Cefrium" else "Cefrium selected"
-            }
+            if (request.mode == BrowserEngineMode.AUTOMATIC && request.siteAffinity == null) "Automatic mode prefers Cefrium" else "Cefrium selected"
         )
     }
 }
