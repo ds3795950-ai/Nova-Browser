@@ -948,11 +948,12 @@ class MainActivity : ComponentActivity() {
                 securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
             ) {
                 if (currentTab() === tab) {
-                    val host = Uri.parse(tab.lastUrl).host.orEmpty()
+                    val host = securityInfo.host.ifBlank { Uri.parse(tab.lastUrl).host.orEmpty() }
                     pageStatus.text = when {
                         securityInfo.isException -> "Connection warning · certificate exception"
-                        securityInfo.securityMode == GeckoSession.ProgressDelegate.SecurityInformation.SECURITY_MODE_VERIFIED -> "Secure connection · $host"
-                        securityInfo.securityMode == GeckoSession.ProgressDelegate.SecurityInformation.SECURITY_MODE_IDENTIFIED -> "Encrypted connection · $host"
+                        securityInfo.mixedModeActive == GeckoSession.ProgressDelegate.SecurityInformation.CONTENT_LOADED ->
+                            "Warning · active mixed content on $host"
+                        securityInfo.isSecure -> "Secure connection · $host"
                         tab.lastUrl.startsWith("http://", true) -> "Not secure · HTTP"
                         else -> "Connection security unavailable"
                     }
