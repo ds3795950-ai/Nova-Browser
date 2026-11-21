@@ -617,6 +617,197 @@ class MainActivity : ComponentActivity() {
                 }
                 return result
             }
+
+            override fun onAlertPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.AlertPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Alert")
+                        .setMessage(prompt.message ?: "")
+                        .setPositiveButton("OK") { _, _ -> result.complete(prompt.dismiss()) }
+                        .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                }
+                return result
+            }
+
+            override fun onButtonPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.ButtonPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Confirm")
+                        .setMessage(prompt.message ?: "")
+                        .setPositiveButton("OK") { _, _ ->
+                            result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.POSITIVE))
+                        }
+                        .setNegativeButton("Cancel") { _, _ ->
+                            result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE))
+                        }
+                        .setOnCancelListener {
+                            result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE))
+                        }.show()
+                }
+                return result
+            }
+
+            override fun onTextPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.TextPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    val field = EditText(this@MainActivity).apply { setText(prompt.defaultValue.orEmpty()) }
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Enter text")
+                        .setMessage(prompt.message ?: "")
+                        .setView(field)
+                        .setPositiveButton("OK") { _, _ -> result.complete(prompt.confirm(field.text.toString())) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                        .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                }
+                return result
+            }
+
+            override fun onChoicePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.ChoicePrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                fun flatten(choice: GeckoSession.PromptDelegate.ChoicePrompt.Choice): List<GeckoSession.PromptDelegate.ChoicePrompt.Choice> {
+                    val children = choice.items
+                    return if (children.isNullOrEmpty()) listOf(choice) else children.flatMap { flatten(it) }
+                }
+                val choices = prompt.choices.flatMap { flatten(it) }
+                if (choices.isEmpty()) {
+                    result.complete(prompt.dismiss())
+                    return result
+                }
+                val labels = choices.map { it.label }.toTypedArray()
+                runOnUiThread {
+                    when (prompt.type) {
+                        GeckoSession.PromptDelegate.ChoicePrompt.Type.MULTIPLE -> {
+                            val checked = BooleanArray(choices.size) { choices[it].selected }
+                            AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Choose options")
+                                .setMessage(prompt.message ?: "")
+                                .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
+                                .setPositiveButton("Done") { _, _ ->
+                                    result.complete(prompt.confirm(choices.filterIndexed { index, _ -> checked[index] }.toTypedArray()))
+                                }
+                                .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                                .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                        }
+                        GeckoSession.PromptDelegate.ChoicePrompt.Type.MENU -> {
+                            AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Choose an option")
+                                .setItems(labels) { _, which -> result.complete(prompt.confirm(choices[which])) }
+                                .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                        }
+                        else -> {
+                            val selected = choices.indexOfFirst { it.selected }
+                            var chosen = selected
+                            AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Choose an option")
+                                .setSingleChoiceItems(labels, selected) { _, which -> chosen = which }
+                                .setPositiveButton("OK") { _, _ ->
+                                    if (chosen >= 0) result.complete(prompt.confirm(choices[chosen]))
+                                    else result.complete(prompt.dismiss())
+                                }
+                                .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                                .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                        }
+                    }
+                }
+                return result
+            }
+
+            override fun onAuthPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.AuthPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    val fields = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+                    val username = EditText(this@MainActivity).apply { hint = "Username" }
+                    val password = EditText(this@MainActivity).apply {
+                        hint = "Password"
+                        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    }
+                    fields.addView(username)
+                    fields.addView(password)
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Sign in")
+                        .setMessage(prompt.message ?: "This website requires a username and password.")
+                        .setView(fields)
+                        .setPositiveButton("Sign in") { _, _ -> result.complete(prompt.confirm(username.text.toString(), password.text.toString())) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                        .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                }
+                return result
+            }
+
+            override fun onDateTimePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.DateTimePrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    val field = EditText(this@MainActivity).apply { setText(prompt.defaultValue.orEmpty()) }
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Choose date or time")
+                        .setView(field)
+                        .setPositiveButton("OK") { _, _ -> result.complete(prompt.confirm(field.text.toString())) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                        .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                }
+                return result
+            }
+
+            override fun onColorPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.ColorPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    val field = EditText(this@MainActivity).apply { setText(prompt.defaultValue.orEmpty()); hint = "#RRGGBB" }
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Choose a color")
+                        .setView(field)
+                        .setPositiveButton("OK") { _, _ -> result.complete(prompt.confirm(field.text.toString())) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                        .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                }
+                return result
+            }
+
+            override fun onPopupPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.PopupPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Allow pop-up?")
+                        .setMessage("This page wants to open a pop-up window.")
+                        .setPositiveButton("Allow") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
+                        .setNegativeButton("Block") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                        .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }.show()
+                }
+                return result
+            }
+
+            override fun onSharePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.SharePrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Share")
+                        .setMessage("Share this page's content with another app?")
+                        .setPositiveButton("Share") { _, _ ->
+                            val text = listOfNotNull(prompt.text, prompt.uri).joinToString("\n")
+                            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                            runCatching { startActivity(Intent.createChooser(send, prompt.title ?: "Share")) }
+                                .onSuccess { result.complete(prompt.confirm(GeckoSession.PromptDelegate.SharePrompt.Result.SUCCESS)) }
+                                .onFailure { result.complete(prompt.confirm(GeckoSession.PromptDelegate.SharePrompt.Result.FAILURE)) }
+                        }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
+                        .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
+                }
+                return result
+            }
+
+            override fun onBeforeUnloadPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.BeforeUnloadPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle("Leave this page?")
+                        .setMessage("This page says you may have unsaved changes.")
+                        .setPositiveButton("Leave") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
+                        .setNegativeButton("Stay") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                        .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }.show()
+                }
+                return result
+            }
+
+            override fun onRepostConfirmPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.RepostConfirmPrompt): GeckoResult<PromptResponse> {
+                val result = GeckoResult<PromptResponse>()
+                runOnUiThread {
+                    AlertDialog.Builder(this@MainActivity).setTitle("Resend form?")
+                        .setMessage("This page requires resending data that you previously submitted. Continue?")
+                        .setPositiveButton("Resend") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
+                        .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
+                        .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }.show()
+                }
+                return result
+            }
         }
         session.setTranslationsSessionDelegate(object : TranslationsController.SessionTranslation.Delegate {
             override fun onOfferTranslate(session: GeckoSession) {
