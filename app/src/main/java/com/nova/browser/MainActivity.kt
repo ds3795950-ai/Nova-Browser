@@ -166,6 +166,28 @@ class MainActivity : ComponentActivity() {
         buildBrowserUi()
         restoreTabs()
         if (tabs.isEmpty()) createTab(false, HOME_URL)
+        handleIncomingIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(incoming: Intent?) {
+        val target = when (incoming?.action) {
+            Intent.ACTION_VIEW -> incoming.dataString
+            Intent.ACTION_WEB_SEARCH -> incoming.getStringExtra(SearchManager.QUERY)
+            Intent.ACTION_SEND -> if (incoming.type == "text/plain") {
+                incoming.getStringExtra(Intent.EXTRA_TEXT)
+            } else null
+            else -> null
+        }?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (incoming.action == Intent.ACTION_VIEW &&
+            !target.startsWith("http://", true) && !target.startsWith("https://", true)
+        ) return
+        navigate(target)
     }
 
     private fun buildBrowserUi() {
@@ -230,9 +252,9 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        controls.addView(actionButton("â") { goBack() })
-        controls.addView(actionButton("â") { goForward() })
-        controls.addView(actionButton("â»") { reloadPage() })
+        controls.addView(actionButton("â", "Back") { goBack() })
+        controls.addView(actionButton("â", "Forward") { goForward() })
+        controls.addView(actionButton("â»", "Reload") { reloadPage() })
         controls.addView(actionButton("ï¼") {
             if (currentTab()?.isGuest == true) createGuestTab() else createTab(false, HOME_URL)
         })
@@ -301,6 +323,9 @@ class MainActivity : ComponentActivity() {
         }
         val secondaryControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            addView(actionButton("Back", "Secondary pane back") { tabs.firstOrNull { it.id == splitTabId }?.let { if (it.canGoBack) it.session?.goBack() } })
+            addView(actionButton("Forward", "Secondary pane forward") { tabs.firstOrNull { it.id == splitTabId }?.let { if (it.canGoForward) it.session?.goForward() } })
+            addView(actionButton("Reload", "Reload secondary pane") { tabs.firstOrNull { it.id == splitTabId }?.session?.reload() })
             addView(secondaryAddressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
             addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
             addView(actionButton("Close split") { exitSplitScreen() })
@@ -447,9 +472,9 @@ class MainActivity : ComponentActivity() {
             addView(row, android.view.ViewGroup.LayoutParams(-2, dp(48)))
         }
 
-    private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
+    private fun actionButton(label: String, description: String = label, action: () -> Unit) = Button(this).apply {
         text = label
-        contentDescription = label
+        contentDescription = description
         textSize = 11f
         isAllCaps = false
         minWidth = dp(48)
@@ -632,6 +657,7 @@ class MainActivity : ComponentActivity() {
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 tab.title = Uri.parse(url).host ?: url.take(48)
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
+                if (splitTabId == tab.id && !secondaryAddressBar.hasFocus()) secondaryAddressBar.setText(url)
                 if (currentTab() === tab) {
                     if (!addressBar.hasFocus()) {
                         val host = runCatching { java.net.URI(url).host }.getOrNull()
@@ -722,7 +748,9 @@ class MainActivity : ComponentActivity() {
         session.setActive(true)
         session.setFocused(true)
         addressBar.setText(tab.lastUrl)
-        tabLabel.text = (when { tab.isGuest -> "Guest tab"; tab.isPrivate -> "Private tab"; else -> "Tab" }) + " Â· ${index + 1}/${tabs.size}"
+        val modeTabs = tabs.filter { it.isGuest == tab.isGuest && it.isPrivate == tab.isPrivate }
+        val modeIndex = modeTabs.indexOf(tab) + 1
+        tabLabel.text = (when { tab.isGuest -> "Guest tab"; tab.isPrivate -> "Private tab"; else -> "Tab" }) + " Â· $modeIndex/${modeTabs.size}"
         pageStatus.text = when { tab.isGuest -> "Guest Mode Â· temporary data"; tab.isPrivate -> "Private session"; else -> "Normal session Â· ${tab.group}" }
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
         enforceSessionBudget()
@@ -754,6 +782,7 @@ class MainActivity : ComponentActivity() {
         val second = tabs.firstOrNull { it.id == splitTabId }
         second?.session?.setFocused(false)
         second?.session?.setActive(false)
+        secondaryBrowserView.releaseSession()
         secondaryPane.visibility = View.GONE
         splitTabId = null
         enforceSessionBudget()
@@ -766,7 +795,7 @@ class MainActivity : ComponentActivity() {
         tab.lastUrl = target
         tab.title = Uri.parse(target).host ?: target.take(48)
         ensureSession(tab).loadUri(target)
-        secondaryAddressBar.setText(target)
+        if (!secondaryAddressBar.hasFocus()) secondaryAddressBar.setText(target)
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
     }
 
@@ -901,6 +930,7 @@ class MainActivity : ComponentActivity() {
         val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
         if (removed.id == splitTabId) exitSplitScreen()
+        detectedPageLanguages.remove(removed.id)
         removed.session?.close()
         clearPrivateContext(removed)
         cleanupGuestContextIfIdle()
