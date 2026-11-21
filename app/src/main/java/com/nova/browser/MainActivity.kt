@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
-        runtime = GeckoRuntime.create(this)
+        runtime = sharedRuntime ?: GeckoRuntime.create(applicationContext).also { sharedRuntime = it }
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
@@ -2396,14 +2396,17 @@ class MainActivity : ComponentActivity() {
         persistTabs()
         tabs.forEach(::closeTabRuntime)
         tabs.clear()
-        if (::runtime.isInitialized) {
-            if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
-            runtime.shutdown()
+        if (::runtime.isInitialized && guestContextId.isNotBlank()) {
+            // Guest data is ephemeral, but GeckoRuntime is process-wide and must not be
+            // shut down with an Activity. Downloads and a recreated Activity may still use it.
+            runtime.storageController.clearDataForSessionContext(guestContextId)
         }
         super.onDestroy()
     }
 
     companion object {
+        @Volatile private var sharedRuntime: GeckoRuntime? = null
+
         private const val HOME_URL = "about:blank"
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
     }
