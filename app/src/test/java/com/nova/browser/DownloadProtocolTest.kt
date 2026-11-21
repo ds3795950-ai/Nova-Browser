@@ -46,6 +46,9 @@ class DownloadProtocolTest {
         assertEquals(true, DownloadProtocol.isRedirectAllowed("http://example.com/a", "https://example.com/a"))
         assertEquals(true, DownloadProtocol.isRedirectAllowed("http://example.com/a", "http://example.com/b"))
     }
+    @Test fun storesOnlyDownloadOriginNotPathOrCredentials() {
+        assertEquals("https://example.com:8443", DownloadProtocol.hostLabel("https://user:pass@example.com:8443/private/file?token=secret"))
+    }
     @Test fun rejectsNonHttpRedirectSchemes() {
         assertEquals(false, DownloadProtocol.isRedirectAllowed("https://example.com/a", "file:///tmp/a"))
         assertEquals(false, DownloadProtocol.isRedirectAllowed("ftp://example.com/a", "https://example.com/a"))

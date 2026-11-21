@@ -41,6 +41,13 @@ object DownloadProtocol {
         return safeFileName(decoded)
     }
 
+    fun hostLabel(url: String): String {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return ""
+        if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return ""
+        val port = if (uri.port >= 0) ":${uri.port}" else ""
+        return "${uri.scheme}://${uri.host}$port"
+    }
+
     fun safeFileName(value: String): String {
         val leaf = value.substringAfterLast('/').substringAfterLast('\\')
             .replace(Regex("[\\p{Cntrl}]"), "_")

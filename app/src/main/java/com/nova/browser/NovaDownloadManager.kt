@@ -35,7 +35,8 @@ class NovaDownloadManager(
         val etag: String = "",
         val lastModified: String = "",
         val savedUri: String = "",
-        val error: String = ""
+        val error: String = "",
+        val originLabel: String = ""
     ) {
         fun progressLabel(): String = if (total > 0) "${(downloaded * 100 / total).coerceIn(0, 100)}% Â· ${formatBytes(downloaded)} / ${formatBytes(total)}" else "${formatBytes(downloaded)} downloaded"
     }
@@ -49,18 +50,27 @@ class NovaDownloadManager(
     )
 
     private val prefs = context.getSharedPreferences("nova_downloads", Context.MODE_PRIVATE)
+    @Volatile private var changedListener: ((List<Item>) -> Unit)? = changed
     private val executor = Executors.newFixedThreadPool(MAX_CONCURRENT_DOWNLOADS)
     private val running = ConcurrentHashMap<String, Running>()
     private val records = LinkedHashMap<String, Item>()
 
-    init { loadRecords() }
+    init {
+        loadRecords()
+        cleanupOrphanPartials()
+    }
+
+    fun shutdown() {
+        changedListener = null
+        executor.shutdownNow()
+    }
 
     @Synchronized fun items(): List<Item> = records.values.toList().reversed()
 
     @Synchronized private fun put(item: Item) {
         records[item.id] = item
         persist()
-        changed(items())
+        changedListener?.invoke(items())
         updateServiceNotification()
     }
 
@@ -72,8 +82,11 @@ class NovaDownloadManager(
     @Synchronized private fun persist() {
         val array = JSONArray()
         records.values.forEach { item ->
-            array.put(JSONObject().put("id", item.id).put("url", item.url).put("fileName", item.fileName)
-                .put("mimeType", item.mimeType).put("downloaded", item.downloaded).put("total", item.total)
+            // Never persist full download URLs: query strings and userinfo may contain bearer tokens.
+            array.put(JSONObject().put("id", item.id).put("url", "")
+                .put("originLabel", item.originLabel.ifBlank { DownloadProtocol.hostLabel(item.url) })
+                .put("fileName", item.fileName).put("mimeType", item.mimeType)
+                .put("downloaded", item.downloaded).put("total", item.total)
                 .put("state", item.state).put("etag", item.etag).put("lastModified", item.lastModified)
                 .put("savedUri", item.savedUri).put("error", item.error))
         }
@@ -82,26 +95,41 @@ class NovaDownloadManager(
 
     @Synchronized private fun loadRecords() {
         val raw = prefs.getString("items", null) ?: return
-        runCatching {
-            val array = JSONArray(raw)
-            for (i in 0 until array.length()) {
+        val array = runCatching { JSONArray(raw) }.getOrElse {
+            if (!prefs.contains("items_corrupt_backup")) prefs.edit().putString("items_corrupt_backup", raw).apply()
+            return
+        }
+        var hadBadItem = false
+        for (i in 0 until array.length()) {
+            val item = runCatching {
                 val o = array.getJSONObject(i)
-                val item = Item(o.getString("id"), o.getString("url"), o.getString("fileName"),
+                Item(o.getString("id"), "", o.getString("fileName"),
                     o.optString("mimeType", "application/octet-stream"), o.optLong("downloaded"),
                     o.optLong("total"), o.optString("state", "PAUSED"), o.optString("etag"),
-                    o.optString("lastModified"), o.optString("savedUri"), o.optString("error"))
-                records[item.id] = when (item.state) {
-                    "RUNNING" -> item.copy(state = "INTERRUPTED", error = "Download was interrupted by Android. It will resume when Nova starts.")
-                    "SAVING", "FINALIZING" -> item.copy(state = "INTERRUPTED", error = "The final save was interrupted. Resume to retry the transfer.")
-                    else -> item
-                }
+                    o.optString("lastModified"), o.optString("savedUri"), o.optString("error"),
+                    o.optString("originLabel"))
+            }.getOrNull()
+            if (item == null) { hadBadItem = true; continue }
+            val restored = when (item.state) {
+                "RUNNING", "QUEUED", "SAVING", "FINALIZING" -> item.copy(
+                    state = "INTERRUPTED",
+                    error = "Download URL is intentionally not stored. Start it again from the original page."
+                )
+                else -> item
             }
+            records[restored.id] = restored
+        }
+        if (hadBadItem && !prefs.contains("items_corrupt_backup")) {
+            prefs.edit().putString("items_corrupt_backup", raw).apply()
         }
     }
 
-    fun enqueue(url: String, fileName: String? = null, mimeType: String = "application/octet-stream"): String {
+    @Synchronized fun enqueue(url: String, fileName: String? = null, mimeType: String = "application/octet-stream"): String {
         val parsed = URL(url)
-        require(parsed.protocol == "http" || parsed.protocol == "https") { "Only HTTP(S) downloads are supported" }
+        require(parsed.protocol == "https") { "Nova's downloader requires HTTPS. HTTP downloads are blocked by the app's cleartext security policy." }
+        running.values.firstOrNull { it.item.url == url && it.item.state in setOf("QUEUED", "RUNNING", "SAVING", "FINALIZING") }?.let {
+            return it.item.id
+        }
         val name = sanitize(fileName ?: URLDecoder.decode(parsed.path.substringAfterLast('/').ifBlank { "nova-download.bin" }, "UTF-8"))
         val id = UUID.randomUUID().toString()
         put(Item(id, url, name, mimeType, 0, 0, "QUEUED"))
@@ -145,7 +173,7 @@ class NovaDownloadManager(
         worker?.connection?.disconnect()
         runCatching { worker?.input?.close() }
         if (worker == null) partial(id).delete()
-        synchronized(this) { records.remove(id); persist(); changed(items()) }
+        synchronized(this) { records.remove(id); persist(); changedListener?.invoke(items()) }
         updateServiceNotification()
     }
 
@@ -160,6 +188,7 @@ class NovaDownloadManager(
             connection.connectTimeout = CONNECT_TIMEOUT_MS
             connection.readTimeout = READ_TIMEOUT_MS
             connection.setRequestProperty("User-Agent", "NovaBrowser/0.2 GeckoView")
+            connection.setRequestProperty("Accept-Encoding", "identity")
             if (offset > 0) {
                 connection.setRequestProperty("Range", "bytes=$offset-")
                 val validator = worker.item.etag.ifBlank { worker.item.lastModified }
@@ -269,9 +298,12 @@ class NovaDownloadManager(
         }
     }
 
-    fun saveExternalStream(stream: InputStream, fileName: String, mimeType: String) {
+    fun saveExternalStream(stream: InputStream, fileName: String, mimeType: String, contentLength: Long = -1L) {
         val id = UUID.randomUUID().toString()
-        val item = Item(id, "", sanitize(fileName), mimeType, 0, 0, "SAVING")
+        val safeName = sanitize(fileName)
+        val resolvedMime = resolveMimeType(safeName, mimeType)
+        val total = contentLength.takeIf { it > 0L } ?: 0L
+        val item = Item(id, "", safeName, resolvedMime, 0, total, "SAVING")
         val worker = Running(item, input = stream)
         running[id] = worker
         put(item)
@@ -299,8 +331,11 @@ class NovaDownloadManager(
                     }
                 }
                 if (worker.cancel.get()) {
-                    synchronized(this) { records.remove(id); persist(); changed(items()) }
+                    synchronized(this) { records.remove(id); persist(); changedListener?.invoke(items()) }
                 } else {
+                    if (worker.item.total > 0 && part.length() != worker.item.total) {
+                        throw IllegalStateException("Browser download incomplete: received ${part.length()} of ${worker.item.total} bytes")
+                    }
                     val uri = publish(part, item.fileName, item.mimeType)
                     worker.item = worker.item.copy(downloaded = part.length(), state = "COMPLETE", savedUri = uri.toString())
                     put(worker.item)
@@ -321,6 +356,20 @@ class NovaDownloadManager(
     }
 
     private fun partial(id: String) = File(File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "nova-partials"), "$id.part")
+
+    @Synchronized private fun cleanupOrphanPartials() {
+        val directory = partial("placeholder").parentFile ?: return
+        val knownIds = records.keys
+        directory.listFiles()?.filter { it.isFile && it.name.endsWith(".part") }?.forEach { file ->
+            val id = file.name.removeSuffix(".part")
+            if (id !in knownIds) file.delete()
+        }
+    }
+
+    private fun resolveMimeType(fileName: String, fallback: String): String {
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: fallback
+    }
 
     private fun publish(file: File, name: String, mime: String): Uri {
         if (Build.VERSION.SDK_INT >= 29) {

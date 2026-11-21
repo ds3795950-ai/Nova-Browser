@@ -70,10 +70,11 @@ class MainActivity : ComponentActivity() {
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
-    private val novaDownloads: NovaDownloadManager by lazy {
-        NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
+    private val novaDownloadsDelegate = lazy {
+        NovaDownloadManager(applicationContext) { items -> runOnUiThread { updateDownloadSummary(items) } }
             .also { it.resumeInterrupted() }
     }
+    private val novaDownloads: NovaDownloadManager by novaDownloadsDelegate
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
@@ -606,8 +607,10 @@ class MainActivity : ComponentActivity() {
                 val rawName = DownloadProtocol.fileNameFromContentDisposition(disposition)
                     ?: response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
+                val contentLength = response.headers["Content-Length"]?.toLongOrNull()
+                    ?: response.headers["content-length"]?.toLongOrNull() ?: -1L
                 requestDownloadNotificationPermission()
-                novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
+                novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'), contentLength)
                 toast("Webpage download received Â· saving to Downloads/Nova")
             }
             override fun onTitleChange(session: GeckoSession, title: String?) {
@@ -1276,7 +1279,10 @@ class MainActivity : ComponentActivity() {
             return
         }
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
-        if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
+        if (!url.startsWith("https://", true)) {
+            toast("Nova downloads require HTTPS. HTTP downloads are blocked by the app's cleartext security policy.")
+            return
+        }
         requestDownloadNotificationPermission()
         runCatching { novaDownloads.enqueue(url); toast("Download started Â· resumable") }
             .onFailure { toast("Download could not start: ${it?.localizedMessage ?: "Unknown error"}") }
@@ -2049,6 +2055,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         persistTabs()
+        if (novaDownloadsDelegate.isInitialized()) novaDownloads.shutdown()
         tabs.forEach { it.session?.close() }
         if (::runtime.isInitialized) {
             tabs.filter { it.isPrivate }.forEach(::clearPrivateContext)
