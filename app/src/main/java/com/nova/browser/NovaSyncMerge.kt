@@ -20,9 +20,21 @@ internal object NovaSyncMerge {
             result.put(key, JSONArray().also { array -> merged.values.forEach { array.put(it) } })
         }
         mergeArray("bookmarks", "url", "addedAt")
-        mergeArray("history", "url", "visitedAt")
+        val mergedHistoryById = linkedMapOf<String, JSONObject>()
+        for (source in listOf(remote.optJSONArray("history") ?: JSONArray(), local.optJSONArray("history") ?: JSONArray())) {
+            for (i in 0 until source.length()) {
+                val item = source.optJSONObject(i) ?: continue
+                val id = item.optString("id").trim()
+                if (id.isBlank()) continue
+                val previous = mergedHistoryById[id]
+                if (previous == null || item.optLong("visitedAt") >= previous.optLong("visitedAt")) mergedHistoryById[id] = item
+            }
+        }
+        result.put("history", JSONArray().also { array -> mergedHistoryById.values.forEach { array.put(it) } })
         mergeArray("workspaces", "name", "createdAt")
 
+        // History is visit-based and keyed by stable visit IDs. Clear-history is a
+        // profile-wide timestamp tombstone; there is no per-visit delete action in the UI.
         // Merge deletion markers by their latest timestamp so deletes made on one device
         // are not resurrected when another device syncs an older copy.
         val tombstones = JSONObject()

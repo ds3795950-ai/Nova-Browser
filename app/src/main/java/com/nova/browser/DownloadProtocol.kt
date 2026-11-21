@@ -1,5 +1,8 @@
 package com.nova.browser
 
+import java.net.URLDecoder
+import java.net.URI
+
 /** Pure validation and filename rules shared by the download pipeline and JVM tests. */
 object DownloadProtocol {
     data class ContentRange(val start: Long, val end: Long, val total: Long?)
@@ -12,6 +15,37 @@ object DownloadProtocol {
         val total = match.groupValues[3].takeUnless { it == "*" }?.toLongOrNull()
         if (end < start || (total != null && (total <= end || total <= 0))) return null
         return ContentRange(start, end, total)
+    }
+
+    /** Rejects non-HTTP redirects and HTTPS-to-HTTP downgrade redirects. */
+    fun isRedirectAllowed(fromUrl: String, toUrl: String): Boolean {
+        val fromScheme = runCatching { URI(fromUrl).scheme?.lowercase() }.getOrNull() ?: return false
+        val toScheme = runCatching { URI(toUrl).scheme?.lowercase() }.getOrNull() ?: return false
+        if (fromScheme !in setOf("http", "https") || toScheme !in setOf("http", "https")) return false
+        return fromScheme != "https" || toScheme != "http"
+    }
+
+    fun fileNameFromContentDisposition(header: String?): String? {
+        if (header.isNullOrBlank()) return null
+        val extended = Regex("filename\\*\\s*=\\s*([^;]+)", RegexOption.IGNORE_CASE)
+            .find(header)?.groupValues?.get(1)?.trim()?.trim('"', '\'')
+        val standard = Regex("filename\\s*=\\s*(?:\"([^\"]*)\"|([^;]*))", RegexOption.IGNORE_CASE)
+            .find(header)?.let { it.groupValues[1].ifBlank { it.groupValues[2] }.trim().trim('"', '\'') }
+        val decoded = when {
+            extended != null -> {
+                val encoded = extended.substringAfter("''", extended)
+                runCatching { URLDecoder.decode(encoded.replace("+", "%2B"), "UTF-8") }.getOrDefault(encoded)
+            }
+            else -> standard
+        } ?: return null
+        return safeFileName(decoded)
+    }
+
+    fun hostLabel(url: String): String {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return ""
+        if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return ""
+        val port = if (uri.port >= 0) ":${uri.port}" else ""
+        return "${uri.scheme}://${uri.host}$port"
     }
 
     fun safeFileName(value: String): String {

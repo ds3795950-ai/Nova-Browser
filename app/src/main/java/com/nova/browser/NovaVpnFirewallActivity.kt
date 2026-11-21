@@ -37,6 +37,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             setPadding(0, 0, 0, dp(18))
         }
         status = TextView(this).apply {
+            contentDescription = "Browser proxy status"
             textSize = 14f
             setPadding(0, 0, 0, dp(14))
         }
@@ -51,6 +52,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
         }
         locationButton = Button(this).apply {
             text = "Server: ${selectedLocationLabel()}  ▾"
+            contentDescription = "1VPN proxy server location"
             setOnClickListener { chooseLocation() }
         }
         val vpnDetails = TextView(this).apply {

@@ -5,6 +5,10 @@ import org.mozilla.geckoview.GeckoRuntime
 
 enum class ShieldMode { OFF, STANDARD, AGGRESSIVE }
 
+internal object ShieldProtectionPolicy {
+    fun fingerprintingInPrivateMode(mode: ShieldMode): Boolean = mode == ShieldMode.AGGRESSIVE
+}
+
 /** Uses GeckoView's native tracking-protection, cookie-isolation and Safe Browsing engines. */
 object NovaShield {
     fun apply(runtime: GeckoRuntime, mode: ShieldMode) {
@@ -43,7 +47,7 @@ object NovaShield {
         blocking.setContentBlockingDatabaseStatus(true)
         runtime.settings.setGlobalPrivacyControl(mode != ShieldMode.OFF)
         runtime.settings.setFingerprintingProtection(mode == ShieldMode.AGGRESSIVE)
-        runtime.settings.setFingerprintingProtectionPrivateBrowsing(true)
+        runtime.settings.setFingerprintingProtectionPrivateBrowsing(ShieldProtectionPolicy.fingerprintingInPrivateMode(mode))
     }
 
     fun fromStored(value: String?): ShieldMode = runCatching { ShieldMode.valueOf(value ?: "STANDARD") }.getOrDefault(ShieldMode.STANDARD)

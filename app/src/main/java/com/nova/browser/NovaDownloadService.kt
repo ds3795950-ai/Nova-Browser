@@ -35,7 +35,11 @@ class NovaDownloadService : Service() {
             return START_NOT_STICKY
         }
         activeCount = count
-        val notification = buildNotification(count)
+        val fileName = intent?.getStringExtra(EXTRA_FILE_NAME)
+        val downloaded = intent?.getLongExtra(EXTRA_DOWNLOADED, 0L) ?: 0L
+        val total = intent?.getLongExtra(EXTRA_TOTAL, 0L) ?: 0L
+        val downloadId = intent?.getStringExtra(EXTRA_DOWNLOAD_ID)
+        val notification = buildNotification(count, fileName, downloaded, total, downloadId)
         if (!foreground) {
             if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             else startForeground(NOTIFICATION_ID, notification)
@@ -46,18 +50,33 @@ class NovaDownloadService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun buildNotification(count: Int): Notification {
+    private fun buildNotification(count: Int, fileName: String?, downloaded: Long, total: Long, downloadId: String?): Notification {
         val openIntent = Intent(this, MainActivity::class.java)
         val pending = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val text = if (count == 1) "1 download in progress" else "$count downloads in progress"
+        val display = DownloadNotificationPolicy.display(count, fileName, downloaded, total)
         val builder = Notification.Builder(this, CHANNEL_ID)
-        return builder.setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Nova Browser")
-            .setContentText(text)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(display.title)
+            .setContentText(display.text)
+            .setProgress(100, display.progress, display.indeterminate)
             .setContentIntent(pending)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .build()
+        if (!downloadId.isNullOrBlank()) {
+            val pause = PendingIntent.getActivity(
+                this, downloadId.hashCode(), Intent(this, MainActivity::class.java)
+                    .setAction(MainActivity.ACTION_PAUSE_DOWNLOAD).putExtra(MainActivity.EXTRA_DOWNLOAD_ID, downloadId),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val cancel = PendingIntent.getActivity(
+                this, downloadId.hashCode() xor 0x55AA, Intent(this, MainActivity::class.java)
+                    .setAction(MainActivity.ACTION_CANCEL_DOWNLOAD).putExtra(MainActivity.EXTRA_DOWNLOAD_ID, downloadId),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause)
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancel)
+        }
+        return builder.build()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -66,9 +85,37 @@ class NovaDownloadService : Service() {
         private const val CHANNEL_ID = "nova_downloads"
         private const val NOTIFICATION_ID = 7301
         private const val EXTRA_COUNT = "active_count"
+        private const val EXTRA_FILE_NAME = "file_name"
+        private const val EXTRA_DOWNLOADED = "downloaded_bytes"
+        private const val EXTRA_TOTAL = "total_bytes"
+        private const val EXTRA_DOWNLOAD_ID = "download_id"
 
-        fun update(context: Context, activeCount: Int) {
-            val intent = Intent(context, NovaDownloadService::class.java).putExtra(EXTRA_COUNT, activeCount)
+        fun notifyResult(context: Context, item: NovaDownloadManager.Item) {
+            runCatching {
+                val manager = context.getSystemService(NotificationManager::class.java)
+                val channel = NotificationChannel(CHANNEL_ID, "Nova downloads", NotificationManager.IMPORTANCE_LOW)
+                manager.createNotificationChannel(channel)
+                val pending = PendingIntent.getActivity(
+                    context, item.id.hashCode(), Intent(context, MainActivity::class.java),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val completed = item.state == "COMPLETE"
+                val notification = Notification.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(if (completed) android.R.drawable.stat_sys_download_done else android.R.drawable.stat_notify_error)
+                    .setContentTitle(if (completed) "Download complete" else "Download failed")
+                    .setContentText(if (completed) item.fileName else "${item.fileName}: ${item.error}".take(180))
+                    .setContentIntent(pending).setAutoCancel(true).build()
+                manager.notify(item.id.hashCode() and 0x7fffffff, notification)
+            }
+        }
+
+        fun update(context: Context, activeCount: Int, fileName: String? = null, downloaded: Long = 0L, total: Long = 0L, downloadId: String? = null) {
+            val intent = Intent(context, NovaDownloadService::class.java)
+                .putExtra(EXTRA_COUNT, activeCount)
+                .putExtra(EXTRA_FILE_NAME, fileName)
+                .putExtra(EXTRA_DOWNLOADED, downloaded)
+                .putExtra(EXTRA_TOTAL, total)
+                .putExtra(EXTRA_DOWNLOAD_ID, downloadId)
             runCatching {
                 if (activeCount > 0) {
                     context.startForegroundService(intent)
