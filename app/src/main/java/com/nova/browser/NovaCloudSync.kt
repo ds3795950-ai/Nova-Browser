@@ -47,6 +47,9 @@ internal object CloudCrypto {
         private val keys = mutableMapOf<String, ByteArray>()
         @Synchronized internal fun getOrCreate(id: String, create: () -> ByteArray): ByteArray =
             keys.getOrPut(id, create)
+        @Synchronized internal fun remove(id: String) {
+            keys.remove(id)?.fill(0)
+        }
         @Synchronized fun clear() {
             keys.values.forEach { it.fill(0) }
             keys.clear()
@@ -54,7 +57,8 @@ internal object CloudCrypto {
     }
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray, cache: DecryptionKeyCache? = null): String {
-        require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
+        require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM" &&
+            envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported cloud backup format" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..400_000) { "Encryption work factor is outside Nova's safe limit" }
         val salt = unb64(envelope.getString("salt"))
@@ -71,6 +75,10 @@ internal object CloudCrypto {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
             String(cipher.doFinal(unb64(envelope.getString("ciphertext"))), Charsets.UTF_8)
+        } catch (error: Exception) {
+            // A wrong passphrase must not poison the cache for a later correct attempt.
+            cache?.remove(cacheId)
+            throw error
         } finally {
             if (cache == null) keyBytes.fill(0)
         }
@@ -91,6 +99,7 @@ class NovaCloudSync(context: Context) {
     }
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
+    private val sessionTempFile = File(sessionFile.parentFile, sessionFile.name + ".tmp")
     @Volatile private var snapshotVersion: String? = null
     @Volatile private var vaultVersion: String? = null
 
@@ -119,7 +128,12 @@ class NovaCloudSync(context: Context) {
 
     fun signOut() {
         runCatching { validSession()?.let { request("POST", "/auth/v1/logout?scope=local", "{}", it.getString("access_token")) } }
-        sessionFile.delete()
+        val mainDeleted = !sessionFile.exists() || sessionFile.delete()
+        val tempDeleted = !sessionTempFile.exists() || sessionTempFile.delete()
+        check(mainDeleted && tempDeleted) { "Could not remove the local Nova Cloud session" }
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(KEY_ALIAS)
+        snapshotVersion = null
+        vaultVersion = null
     }
 
     fun downloadEncrypted(): Pair<JSONObject?, JSONObject?> {
@@ -232,26 +246,54 @@ class NovaCloudSync(context: Context) {
     }
 
     private fun loadSession(): JSONObject? {
-        if (!sessionFile.exists()) return null
-        val packed = sessionFile.readBytes()
-        require(packed.size > 12) { "Saved cloud session is damaged; sign in again" }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, sessionKey(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
-        return JSONObject(String(cipher.doFinal(packed.copyOfRange(12, packed.size)), Charsets.UTF_8))
+        if (!sessionFile.exists() && !sessionTempFile.exists()) return null
+        fun decryptFile(file: File): JSONObject {
+            val packed = file.readBytes()
+            require(packed.size > 12) { "Saved cloud session is damaged; sign in again" }
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, sessionKey(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
+            return JSONObject(String(cipher.doFinal(packed.copyOfRange(12, packed.size)), Charsets.UTF_8))
+        }
+        val preferTemp = sessionTempFile.exists() && (!sessionFile.exists() || sessionTempFile.lastModified() >= sessionFile.lastModified())
+        if (preferTemp) {
+            val recovered = try {
+                decryptFile(sessionTempFile)
+            } catch (tempError: Exception) {
+                if (!sessionFile.exists()) throw tempError
+                val previous = decryptFile(sessionFile)
+                sessionTempFile.delete()
+                return previous
+            }
+            try {
+                Os.rename(sessionTempFile.absolutePath, sessionFile.absolutePath)
+            } catch (error: Exception) {
+                throw IllegalStateException("Could not recover the saved Nova Cloud session", error)
+            }
+            return recovered
+        }
+        if (sessionTempFile.exists()) sessionTempFile.delete()
+        return decryptFile(sessionFile)
     }
 
     private fun saveSession(session: JSONObject) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, sessionKey())
-        val temporary = File(sessionFile.parentFile, sessionFile.name + ".tmp")
-        FileOutputStream(temporary).use { it.write(cipher.iv + cipher.doFinal(session.toString().toByteArray(Charsets.UTF_8))); it.fd.sync() }
-        Os.rename(temporary.absolutePath, sessionFile.absolutePath)
+        FileOutputStream(sessionTempFile).use {
+            it.write(cipher.iv + cipher.doFinal(session.toString().toByteArray(Charsets.UTF_8)))
+            it.fd.sync()
+        }
+        try {
+            Os.rename(sessionTempFile.absolutePath, sessionFile.absolutePath)
+        } catch (error: Exception) {
+            sessionTempFile.delete()
+            throw IllegalStateException("Could not securely persist the Nova Cloud session", error)
+        }
     }
 
     private fun sessionKey(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        check(!sessionFile.exists()) {
+        check(!sessionFile.exists() && !sessionTempFile.exists()) {
             "The saved Nova Cloud session exists but its Android Keystore key is missing; sign in again to create a new session."
         }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")

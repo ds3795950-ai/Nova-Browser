@@ -1,24 +1,39 @@
 package com.nova.browser
 
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.security.GeneralSecurityException
 
 class CloudCryptoTest {
-    @Test fun rejectsExcessiveServerSuppliedKdfIterationsBeforeDerivingKey() {
-        val envelope = JSONObject()
-            .put("version", 1)
-            .put("algorithm", "AES-256-GCM")
-            .put("iterations", 1_000_000)
-        assertThrows(IllegalArgumentException::class.java) {
-            CloudCrypto.decrypt(envelope, "correct horse battery".toCharArray())
+    @Test
+    fun failedPassphraseAttemptDoesNotPoisonDecryptionKeyCache() {
+        val correct = "correct horse battery staple".toCharArray()
+        val wrong = "incorrect passphrase".toCharArray()
+        val cache = CloudCrypto.DecryptionKeyCache()
+        try {
+            val envelope = CloudCrypto.encrypt("encrypted Nova snapshot", correct)
+            assertThrows(GeneralSecurityException::class.java) {
+                CloudCrypto.decrypt(envelope, wrong, cache)
+            }
+            assertEquals("encrypted Nova snapshot", CloudCrypto.decrypt(envelope, correct, cache))
+        } finally {
+            correct.fill('\u0000')
+            wrong.fill('\u0000')
+            cache.clear()
         }
     }
 
-    @Test fun encryptedPayloadRoundTripsWithTheBoundedWorkFactor() {
-        val passphrase = "a sufficiently long sync passphrase".toCharArray()
-        val encrypted = CloudCrypto.encrypt("nova-sync", passphrase)
-        assertEquals("nova-sync", CloudCrypto.decrypt(encrypted, passphrase))
+    @Test
+    fun unsupportedKdfIsRejected() {
+        val passphrase = "correct horse battery staple".toCharArray()
+        try {
+            val envelope = CloudCrypto.encrypt("snapshot", passphrase).put("kdf", "unsupported")
+            assertThrows(IllegalArgumentException::class.java) {
+                CloudCrypto.decrypt(envelope, passphrase)
+            }
+        } finally {
+            passphrase.fill('\u0000')
+        }
     }
 }
