@@ -162,8 +162,9 @@ class NovaCloudSync(context: Context) {
             request("POST", "/rest/v1/$table?on_conflict=user_id", body.toString(), token,
                 "resolution=ignore-duplicates,return=representation")
         } else {
+            val encodedUserId = java.net.URLEncoder.encode(userId, "UTF-8")
             val encodedVersion = java.net.URLEncoder.encode(expectedVersion, "UTF-8")
-            request("PATCH", "/rest/v1/$table?user_id=eq.$userId&updated_at=eq.$encodedVersion", body.toString(), token,
+            request("PATCH", "/rest/v1/$table?user_id=eq.$encodedUserId&updated_at=eq.$encodedVersion", body.toString(), token,
                 "return=representation")
         }
         if (org.json.JSONArray(response).length() == 0) {
@@ -250,6 +251,9 @@ class NovaCloudSync(context: Context) {
     private fun sessionKey(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        check(!sessionFile.exists()) {
+            "The saved Nova Cloud session exists but its Android Keystore key is missing; sign in again to create a new session."
+        }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)

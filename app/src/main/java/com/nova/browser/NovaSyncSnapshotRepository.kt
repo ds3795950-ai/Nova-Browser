@@ -143,7 +143,7 @@ internal object NovaSyncSnapshotRepository {
             .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
             .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
             .putStringSet("bookmark_folders", settings.optJSONArray("bookmark_folders").toStringSet())
-        editor.apply()
+        check(editor.commit()) { "Could not persist the restored Nova sync snapshot" }
     }
 
     private fun readArray(raw: String?): JSONArray? = raw?.let { runCatching { JSONArray(it) }.getOrNull() }

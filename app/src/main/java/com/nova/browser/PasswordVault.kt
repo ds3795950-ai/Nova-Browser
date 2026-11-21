@@ -63,11 +63,12 @@ class PasswordVault(context: Context) {
         }.toMutableList()
         entries.add(login)
         persist(entries)
-        val key = credentialKey(login.origin, login.username)
+        val key = credentialKey(login.origin, login.username, login.formActionOrigin, login.httpRealm)
+        val legacyKey = legacyCredentialKey(login.origin, login.username)
         val metadata = readJsonPreference(META_KEY)
         val tombstones = readJsonPreference(TOMBSTONES_KEY)
-        metadata.put(key, maxOf(System.currentTimeMillis(), tombstones.optLong(key) + 1L))
-        tombstones.remove(key)
+        metadata.put(key, maxOf(System.currentTimeMillis(), tombstones.optLong(key) + 1L, tombstones.optLong(legacyKey) + 1L))
+        tombstones.remove(key).remove(legacyKey)
         prefs.edit().putString(META_KEY, metadata.toString()).putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
 
@@ -79,8 +80,9 @@ class PasswordVault(context: Context) {
             val key = credentialKey(removed.origin, removed.username, removed.formActionOrigin, removed.httpRealm)
             val metadata = readJsonPreference(META_KEY)
             val tombstones = readJsonPreference(TOMBSTONES_KEY)
-            tombstones.put(key, maxOf(System.currentTimeMillis(), metadata.optLong(key) + 1L))
-            metadata.remove(key)
+            val legacyKey = legacyCredentialKey(removed.origin, removed.username)
+            tombstones.put(key, maxOf(System.currentTimeMillis(), metadata.optLong(key) + 1L, metadata.optLong(legacyKey) + 1L))
+            metadata.remove(key).remove(legacyKey)
             prefs.edit().putString(META_KEY, metadata.toString()).putString(TOMBSTONES_KEY, tombstones.toString()).apply()
         }
     }
@@ -103,7 +105,7 @@ class PasswordVault(context: Context) {
             credentials.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
                 .put("origin", login.origin).put("formActionOrigin", login.formActionOrigin ?: "")
                 .put("httpRealm", login.httpRealm ?: "").put("username", login.username).put("password", login.password)
-                .put("updatedAt", metadata.optLong(key)))
+                .put("updatedAt", metadata.optLong(key, metadata.optLong(legacyCredentialKey(login.origin, login.username)))))
         }
         return JSONObject().put("schema", 2).put("credentials", credentials).put("deleted", readJsonPreference(TOMBSTONES_KEY))
     }
@@ -124,7 +126,7 @@ class PasswordVault(context: Context) {
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
                 .username(username).password(item.getString("password")).build()
             entries.add(entry)
-            metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
+            metadata.put(credentialKey(origin, username, entry.formActionOrigin, entry.httpRealm), item.optLong("updatedAt"))
         }
         persist(entries)
         prefs.edit().putString(META_KEY, metadata.toString())
@@ -196,6 +198,9 @@ class PasswordVault(context: Context) {
     private fun secretKey(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        check(!vaultFile.exists() && !prefs.contains(KEY_BLOB)) {
+            "This password vault exists but its Android Keystore key is missing; refusing to replace the key and destroy access to saved passwords."
+        }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -208,6 +213,8 @@ class PasswordVault(context: Context) {
     private fun readJsonPreference(key: String): JSONObject = runCatching { JSONObject(prefs.getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
     private fun credentialKey(origin: String, username: String, formActionOrigin: String? = null, httpRealm: String? = null) =
         "$origin|$username|${formActionOrigin.orEmpty()}|${httpRealm.orEmpty()}"
+
+    private fun legacyCredentialKey(origin: String, username: String) = "$origin|$username"
 
     companion object {
         private const val KEY_BLOB = "encrypted_entries_v1"
@@ -231,14 +238,16 @@ class PasswordVault(context: Context) {
             for (source in listOf(remote.optJSONArray("credentials") ?: JSONArray(), local.optJSONArray("credentials") ?: JSONArray())) {
                 for (i in 0 until source.length()) {
                     val item = source.getJSONObject(i)
-                    val key = item.optString("origin") + "|" + item.optString("username")
+                    val key = item.optString("origin") + "|" + item.optString("username") + "|" +
+                        item.optString("formActionOrigin") + "|" + item.optString("httpRealm")
                     val previous = merged[key]
                     if (previous == null || item.optLong("updatedAt") >= previous.optLong("updatedAt")) merged[key] = item
                 }
             }
             val kept = JSONArray()
             merged.forEach { (key, item) ->
-                val deletedAt = tombstones.optLong(key)
+                val legacyKey = item.optString("origin") + "|" + item.optString("username")
+                val deletedAt = maxOf(tombstones.optLong(key), tombstones.optLong(legacyKey))
                 if (deletedAt == 0L || item.optLong("updatedAt") > deletedAt) kept.put(item)
             }
             return JSONObject().put("schema", 2).put("credentials", kept).put("deleted", tombstones)
