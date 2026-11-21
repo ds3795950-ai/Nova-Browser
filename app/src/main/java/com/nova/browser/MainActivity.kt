@@ -155,6 +155,9 @@ class MainActivity : ComponentActivity() {
         runtime.settings.setLoginAutofillEnabled(true)
         configureExtensionPermissions()
         NovaBrowserVpnController.initialize(this, runtime)
+        val stalePrivateContexts = prefs.getStringSet(PRIVATE_CONTEXT_IDS_KEY, emptySet()).orEmpty().toSet()
+        stalePrivateContexts.forEach(runtime.storageController::clearDataForSessionContext)
+        prefs.edit().remove(PRIVATE_CONTEXT_IDS_KEY).apply()
         val previousGuestContext = prefs.getString("guest_context_id", null)
         if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
         guestContextId = "nova-guest-${UUID.randomUUID()}"
@@ -480,9 +483,14 @@ class MainActivity : ComponentActivity() {
 
     private fun ensureSession(tab: BrowserTab): GeckoSession {
         tab.session?.let { return it }
+        val contextId = SessionContextPolicy.contextId(tab.id, tab.isPrivate, tab.isGuest, guestContextId)
+        if (tab.isPrivate && contextId != null) {
+            val tracked = prefs.getStringSet(PRIVATE_CONTEXT_IDS_KEY, emptySet()).orEmpty().toMutableSet()
+            if (tracked.add(contextId)) prefs.edit().putStringSet(PRIVATE_CONTEXT_IDS_KEY, tracked).apply()
+        }
         val settings = GeckoSessionSettings.Builder()
             .usePrivateMode(tab.isPrivate || tab.isGuest)
-            .contextId(if (tab.isGuest) guestContextId else null)
+            .contextId(contextId)
             .userAgentMode(if (tab.desktopSite) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(if (tab.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .build()
@@ -848,6 +856,7 @@ class MainActivity : ComponentActivity() {
         val removed = tabs.removeAt(index)
         if (removed.id == splitTabId) exitSplitScreen()
         removed.session?.close()
+        clearPrivateContext(removed)
         cleanupGuestContextIfIdle()
         if (removed.isGuest && wasGuestActive && tabs.none { it.isGuest }) {
             createGuestTab()
@@ -1340,6 +1349,14 @@ class MainActivity : ComponentActivity() {
             }.setNegativeButton("Cancel", null).show()
     }
 
+    private fun clearPrivateContext(tab: BrowserTab) {
+        if (!tab.isPrivate) return
+        val contextId = SessionContextPolicy.contextId(tab.id, isPrivate = true, isGuest = false, guestContextId = guestContextId) ?: return
+        runtime.storageController.clearDataForSessionContext(contextId)
+        val tracked = prefs.getStringSet(PRIVATE_CONTEXT_IDS_KEY, emptySet()).orEmpty().toMutableSet()
+        if (tracked.remove(contextId)) prefs.edit().putStringSet(PRIVATE_CONTEXT_IDS_KEY, tracked).apply()
+    }
+
     private fun cleanupGuestContextIfIdle() {
         if (tabs.none { it.isGuest } && guestContextId.isNotBlank()) {
             runtime.storageController.clearDataForSessionContext(guestContextId)
@@ -1722,6 +1739,7 @@ class MainActivity : ComponentActivity() {
                         val removed = tabs.removeAt(index)
                         if (removed.id == splitTabId) exitSplitScreen()
                         removed.session?.close()
+                        clearPrivateContext(removed)
                     }
                     cleanupGuestContextIfIdle()
                     if (tabs.isEmpty()) createTab(false, HOME_URL) else {
@@ -1954,6 +1972,7 @@ class MainActivity : ComponentActivity() {
         tabs.forEach { it.session?.close() }
         tabs.clear()
         if (::runtime.isInitialized) {
+            tabs.filter { it.isPrivate }.forEach(::clearPrivateContext)
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
             runtime.shutdown()
         }
@@ -1961,6 +1980,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val PRIVATE_CONTEXT_IDS_KEY = "private_context_ids"
         private const val HOME_URL = "about:blank"
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
     }
