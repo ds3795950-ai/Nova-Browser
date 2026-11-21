@@ -1,6 +1,6 @@
 package com.nova.browser
 
-/** Keeps visible GeckoSessions active while retaining private and Guest state. */
+/** Caps retained GeckoSession objects, preferring normal tabs before private/Guest tabs. */
 internal object SessionBudgetPolicy {
     data class Candidate(
         val id: String,
@@ -21,7 +21,11 @@ internal object SessionBudgetPolicy {
         else -> 10
     }
 
-    /** Selects only least-recent normal tabs; private and Guest sessions are never evicted. */
+    /**
+     * Evicts least-recent normal sessions first. Private and Guest sessions are a last resort,
+     * but cannot bypass the memory cap indefinitely. The tab/context identity remains available
+     * so an evicted session can be recreated when selected again.
+     */
     fun evictionCandidates(
         candidates: List<Candidate>,
         limit: Int,
@@ -29,11 +33,9 @@ internal object SessionBudgetPolicy {
     ): List<String> {
         val excess = (candidates.size - limit).coerceAtLeast(0)
         if (excess == 0) return emptyList()
-        return candidates.asSequence()
-            .filter { it.id !in visibleIds && !it.isPrivate && !it.isGuest }
-            .sortedBy { it.lastAccess }
-            .take(excess)
-            .map { it.id }
-            .toList()
+        val background = candidates.filter { it.id !in visibleIds }
+        val normalFirst = background.filterNot { it.isPrivate || it.isGuest }.sortedBy { it.lastAccess }
+        val privateAndGuestLast = background.filter { it.isPrivate || it.isGuest }.sortedBy { it.lastAccess }
+        return (normalFirst + privateAndGuestLast).take(excess).map { it.id }
     }
 }

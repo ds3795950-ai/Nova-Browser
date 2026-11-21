@@ -1033,6 +1033,8 @@ class MainActivity : ComponentActivity() {
             if (tab.session != null) tab.needsReload = true
             tab.session = null
         }
+        // Enforce the hard cap for inactive private/Guest sessions if normal-page eviction is not enough.
+        evictInactiveSessions()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -1442,6 +1444,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveBookmarks(items: List<BookmarkEntry>, trackDeletes: Boolean = true) {
+        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+            toast("Private and Guest tabs cannot modify bookmarks")
+            return
+        }
         val safeItems = items.mapNotNull { item ->
             val url = HistoryPolicy.sanitizeForStorage(item.url) ?: return@mapNotNull null
             if (url.length > MAX_URL_LENGTH_FOR_IMPORT) return@mapNotNull null
@@ -1496,6 +1502,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showBookmarks() {
+        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+            toast("Bookmarks are unavailable in private or Guest Mode")
+            return
+        }
         val items = readBookmarks()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
         val search = EditText(this).apply { hint = "Search bookmarks"; isSingleLine = true }

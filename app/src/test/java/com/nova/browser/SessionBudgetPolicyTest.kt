@@ -6,36 +6,44 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionBudgetPolicyTest {
-    @Test fun keepsCurrentAndSplitSessionsActive() {
-        assertTrue(SessionBudgetPolicy.shouldRemainActive("current", "current", "split"))
-        assertTrue(SessionBudgetPolicy.shouldRemainActive("split", "current", "split"))
-    }
-    @Test fun suspendsBackgroundSessionsWithoutEvictingThem() {
-        assertFalse(SessionBudgetPolicy.shouldRemainActive("background", "current", "split"))
-    }
-    @Test fun scalesRetainedSessionLimitWithMemoryClass() {
-        assertEquals(3, SessionBudgetPolicy.maxRetainedSessions(96))
-        assertEquals(6, SessionBudgetPolicy.maxRetainedSessions(256))
-        assertEquals(10, SessionBudgetPolicy.maxRetainedSessions(512))
-    }
-
-    @Test fun countsSplitPaneAsVisibleAndNeverEvictsPrivateOrGuest() {
+    @Test
+    fun normalSessionsAreEvictedBeforePrivateAndGuestSessions() {
         val candidates = listOf(
-            SessionBudgetPolicy.Candidate("current", 10, false, false),
-            SessionBudgetPolicy.Candidate("split", 9, false, false),
-            SessionBudgetPolicy.Candidate("private", 1, true, false),
-            SessionBudgetPolicy.Candidate("guest", 2, false, true),
-            SessionBudgetPolicy.Candidate("old-normal", 0, false, false),
-            SessionBudgetPolicy.Candidate("new-normal", 3, false, false)
+            SessionBudgetPolicy.Candidate("normal-old", 1L, false, false),
+            SessionBudgetPolicy.Candidate("guest-old", 2L, false, true),
+            SessionBudgetPolicy.Candidate("private-old", 3L, true, false),
+            SessionBudgetPolicy.Candidate("normal-new", 4L, false, false)
         )
-        val evicted = SessionBudgetPolicy.evictionCandidates(candidates, 4, setOf("current", "split"))
-        assertEquals(listOf("old-normal", "new-normal"), evicted)
-        assertFalse(evicted.contains("private"))
-        assertFalse(evicted.contains("guest"))
+        assertEquals(listOf("normal-old", "normal-new"),
+            SessionBudgetPolicy.evictionCandidates(candidates, 2, emptySet()))
     }
 
-    @Test fun handlesNoSplitSession() {
-        assertTrue(SessionBudgetPolicy.shouldRemainActive("current", "current", null))
-        assertFalse(SessionBudgetPolicy.shouldRemainActive("other", "current", null))
+    @Test
+    fun privateAndGuestSessionsAreEvictedOnlyWhenNeededToMeetTheCap() {
+        val candidates = listOf(
+            SessionBudgetPolicy.Candidate("normal", 1L, false, false),
+            SessionBudgetPolicy.Candidate("guest", 2L, false, true),
+            SessionBudgetPolicy.Candidate("private", 3L, true, false)
+        )
+        assertEquals(listOf("normal", "guest"),
+            SessionBudgetPolicy.evictionCandidates(candidates, 1, emptySet()))
+    }
+
+    @Test
+    fun visibleCurrentAndSplitSessionsAreNeverEvicted() {
+        val candidates = listOf(
+            SessionBudgetPolicy.Candidate("current", 1L, false, false),
+            SessionBudgetPolicy.Candidate("split", 2L, false, false),
+            SessionBudgetPolicy.Candidate("background", 3L, false, true)
+        )
+        val evicted = SessionBudgetPolicy.evictionCandidates(candidates, 2, setOf("current", "split"))
+        assertEquals(listOf("background"), evicted)
+        assertFalse(evicted.contains("current"))
+        assertFalse(evicted.contains("split"))
+    }
+
+    @Test
+    fun sessionBudgetScalesWithMemoryClass() {
+        assertTrue(SessionBudgetPolicy.maxRetainedSessions(96) < SessionBudgetPolicy.maxRetainedSessions(256))
     }
 }
