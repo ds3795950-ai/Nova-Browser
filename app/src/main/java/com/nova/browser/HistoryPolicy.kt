@@ -10,7 +10,9 @@ internal object HistoryPolicy {
         "oauth_token", "oauth_verifier", "code", "authorization_code",
         "client_secret", "secret", "password", "passwd", "key", "api_key",
         "apikey", "sig", "signature", "jwt", "session", "sessionid",
-        "reset_token", "magic_token", "state"
+        "reset_token", "resettoken", "password_reset_token", "magic_token", "email_token",
+        "verification_token", "accesstoken", "refreshtoken", "idtoken", "authtoken",
+        "clientsecret", "authorization", "bearer", "code_verifier", "code_challenge", "otp", "state"
     )
 
     fun sanitizeForStorage(url: String): String? {
@@ -32,6 +34,17 @@ internal object HistoryPolicy {
             append(uri.rawPath.orEmpty())
             if (!query.isNullOrBlank()) append('?').append(query)
         }
+    }
+
+    fun shouldAppendVisit(
+        lastUrl: String?,
+        lastVisitedAt: Long,
+        nextUrl: String,
+        now: Long,
+        dedupeWindowMs: Long = 2_000L
+    ): Boolean {
+        if (lastUrl != nextUrl) return true
+        return now - lastVisitedAt >= dedupeWindowMs.coerceAtLeast(0L)
     }
 
     fun shouldPersist(url: String): Boolean = sanitizeForStorage(url) != null

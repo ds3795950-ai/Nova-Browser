@@ -114,26 +114,28 @@ internal object NovaSyncSnapshotRepository {
             workspaceSet.add(JSONObject(item.toString()).put("name", name).put("tabs", safeTabs).toString())
         }
         val settings = snapshot.optJSONObject("settings") ?: JSONObject()
-        NovaLocalDataStore.migrateLegacyBackups(context)
-        val encryptedBookmarks = NovaLocalDataStore.encrypt(context, "bookmarks", safeBookmarks.toString())
-        val encryptedHistory = NovaLocalDataStore.encrypt(context, "history", historyArray.toString())
-        val encryptedBookmarkTombstones = NovaLocalDataStore.encrypt(
-            context, "bookmark_tombstones", (snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()).toString()
-        )
-        val editor = p.edit()
-            .putString(NovaLocalDataStore.BOOKMARKS_PREF_KEY, encryptedBookmarks).remove("bookmarks_v2").remove("bookmarks")
-            .putString(NovaLocalDataStore.HISTORY_PREF_KEY, encryptedHistory).remove("history_v2").remove("history")
-            .putString(NovaLocalDataStore.BOOKMARK_TOMBSTONES_PREF_KEY, encryptedBookmarkTombstones).remove("bookmark_tombstones")
-            .putString("workspace_tombstones", (snapshot.optJSONObject("workspace_tombstones") ?: JSONObject()).toString())
-            .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L))
-            .putStringSet("saved_workspaces", workspaceSet)
-            .putString("search_engine", settings.optString("search_engine", "Google"))
-            .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
-            .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
-            .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
-            .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
-            .putStringSet("bookmark_folders", settings.optJSONArray("bookmark_folders").toStringSet())
-        check(editor.commit()) { "Could not persist the restored Nova sync snapshot" }
+        NovaLocalDataStore.withProfileDataLock {
+            NovaLocalDataStore.migrateLegacyBackups(context)
+            val encryptedBookmarks = NovaLocalDataStore.encrypt(context, "bookmarks", safeBookmarks.toString())
+            val encryptedHistory = NovaLocalDataStore.encrypt(context, "history", historyArray.toString())
+            val encryptedBookmarkTombstones = NovaLocalDataStore.encrypt(
+                context, "bookmark_tombstones", (snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()).toString()
+            )
+            val editor = p.edit()
+                .putString(NovaLocalDataStore.BOOKMARKS_PREF_KEY, encryptedBookmarks).remove("bookmarks_v2").remove("bookmarks")
+                .putString(NovaLocalDataStore.HISTORY_PREF_KEY, encryptedHistory).remove("history_v2").remove("history")
+                .putString(NovaLocalDataStore.BOOKMARK_TOMBSTONES_PREF_KEY, encryptedBookmarkTombstones).remove("bookmark_tombstones")
+                .putString("workspace_tombstones", (snapshot.optJSONObject("workspace_tombstones") ?: JSONObject()).toString())
+                .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L))
+                .putStringSet("saved_workspaces", workspaceSet)
+                .putString("search_engine", settings.optString("search_engine", "Google"))
+                .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
+                .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
+                .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
+                .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
+                .putStringSet("bookmark_folders", settings.optJSONArray("bookmark_folders").toStringSet())
+            check(editor.commit()) { "Could not persist the restored Nova sync snapshot" }
+        }
     }
 
     private fun readArray(raw: String?): JSONArray? = raw?.let { JSONArray(it) }

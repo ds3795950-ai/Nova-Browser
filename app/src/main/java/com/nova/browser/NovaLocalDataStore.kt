@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.util.UUID
+import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -59,8 +60,16 @@ internal object NovaLocalDataStore {
     private const val BOOKMARKS_PURPOSE = "bookmarks"
     private const val HISTORY_PURPOSE = "history"
     private const val BOOKMARK_TOMBSTONES_PURPOSE = "bookmark_tombstones"
+    private const val MAX_HISTORY_ENTRIES = 500
+    private const val MAX_HISTORY_URL_LENGTH = 2048
+    private val historyExecutor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "NovaHistoryWriter").apply { isDaemon = true }
+    }
+    private val profileDataLock = Any()
 
-    fun readBookmarksJson(context: Context): String? = readEncryptedOrMigrate(
+    fun <T> withProfileDataLock(block: () -> T): T = synchronized(profileDataLock, block)
+
+    fun readBookmarksJson(context: Context): String? = withProfileDataLock { readEncryptedOrMigrate(
         context, BOOKMARKS_PREF_KEY, BOOKMARKS_PURPOSE, "bookmarks_v2", "bookmarks",
         "bookmarks_v2_corrupt_backup", BOOKMARKS_BACKUP_PREF_KEY, "bookmarks_corrupt_backup"
     ) { values ->
@@ -70,22 +79,24 @@ internal object NovaLocalDataStore {
                     .put("folder", "General").put("addedAt", 0L))
             }
         }.toString()
+    } }
+
+    fun readHistoryJson(context: Context): String? = withProfileDataLock {
+        readEncryptedOrMigrate(
+            context, HISTORY_PREF_KEY, HISTORY_PURPOSE, "history_v2", "history",
+            "history_v2_corrupt_backup", HISTORY_BACKUP_PREF_KEY, "history_corrupt_backup"
+        ) { values ->
+            JSONArray().also { array ->
+                values.sorted().forEachIndexed { index, url ->
+                    val id = UUID.nameUUIDFromBytes("$url|0|$index".toByteArray(StandardCharsets.UTF_8)).toString()
+                    array.put(JSONObject().put("id", id).put("url", url)
+                        .put("title", Uri.parse(url).host ?: url).put("visitedAt", 0L))
+                }
+            }.toString()
+        }
     }
 
-    fun readHistoryJson(context: Context): String? = readEncryptedOrMigrate(
-        context, HISTORY_PREF_KEY, HISTORY_PURPOSE, "history_v2", "history",
-        "history_v2_corrupt_backup", HISTORY_BACKUP_PREF_KEY, "history_corrupt_backup"
-    ) { values ->
-        JSONArray().also { array ->
-            values.sorted().forEachIndexed { index, url ->
-                val id = UUID.nameUUIDFromBytes("$url|0|$index".toByteArray(StandardCharsets.UTF_8)).toString()
-                array.put(JSONObject().put("id", id).put("url", url)
-                    .put("title", Uri.parse(url).host ?: url).put("visitedAt", 0L))
-            }
-        }.toString()
-    }
-
-    fun writeBookmarksJson(context: Context, json: String) {
+    fun writeBookmarksJson(context: Context, json: String) = withProfileDataLock {
         migrateLegacyBackups(context)
         val encrypted = encrypt(context, BOOKMARKS_PURPOSE, json)
         val editor = prefs(context).edit().putString(BOOKMARKS_PREF_KEY, encrypted)
@@ -93,7 +104,46 @@ internal object NovaLocalDataStore {
         check(editor.commit()) { "Could not persist encrypted bookmarks" }
     }
 
-    fun writeHistoryJson(context: Context, json: String) {
+
+    /** Serializes history writes off the UI thread and collapses duplicate navigation callbacks. */
+    fun appendHistoryAsync(context: Context, url: String, title: String, onError: (Exception) -> Unit = {}) {
+        val appContext = context.applicationContext
+        val safeUrl = HistoryPolicy.sanitizeForStorage(url)?.takeIf { it.length <= MAX_HISTORY_URL_LENGTH } ?: return
+        historyExecutor.execute {
+            try {
+                withProfileDataLock {
+                    val raw = readHistoryJson(appContext)
+                    val array = JSONArray(raw ?: "[]")
+                    val last = array.optJSONObject(array.length() - 1)
+                    val now = System.currentTimeMillis()
+                    if (!HistoryPolicy.shouldAppendVisit(last?.optString("url"), last?.optLong("visitedAt") ?: 0L, safeUrl, now)) {
+                        return@withProfileDataLock
+                    }
+                    val visitedAt = maxOf(now, prefs(appContext).getLong("history_cleared_at", 0L) + 1L)
+                    array.put(JSONObject().put("id", UUID.randomUUID().toString()).put("url", safeUrl)
+                        .put("title", title.take(512)).put("visitedAt", visitedAt))
+                    while (array.length() > MAX_HISTORY_ENTRIES) array.remove(0)
+                    writeHistoryJson(appContext, array.toString())
+                }
+            } catch (error: Exception) {
+                runCatching { onError(error) }
+            }
+        }
+    }
+
+    fun clearHistoryAsync(context: Context, clearedAt: Long, onComplete: () -> Unit = {}, onError: (Exception) -> Unit = {}) {
+        val appContext = context.applicationContext
+        historyExecutor.execute {
+            try {
+                clearHistory(appContext, clearedAt)
+                runCatching { onComplete() }
+            } catch (error: Exception) {
+                runCatching { onError(error) }
+            }
+        }
+    }
+
+    fun writeHistoryJson(context: Context, json: String) = withProfileDataLock {
         migrateLegacyBackups(context)
         val encrypted = encrypt(context, HISTORY_PURPOSE, json)
         val editor = prefs(context).edit().putString(HISTORY_PREF_KEY, encrypted)
@@ -102,35 +152,35 @@ internal object NovaLocalDataStore {
     }
 
 
-    fun readBookmarkTombstonesJson(context: Context): String? {
+    fun readBookmarkTombstonesJson(context: Context): String? = withProfileDataLock {
         migrateLegacyBackups(context)
         val p = prefs(context)
         p.getString(BOOKMARK_TOMBSTONES_PREF_KEY, null)?.let {
-            return decrypt(context, BOOKMARK_TOMBSTONES_PURPOSE, it)
+            return@withProfileDataLock decrypt(context, BOOKMARK_TOMBSTONES_PURPOSE, it)
         }
-        val legacy = p.getString("bookmark_tombstones", null) ?: return null
+        val legacy = p.getString("bookmark_tombstones", null) ?: return@withProfileDataLock null
         val encrypted = encrypt(context, BOOKMARK_TOMBSTONES_PURPOSE, legacy)
         check(p.edit().putString(BOOKMARK_TOMBSTONES_PREF_KEY, encrypted).remove("bookmark_tombstones").commit()) {
             "Could not migrate bookmark deletion metadata to encrypted storage"
         }
-        return legacy
+        legacy
     }
 
-    fun writeBookmarkTombstonesJson(context: Context, json: String) {
+    fun writeBookmarkTombstonesJson(context: Context, json: String) = withProfileDataLock {
         migrateLegacyBackups(context)
         val encrypted = encrypt(context, BOOKMARK_TOMBSTONES_PURPOSE, json)
         check(prefs(context).edit().putString(BOOKMARK_TOMBSTONES_PREF_KEY, encrypted)
             .remove("bookmark_tombstones").commit()) { "Could not persist encrypted bookmark deletion metadata" }
     }
 
-    fun clearHistory(context: Context, clearedAt: Long) {
+    fun clearHistory(context: Context, clearedAt: Long) = withProfileDataLock {
         val editor = prefs(context).edit().putLong("history_cleared_at", clearedAt)
             .remove(HISTORY_PREF_KEY).remove(HISTORY_BACKUP_PREF_KEY)
             .remove("history").remove("history_v2").remove("history_v2_corrupt_backup")
         check(editor.commit()) { "Could not clear encrypted browsing history" }
     }
 
-    fun migrateLegacyBackups(context: Context) {
+    fun migrateLegacyBackups(context: Context) = withProfileDataLock {
         migrateLegacyBackup(context, "history_v2_corrupt_backup", HISTORY_BACKUP_PREF_KEY, "history_corrupt_backup")
         migrateLegacyBackup(context, "bookmarks_v2_corrupt_backup", BOOKMARKS_BACKUP_PREF_KEY, "bookmarks_corrupt_backup")
     }

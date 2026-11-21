@@ -1589,26 +1589,26 @@ class MainActivity : ComponentActivity() {
 
     private fun clearBrowsingHistory() {
         if (denyGuestAccess("Clearing owner history")) return
-        runCatching { NovaLocalDataStore.clearHistory(this, System.currentTimeMillis()) }
-            .onFailure { toast("Could not clear browsing history: ${it.localizedMessage ?: "Unknown error"}") }
+        NovaLocalDataStore.clearHistoryAsync(applicationContext, System.currentTimeMillis(),
+            onComplete = {
+                runOnUiThread { if (!isFinishing && !isDestroyed) toast("Browsing history cleared") }
+            },
+            onError = { error ->
+                runOnUiThread { if (!isFinishing && !isDestroyed) toast("Could not clear browsing history: ${error.localizedMessage ?: "Unknown error"}") }
+            }
+        )
     }
 
     private fun addHistory(url: String) {
         val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return
-        val items = readHistory().toMutableList()
-        val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
-        items.add(HistoryEntry(safeUrl, Uri.parse(safeUrl).host ?: safeUrl, visitedAt, UUID.randomUUID().toString()))
-        val array = JSONArray()
-        items.takeLast(500).forEach {
-            array.put(JSONObject().put("id", it.id).put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt))
-        }
-        runCatching { NovaLocalDataStore.writeHistoryJson(this, array.toString()) }
-            .onFailure { error ->
-                if (!prefs.getBoolean("history_storage_warning_shown", false)) {
+        NovaLocalDataStore.appendHistoryAsync(applicationContext, safeUrl, Uri.parse(safeUrl).host ?: safeUrl) { _ ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && !prefs.getBoolean("history_storage_warning_shown", false)) {
                     prefs.edit().putBoolean("history_storage_warning_shown", true).apply()
                     toast("Browsing history was not saved because its encryption key is unavailable")
                 }
             }
+        }
     }
 
     private fun readHistory(): List<HistoryEntry> {
@@ -1654,7 +1654,7 @@ class MainActivity : ComponentActivity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(search); content.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
         val dialog = AlertDialog.Builder(this).setTitle("History Â· ${items.size}").setView(content)
-            .setNeutralButton("Clear history") { _, _ -> clearBrowsingHistory(); toast("Browsing history cleared") }
+            .setNeutralButton("Clear history") { _, _ -> clearBrowsingHistory() }
             .setNegativeButton("Close", null).create()
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -2423,7 +2423,7 @@ class MainActivity : ComponentActivity() {
                     homeShortcuts.visibility = if (show) View.VISIBLE else View.GONE
                     toast(if (show) "Home shortcuts shown" else "Home shortcuts hidden")
                 }
-                2 -> { clearBrowsingHistory(); toast("Browsing history cleared") }
+                2 -> clearBrowsingHistory()
                 3 -> {
                     val activeId = currentTab()?.id
                     tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
