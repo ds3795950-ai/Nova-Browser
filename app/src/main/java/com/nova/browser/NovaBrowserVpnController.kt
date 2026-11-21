@@ -12,7 +12,7 @@ import org.mozilla.geckoview.WebExtension
 object NovaBrowserVpnController {
     const val EXTENSION_ID = "1vpn-internal@nova.browser"
     private const val NATIVE_APP = "com.nova.browser.vpn"
-    private const val EXTENSION_URI = "resource://android/assets/nova_1vpn/"
+    private const val EXTENSION_URI = "resource://android/assets/nova_1vpn_runtime/"
 
     private var runtime: GeckoRuntime? = null
     private var preferences: SharedPreferences? = null

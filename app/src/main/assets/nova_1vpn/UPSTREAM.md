@@ -1,8 +1,8 @@
-# 1VPN proxy bridge attribution
+# 1VPN upstream attribution
 
-The free proxy host catalogue and public free-tier proxy authentication constants are adapted from the official 1VPN browser extension, version 4.2.2, released 2026-11-16.
+Nova bundles the official 1VPN Firefox add-on from Mozilla Add-ons, pinned to version 4.2.2 and a SHA-256 digest in `app/build.gradle.kts`. The Gradle `prepare1VpnAssets` task verifies the archive before extracting it, patches its Gecko add-on ID, and injects Nova's native-message bridge.
 
 Upstream source: https://github.com/1vpn/browser-extension
-License: GNU General Public License v3.0. The upstream license and notice are retained in this directory.
+License: GNU General Public License v3.0. The upstream `LICENSE` and `NOTICE` are retained in this directory.
 
-This Nova-specific bridge supports only the three upstream free locations exposed by Nova settings (Singapore, Amsterdam, Los Angeles). It uses the published no-account free credentials and the GeckoView native messaging bridge; it does not include premium account flows.
+Only the upstream free locations exposed in Nova settings (Singapore, Amsterdam, and Los Angeles) are enabled by the native bridge. The feature uses the upstream public free-tier credentials and does not require a 1VPN user account.

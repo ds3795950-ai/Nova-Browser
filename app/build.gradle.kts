@@ -100,7 +100,7 @@ dependencies {
 
 
 val generatedAssetsRoot = layout.buildDirectory.dir("generated/assets")
-val generated1VpnDir = layout.buildDirectory.dir("generated/assets/nova_1vpn")
+val generated1VpnDir = layout.buildDirectory.dir("generated/assets/nova_1vpn_runtime")
 val vpnArchiveUrl = "https://addons.mozilla.org/firefox/downloads/latest/1vpn/latest.xpi"
 val vpnArchiveSha256 = "112c58e7b7f283e01d0efaee1fb03cee673839588b2b6399a4dc075794c1f302"
 

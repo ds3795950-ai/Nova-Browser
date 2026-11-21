@@ -7,14 +7,17 @@ import org.junit.Test
 import java.io.File
 
 class NovaVpnBridgeAssetTest {
-    private fun asset(path: String): File {
-        val candidates = listOf(File("src/main/assets/nova_1vpn/$path"), File("app/src/main/assets/nova_1vpn/$path"))
-        return candidates.firstOrNull { it.isFile } ?: error("Missing bundled 1VPN asset: $path")
+    private fun generatedAsset(path: String): File {
+        val candidates = listOf(
+            File("build/generated/assets/nova_1vpn_runtime/$path"),
+            File("app/build/generated/assets/nova_1vpn_runtime/$path")
+        )
+        return candidates.firstOrNull { it.isFile } ?: error("Missing generated 1VPN asset: $path")
     }
 
     @Test
-    fun bundledManifestMatchesTheNativeBridgeAndRequiredPermissions() {
-        val manifest = JSONObject(asset("manifest.json").readText())
+    fun generatedManifestMatchesTheNativeBridgeAndRequiredPermissions() {
+        val manifest = JSONObject(generatedAsset("manifest.json").readText())
         val gecko = manifest.getJSONObject("browser_specific_settings").getJSONObject("gecko")
         assertEquals(NovaBrowserVpnController.EXTENSION_ID, gecko.getString("id"))
         val permissions = manifest.getJSONArray("permissions").let { array ->
@@ -23,19 +26,20 @@ class NovaVpnBridgeAssetTest {
         assertTrue(permissions.contains("proxy"))
         assertTrue(permissions.contains("webRequestBlocking"))
         assertTrue(permissions.contains("nativeMessaging"))
-        assertEquals("background.js", manifest.getJSONObject("background").getJSONArray("scripts").getString(0))
+        assertTrue(permissions.contains("geckoViewAddons"))
     }
 
     @Test
-    fun bundledBridgeUsesOnlyTheThreeNoAccountFreeRegions() {
-        val source = asset("background.js").readText()
-        NovaVpnLocations.free.forEach { location ->
-            assertTrue("Missing 1VPN region ${location.id}", source.contains("${location.id}: ["))
-        }
-        assertTrue(source.contains("FREE_CREDENTIALS"))
-        assertTrue(source.contains("browser.runtime.connectNative"))
-        assertTrue(source.contains("browser.proxy.onRequest"))
-        assertTrue(source.contains("browser.proxy.onError"))
-        assertTrue(source.contains("webRTCIPHandlingPolicy"))
+    fun generatedUpstreamBridgeIncludesProxyAuthAndGuestIndependentNativeControl() {
+        val background = generatedAsset("background.bundle.js").readText()
+        assertTrue(background.contains("browser.proxy.onRequest.addListener"))
+        assertTrue(background.contains("chrome.webRequest.onAuthRequired.addListener"))
+        assertTrue(background.contains("browser.runtime.connectNative(\"com.nova.browser.vpn\")"))
+        assertTrue(background.contains("globalThis.__novaProxyReady=true"))
+        assertTrue(background.contains("globalThis.__novaAuthReady=true"))
+        assertTrue(background.contains("peerConnectionEnabled"))
+        assertTrue(background.contains("\"sgp\""))
+        assertTrue(background.contains("\"ams\""))
+        assertTrue(background.contains("\"lax\""))
     }
 }
