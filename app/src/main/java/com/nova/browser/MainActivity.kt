@@ -1752,17 +1752,22 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Nova Cloud")) return
         val email = cloudSync.signedInEmail()
         if (email.isNullOrBlank()) {
-            val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; isSingleLine = true }
-            AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
-                .setView(input).setPositiveButton("Send code") { _, _ ->
-                    val address = input.text.toString().trim()
-                    toast("Requesting sign-in code…")
-                    Thread {
-                        runCatching { cloudSync.sendEmailOtp(address) }
-                            .onSuccess { runOnUiThread { showCloudOtp(address) } }
-                            .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
-                    }.start()
-                }.setNegativeButton("Cancel", null).show()
+            val options = arrayOf(
+                "Create account (email + password)",
+                "Sign in with password",
+                "Sign in with email code"
+            )
+            AlertDialog.Builder(this)
+                .setTitle("Nova Cloud")
+                .setItems(options) { _, which ->
+                    when (which) {
+                        0 -> showCloudSignUp()
+                        1 -> showCloudPasswordSignIn()
+                        2 -> showCloudOtpEmailEntry()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
             return
         }
         val enabled = prefs.getBoolean("cloud_sync_enabled", false)
@@ -1807,6 +1812,186 @@ class MainActivity : ComponentActivity() {
                     .onFailure { runOnUiThread { toast("Could not resend: ${it.message}") } }
                 }.start()
             }.setNegativeButton("Cancel", null).show()
+    }
+
+
+    private fun showCloudSignUp() {
+        val pad = dp(16)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val emailInput = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "Password (min 8 characters)"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        val confirmInput = EditText(this).apply {
+            hint = "Confirm password"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        container.addView(emailInput)
+        container.addView(passwordInput)
+        container.addView(confirmInput)
+        AlertDialog.Builder(this)
+            .setTitle("Create Nova Cloud account")
+            .setMessage("Create an account to sync bookmarks, history, passwords and settings across your devices. Data is encrypted on this device before upload.")
+            .setView(container)
+            .setPositiveButton("Create account") { _, _ ->
+                val address = emailInput.text.toString().trim()
+                val password = passwordInput.text.toString()
+                val confirm = confirmInput.text.toString()
+                when {
+                    address.isBlank() -> toast("Enter your email address")
+                    password.length < 8 -> toast("Password must be at least 8 characters")
+                    password != confirm -> toast("Passwords do not match")
+                    else -> {
+                        toast("Creating account\u2026")
+                        Thread {
+                            runCatching { cloudSync.signUpWithPassword(address, password) }
+                                .onSuccess {
+                                    runOnUiThread {
+                                        toast("Account created and signed in")
+                                        showCloudAccount()
+                                    }
+                                }
+                                .onFailure { err ->
+                                    val msg = err.message ?: "Sign-up failed"
+                                    runOnUiThread {
+                                        if (msg.contains("confirm", ignoreCase = true) || msg.contains("check your email", ignoreCase = true)) {
+                                            AlertDialog.Builder(this)
+                                                .setTitle("Confirm your email")
+                                                .setMessage(msg)
+                                                .setPositiveButton("OK") { _, _ -> showCloudPasswordSignIn() }
+                                                .show()
+                                        } else {
+                                            toast(msg)
+                                        }
+                                    }
+                                }
+                        }.start()
+                    }
+                }
+            }
+            .setNeutralButton("Use email code") { _, _ -> showCloudOtpEmailEntry() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showCloudPasswordSignIn() {
+        val pad = dp(16)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val emailInput = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "Password"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        container.addView(emailInput)
+        container.addView(passwordInput)
+        AlertDialog.Builder(this)
+            .setTitle("Sign in to Nova Cloud")
+            .setView(container)
+            .setPositiveButton("Sign in") { _, _ ->
+                val address = emailInput.text.toString().trim()
+                val password = passwordInput.text.toString()
+                if (address.isBlank() || password.isEmpty()) {
+                    toast("Enter email and password")
+                    return@setPositiveButton
+                }
+                toast("Signing in\u2026")
+                Thread {
+                    runCatching { cloudSync.signInWithPassword(address, password) }
+                        .onSuccess {
+                            runOnUiThread {
+                                toast("Signed in to Nova Cloud")
+                                showCloudAccount()
+                            }
+                        }
+                        .onFailure { runOnUiThread { toast("Sign-in failed: ${it.message ?: "Check email and password"}") } }
+                }.start()
+            }
+            .setNeutralButton("Forgot password?") { _, _ ->
+                showForgotPassword(emailInput.text.toString().trim())
+            }
+            .setNegativeButton("Email code") { _, _ -> showCloudOtpEmailEntry() }
+            .show()
+    }
+
+    private fun showForgotPassword(prefillEmail: String = "") {
+        val input = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+            if (prefillEmail.isNotBlank()) setText(prefillEmail)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Reset password")
+            .setMessage("We'll email a password-reset link to this address. Open the link on any device to choose a new password, then sign in here.")
+            .setView(input)
+            .setPositiveButton("Send reset link") { _, _ ->
+                val address = input.text.toString().trim()
+                if (address.isBlank()) {
+                    toast("Enter your email address")
+                    return@setPositiveButton
+                }
+                toast("Sending reset link\u2026")
+                Thread {
+                    runCatching { cloudSync.requestPasswordReset(address) }
+                        .onSuccess {
+                            runOnUiThread {
+                                AlertDialog.Builder(this)
+                                    .setTitle("Check your email")
+                                    .setMessage("If an account exists for $address, a password-reset link has been sent. Open it to set a new password, then return here to sign in.")
+                                    .setPositiveButton("OK") { _, _ -> showCloudPasswordSignIn() }
+                                    .show()
+                            }
+                        }
+                        .onFailure { runOnUiThread { toast("Could not send reset link: ${it.message ?: "Network error"}") } }
+                }.start()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showCloudOtpEmailEntry() {
+        val input = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Sign in with email code")
+            .setMessage("We'll email you a one-time 6-digit code. No password is required.")
+            .setView(input)
+            .setPositiveButton("Send code") { _, _ ->
+                val address = input.text.toString().trim()
+                if (address.isBlank()) {
+                    toast("Enter your email address")
+                    return@setPositiveButton
+                }
+                toast("Requesting sign-in code\u2026")
+                Thread {
+                    runCatching { cloudSync.sendEmailOtp(address) }
+                        .onSuccess { runOnUiThread { showCloudOtp(address) } }
+                        .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
+                }.start()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showSyncPassphrase() {

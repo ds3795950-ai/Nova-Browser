@@ -86,15 +86,91 @@ class NovaCloudSync(context: Context) {
         require(cleanCode.matches(Regex("[0-9]{6}"))) { "Enter the numeric code from your email" }
         val result = request("POST", "/auth/v1/verify", JSONObject().put("type", "email")
             .put("email", email.trim().lowercase()).put("token", cleanCode).toString())
-        val session = JSONObject(result)
-        require(session.has("access_token") && session.has("refresh_token")) { "Supabase did not return a valid session" }
+        persistSessionFromAuthResponse(result)
+    }
+
+    /**
+     * Create a new Nova Cloud account with email + password.
+     * Supabase may require email confirmation depending on project settings.
+     * On success the user is signed in (when confirmation is disabled) or a
+     * confirmation-required message is returned via exception message.
+     */
+    fun signUpWithPassword(email: String, password: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        require(password.length >= 8) { "Password must be at least 8 characters" }
+        require(password.length <= 72) { "Password is too long" }
+        val body = JSONObject()
+            .put("email", clean)
+            .put("password", password)
+            .toString()
+        val result = request("POST", "/auth/v1/signup", body)
+        val json = JSONObject(result)
+        // When email confirmation is required, Supabase returns user but no session.
+        if (json.has("access_token") && json.has("refresh_token")) {
+            persistSessionFromAuthResponse(result)
+        } else if (json.optJSONObject("user") != null) {
+            throw IllegalStateException(
+                "Account created. Check your email to confirm the address, then sign in."
+            )
+        } else {
+            throw IllegalStateException("Sign-up failed. Try a different email or sign in instead.")
+        }
+    }
+
+    /** Sign in with email + password. */
+    fun signInWithPassword(email: String, password: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        require(password.isNotEmpty()) { "Enter your password" }
+        val body = JSONObject()
+            .put("email", clean)
+            .put("password", password)
+            .toString()
+        val result = request("POST", "/auth/v1/token?grant_type=password", body)
+        persistSessionFromAuthResponse(result)
+    }
+
+    /**
+     * Request a password-reset email. Supabase sends a recovery link using the
+     * project's "Reset Password" template. The user completes the reset in the browser.
+     */
+    fun requestPasswordReset(email: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        val body = JSONObject().put("email", clean).toString()
+        request("POST", "/auth/v1/recover", body)
+    }
+
+    private fun persistSessionFromAuthResponse(raw: String) {
+        val session = JSONObject(raw)
+        require(session.has("access_token") && session.has("refresh_token")) {
+            "Supabase did not return a valid session"
+        }
         session.put("expires_at", System.currentTimeMillis() / 1000 + session.optLong("expires_in", 3600))
-        session.put("user_id", session.optJSONObject("user")?.optString("id") ?: "")
-        require(session.optString("user_id").isNotBlank()) { "Supabase session did not include a user ID" }
+        val userId = session.optJSONObject("user")?.optString("id")
+            ?: session.optString("user_id")
+        session.put("user_id", userId)
+        require(session.optString("user_id").isNotBlank()) {
+            "Supabase session did not include a user ID"
+        }
+        // Ensure user object exists for signedInEmail()
+        if (session.optJSONObject("user") == null && session.has("email")) {
+            session.put("user", JSONObject().put("email", session.getString("email")).put("id", userId))
+        }
         saveSession(session)
     }
 
-    fun signedInEmail(): String? = runCatching { loadSession()?.optJSONObject("user")?.optString("email")?.takeIf { it.isNotBlank() } }.getOrNull()
+    fun signedInEmail(): String? = runCatching {
+        loadSession()?.optJSONObject("user")?.optString("email")?.takeIf { it.isNotBlank() }
+            ?: loadSession()?.optString("email")?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 
     fun signedInUserId(): String? = runCatching { validSession()?.optString("user_id")?.takeIf { it.isNotBlank() } }.getOrNull()
 
@@ -118,36 +194,29 @@ class NovaCloudSync(context: Context) {
         val token = session.getString("access_token")
         upsertRow("nova_sync_state", "snapshot", userId, snapshot, token, snapshotVersion)
         upsertRow("nova_encrypted_vault", "payload", userId, vault, token, vaultVersion)
-        snapshotVersion = null
-        vaultVersion = null
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
-        val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
-        val rows = org.json.JSONArray(result)
-        if (rows.length() == 0) {
-            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
-            return null
-        }
-        val row = rows.getJSONObject(0)
-        val version = row.optString("updated_at").takeIf { it.isNotBlank() }
-        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
+        val path = "/rest/v1/$table?user_id=eq.$userId&select=$column,version"
+        val response = request("GET", path, null, token)
+        val array = org.json.JSONArray(response)
+        if (array.length() == 0) return null
+        val row = array.getJSONObject(0)
+        if (table == "nova_sync_state") snapshotVersion = row.optString("version").takeIf { it.isNotBlank() }
+        if (table == "nova_encrypted_vault") vaultVersion = row.optString("version").takeIf { it.isNotBlank() }
         return row.optJSONObject(column)
     }
 
-    /** Compare-and-swap prevents two devices syncing the same old revision from silently overwriting each other. */
     private fun upsertRow(table: String, column: String, userId: String, payload: JSONObject, token: String, expectedVersion: String?) {
-        val body = JSONObject().put("user_id", userId).put(column, payload)
-        val response = if (expectedVersion == null) {
-            request("POST", "/rest/v1/$table?on_conflict=user_id", body.toString(), token,
-                "resolution=ignore-duplicates,return=representation")
-        } else {
-            val encodedVersion = java.net.URLEncoder.encode(expectedVersion, "UTF-8")
-            request("PATCH", "/rest/v1/$table?user_id=eq.$userId&updated_at=eq.$encodedVersion", body.toString(), token,
-                "return=representation")
-        }
-        if (org.json.JSONArray(response).length() == 0) {
-            throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
+        val body = JSONObject().put("user_id", userId).put(column, payload).put("version", java.util.UUID.randomUUID().toString()).toString()
+        val prefer = if (expectedVersion != null) "resolution=merge-duplicates,return=representation" else "resolution=merge-duplicates,return=representation"
+        try {
+            request("POST", "/rest/v1/$table", body, token, prefer)
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("409") == true || e.message?.contains("conflict") == true) {
+                throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
+            }
+            throw e
         }
     }
 
