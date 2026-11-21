@@ -62,6 +62,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            val debugUrl = providers.gradleProperty("NOVA_DEBUG_SUPABASE_URL").orElse("https://debug.invalid").get()
+            val debugKey = providers.gradleProperty("NOVA_DEBUG_SUPABASE_PUBLISHABLE_KEY").orElse("debug-publishable-placeholder").get()
+            buildConfigField("String", "SUPABASE_URL", "\"$debugUrl\"")
+            buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$debugKey\"")
+        }
         release {
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
@@ -73,13 +79,6 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
-configurations.configureEach {
-    resolutionStrategy.force(
-        "org.jetbrains.kotlin:kotlin-stdlib:2.3.20",
-        "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.20",
-        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.20"
-    )
-}
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
@@ -96,20 +95,34 @@ dependencies {
 
 val generatedAssetsRoot = layout.buildDirectory.dir("generated/assets")
 val generated1VpnDir = layout.buildDirectory.dir("generated/assets/nova_1vpn")
+val vpnArchiveUrl = "https://addons.mozilla.org/firefox/downloads/latest/1vpn/latest.xpi"
+val vpnArchiveSha256 = "112c58e7b7f283e01d0efaee1fb03cee673839588b2b6399a4dc075794c1f302"
+
+fun replaceExactlyOnce(source: String, target: String, replacement: String): String {
+    val start = source.indexOf(target)
+    check(start >= 0 && source.indexOf(target, start + target.length) < 0) {
+        "Expected exactly one occurrence of upstream 1VPN patch target"
+    }
+    return source.replaceRange(start, start + target.length, replacement)
+}
+
 val prepare1VpnAssets by tasks.registering {
+    inputs.property("upstreamUrl", vpnArchiveUrl)
+    inputs.property("upstreamSha256", vpnArchiveSha256)
+    inputs.property("bridgeRevision", 2)
     outputs.dir(generated1VpnDir)
     doLast {
         val outputDir = generated1VpnDir.get().asFile
-        delete(outputDir)
+        outputDir.deleteRecursively()
         outputDir.mkdirs()
         val archive = File(temporaryDir, "1vpn-4.2.2.xpi")
-        URL("https://addons.mozilla.org/firefox/downloads/latest/1vpn/latest.xpi").openStream().use { input ->
+        URL(vpnArchiveUrl).openStream().use { input ->
             archive.outputStream().use { output -> input.copyTo(output) }
         }
         val sha256 = MessageDigest.getInstance("SHA-256")
             .digest(archive.readBytes())
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        check(sha256 == "112c58e7b7f283e01d0efaee1fb03cee673839588b2b6399a4dc075794c1f302") {
+        check(sha256 == vpnArchiveSha256) {
             "The 1VPN add-on package changed. Review the upstream release and update the pinned SHA-256."
         }
         ZipInputStream(archive.inputStream()).use { zip ->
@@ -127,11 +140,17 @@ val prepare1VpnAssets by tasks.registering {
             }
         }
         val manifestFile = File(outputDir, "manifest.json")
-        val manifest = JsonSlurper().parse(manifestFile) as MutableMap<String, Any?>
-        val geckoSettings = manifest["browser_specific_settings"] as MutableMap<String, Any?>
-        val gecko = geckoSettings["gecko"] as MutableMap<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val manifest = JsonSlurper().parse(manifestFile) as? MutableMap<String, Any?>
+            ?: error("Upstream 1VPN manifest must be a JSON object")
+        @Suppress("UNCHECKED_CAST")
+        val geckoSettings = manifest["browser_specific_settings"] as? MutableMap<String, Any?>
+            ?: error("Upstream 1VPN manifest is missing browser_specific_settings")
+        @Suppress("UNCHECKED_CAST")
+        val gecko = geckoSettings["gecko"] as? MutableMap<String, Any?>
+            ?: error("Upstream 1VPN manifest is missing browser_specific_settings.gecko")
         gecko["id"] = "1vpn-internal@nova.browser"
-        val permissions = (manifest["permissions"] as List<*>).map { it.toString() }.toMutableList()
+        val permissions = (manifest["permissions"] as? List<*> ?: emptyList<Any>()).map { it.toString() }.toMutableList()
         permissions.add("nativeMessaging")
         permissions.add("geckoViewAddons")
         manifest["permissions"] = permissions.distinct()
@@ -141,7 +160,7 @@ val prepare1VpnAssets by tasks.registering {
         var background = backgroundFile.readText()
         val installTabCall = "chrome.tabs.create({url:chrome.runtime.getURL(\"install.html\")})"
         check(background.contains(installTabCall)) { "Upstream 1VPN install flow changed; review before patching." }
-        background = background.replace(installTabCall, "void 0")
+        background = replaceExactlyOnce(background, installTabCall, "void 0")
 
         val authStart = "chrome.webRequest.onAuthRequired.addListener("
         val authEnd = ",{urls:[\"<all_urls>\"]},[\"blocking\"])"
@@ -152,14 +171,16 @@ val prepare1VpnAssets by tasks.registering {
         }
         val authEndExclusive = authEndIndex + authEnd.length
         val authStatement = background.substring(authStartIndex, authEndExclusive)
-        background = background.replace(
+        background = replaceExactlyOnce(
+            background,
             authStatement,
             "try{" + authStatement + ";globalThis.__novaAuthReady=true}catch(e){globalThis.__novaAuthReady=false;console.error(e)}"
         )
 
         val proxyRegistration = "browser.proxy.onRequest.addListener(m,{urls:[\"<all_urls>\"]})"
         check(background.contains(proxyRegistration)) { "Upstream 1VPN proxy registration changed; review before bundling." }
-        background = background.replace(
+        background = replaceExactlyOnce(
+            background,
             proxyRegistration,
             "try{" + proxyRegistration + ";globalThis.__novaProxyReady=true}catch(e){globalThis.__novaProxyReady=false;console.error(e)}"
         )
@@ -168,6 +189,15 @@ val prepare1VpnAssets by tasks.registering {
             ;(function() {
               var nativePort = null;
               var webRtcProtected = false;
+              var reconnectAttempts = 0;
+              function scheduleReconnect() {
+                if (reconnectAttempts >= 8) {
+                  report("1VPN native bridge unavailable after repeated retries", { enabled: false });
+                  return;
+                }
+                var delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts++));
+                setTimeout(connectNative, delay);
+              }
               function supported() {
                 return globalThis.__novaProxyReady === true && globalThis.__novaAuthReady === true;
               }
@@ -213,13 +243,16 @@ val prepare1VpnAssets by tasks.registering {
                 try {
                   nativePort = browser.runtime.connectNative("com.nova.browser.vpn");
                   nativePort.onMessage.addListener(function(message) {
-                    if (message && message.type === "configure") configure(message).catch(function(error) {
-                      report("1VPN configuration error", { error: String(error) });
-                    });
+                    if (message && message.type === "configure") {
+                      reconnectAttempts = 0;
+                      configure(message).catch(function(error) {
+                        report("1VPN configuration error", { error: String(error) });
+                      });
+                    }
                   });
                   nativePort.onDisconnect.addListener(function() {
                     nativePort = null;
-                    setTimeout(connectNative, 2500);
+                    scheduleReconnect();
                   });
                   nativePort.postMessage({
                     type: "ready",
@@ -228,7 +261,7 @@ val prepare1VpnAssets by tasks.registering {
                   });
                 } catch (_) {
                   nativePort = null;
-                  setTimeout(connectNative, 3000);
+                  scheduleReconnect();
                 }
               }
               setWebRtcProtection(false).catch(function() {});
