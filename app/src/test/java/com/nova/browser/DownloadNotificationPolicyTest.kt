@@ -26,4 +26,7 @@ class DownloadNotificationPolicyTest {
         assertEquals(0, display.progress)
         assertTrue(!display.indeterminate)
     }
+    @Test fun largeByteCountsDoNotOverflowProgressCalculation() {
+        assertEquals(100, DownloadNotificationPolicy.display(1, "large.bin", Long.MAX_VALUE, Long.MAX_VALUE).progress)
+    }
 }

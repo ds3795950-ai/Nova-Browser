@@ -13,7 +13,7 @@ internal object DownloadNotificationPolicy {
         val name = fileName?.takeIf { it.isNotBlank() }?.take(80)
         val more = if (activeCount > 1) " · +${activeCount - 1} more" else ""
         if (total > 0) {
-            val percent = ((downloaded.coerceIn(0L, total) * 100L) / total).toInt()
+            val percent = ((downloaded.coerceIn(0L, total).toDouble() / total.toDouble()) * 100.0).toInt().coerceIn(0, 100)
             return DownloadNotificationDisplay(
                 name?.let { "Downloading $it" } ?: "Nova Browser downloads",
                 "$percent% · ${formatBytes(downloaded)} of ${formatBytes(total)}$more",
