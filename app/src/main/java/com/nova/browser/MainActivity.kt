@@ -1134,7 +1134,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addHistory(url: String) {
-        if (!HistoryPolicy.shouldPersist(url) || url == HOME_URL) return
+        if (url.isBlank() || url == HOME_URL) return
         val items = readHistory().filterNot { it.url == url }.toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
         items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
@@ -1723,7 +1723,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS Â· AdGuard DNS", "VPN & Firewall Â· 1VPN")
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS Â· AdGuard DNS", "Browser proxy & Shield Â· 1VPN")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
