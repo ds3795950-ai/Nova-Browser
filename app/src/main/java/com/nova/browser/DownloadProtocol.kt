@@ -1,6 +1,7 @@
 package com.nova.browser
 
 import java.net.URLDecoder
+import java.net.URI
 
 /** Pure validation and filename rules shared by the download pipeline and JVM tests. */
 object DownloadProtocol {
@@ -14,6 +15,14 @@ object DownloadProtocol {
         val total = match.groupValues[3].takeUnless { it == "*" }?.toLongOrNull()
         if (end < start || (total != null && (total <= end || total <= 0))) return null
         return ContentRange(start, end, total)
+    }
+
+    /** Rejects non-HTTP redirects and HTTPS-to-HTTP downgrade redirects. */
+    fun isRedirectAllowed(fromUrl: String, toUrl: String): Boolean {
+        val fromScheme = runCatching { URI(fromUrl).scheme?.lowercase() }.getOrNull() ?: return false
+        val toScheme = runCatching { URI(toUrl).scheme?.lowercase() }.getOrNull() ?: return false
+        if (fromScheme !in setOf("http", "https") || toScheme !in setOf("http", "https")) return false
+        return fromScheme != "https" || toScheme != "http"
     }
 
     fun fileNameFromContentDisposition(header: String?): String? {

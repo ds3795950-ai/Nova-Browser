@@ -38,4 +38,16 @@ class DownloadProtocolTest {
     @Test fun missingContentDispositionFilenameReturnsNull() {
         assertNull(DownloadProtocol.fileNameFromContentDisposition("attachment"))
     }
+    @Test fun rejectsHttpsToHttpRedirectDowngrades() {
+        assertEquals(false, DownloadProtocol.isRedirectAllowed("https://example.com/file", "http://example.com/file"))
+    }
+    @Test fun permitsSecureAndUpgradeRedirects() {
+        assertEquals(true, DownloadProtocol.isRedirectAllowed("https://example.com/a", "https://cdn.example.com/a"))
+        assertEquals(true, DownloadProtocol.isRedirectAllowed("http://example.com/a", "https://example.com/a"))
+        assertEquals(true, DownloadProtocol.isRedirectAllowed("http://example.com/a", "http://example.com/b"))
+    }
+    @Test fun rejectsNonHttpRedirectSchemes() {
+        assertEquals(false, DownloadProtocol.isRedirectAllowed("https://example.com/a", "file:///tmp/a"))
+        assertEquals(false, DownloadProtocol.isRedirectAllowed("ftp://example.com/a", "https://example.com/a"))
+    }
 }

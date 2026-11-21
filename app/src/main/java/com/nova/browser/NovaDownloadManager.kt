@@ -167,7 +167,11 @@ class NovaDownloadManager(
             connection.disconnect()
             if (redirectCount == MAX_REDIRECTS) throw java.io.IOException("Too many redirects")
             if (location.isNullOrBlank()) throw java.io.IOException("Redirect response did not include a destination")
-            target = URL(target, location)
+            val redirected = URL(target, location)
+            if (!DownloadProtocol.isRedirectAllowed(target.toExternalForm(), redirected.toExternalForm())) {
+                throw java.io.IOException("Blocked an insecure or unsupported download redirect")
+            }
+            target = redirected
         }
         throw java.io.IOException("Too many redirects")
     }
