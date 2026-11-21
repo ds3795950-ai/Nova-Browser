@@ -2672,6 +2672,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         persistTabs()
+        downloadsDialog?.dismiss()
+        downloadsDialog = null
+        downloadsAdapter = null
+        downloadsDialogItems = emptyList()
         activeExtensionPopup?.dismiss()
         activeExtensionPopup = null
         pendingFilePrompt?.let { prompt -> pendingFileResult?.complete(prompt.dismiss()) }
