@@ -488,7 +488,13 @@ class MainActivity : ComponentActivity() {
 
     private fun actionButton(label: String, description: String = label, action: () -> Unit) = Button(this).apply {
         text = label
-        contentDescription = description
+        contentDescription = when (label) {
+            "â" -> "Back"
+            "â" -> "Forward"
+            "â»" -> "Reload"
+            "ï¼" -> "New tab"
+            else -> description
+        }
         textSize = 11f
         isAllCaps = false
         minWidth = dp(48)
@@ -888,7 +894,7 @@ class MainActivity : ComponentActivity() {
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) persistTabs()
                 if (splitTabId == tab.id && !secondaryAddressBar.hasFocus()) secondaryAddressBar.setText(url)
                 if (currentTab() === tab) {
-                    if (!addressBar.hasFocus()) {
+                    if (!addressBar.hasFocus() && url != HOME_URL) {
                         val host = runCatching { java.net.URI(url).host }.getOrNull()
                         val styled = android.text.SpannableString(url)
                         if (!host.isNullOrBlank()) {
@@ -918,9 +924,11 @@ class MainActivity : ComponentActivity() {
                 securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
             ) {
                 if (currentTab() === tab) {
+                    val host = Uri.parse(tab.lastUrl).host.orEmpty()
                     pageStatus.text = when {
                         securityInfo.isException -> "Connection warning · certificate exception"
-                        securityInfo.isSecure -> "Secure connection · ${securityInfo.host}"
+                        securityInfo.securityMode == GeckoSession.ProgressDelegate.SecurityInformation.SECURITY_MODE_VERIFIED -> "Secure connection · $host"
+                        securityInfo.securityMode == GeckoSession.ProgressDelegate.SecurityInformation.SECURITY_MODE_IDENTIFIED -> "Encrypted connection · $host"
                         tab.lastUrl.startsWith("http://", true) -> "Not secure · HTTP"
                         else -> "Connection security unavailable"
                     }
@@ -1651,7 +1659,7 @@ class MainActivity : ComponentActivity() {
         tab.session = null; tab.needsReload = true
         val session = ensureSession(tab)
         browserView.setSession(session); session.setActive(true); session.setFocused(true)
-        session.loadUri(tab.lastUrl)
+        // ensureSession consumes needsReload and loads the saved URL exactly once.
         toast(if (tab.desktopSite) "Desktop site enabled for $host" else "Mobile site restored for $host")
     }
 
