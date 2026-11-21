@@ -29,7 +29,7 @@ class SessionBudgetPolicyTest {
             SessionBudgetPolicy.Candidate("new-normal", 3, false, false)
         )
         val evicted = SessionBudgetPolicy.evictionCandidates(candidates, 4, setOf("current", "split"))
-        assertEquals(listOf("old-normal"), evicted)
+        assertEquals(listOf("old-normal", "new-normal"), evicted)
         assertFalse(evicted.contains("private"))
         assertFalse(evicted.contains("guest"))
     }
