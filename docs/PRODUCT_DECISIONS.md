@@ -28,7 +28,7 @@ These are the previously agreed product choices. Do not replace them with generi
 
 ## 5. Guest mode
 - Separate temporary guest data, no account required, English default.
-- Guest mode is not automatically Tor and must not be described as Tor-level anonymity unless actual Tor routing is implemented and verified.
+- Guest mode is not automatically Tor and must not be described as Tor-level anonymity. The current implementation offers a user-initiated external Orbot hand-off and a Tor Project egress check; the check verifies only the app process's current egress and does not prove every tab/request was routed through Tor.
 
 ## 6. Nova Shield
 - User-selectable modes: Standard / Aggressive / Off.

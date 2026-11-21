@@ -259,10 +259,20 @@ class NovaCloudSync(context: Context) {
             val recovered = try {
                 decryptFile(sessionTempFile)
             } catch (tempError: Exception) {
-                if (!sessionFile.exists()) throw tempError
-                val previous = decryptFile(sessionFile)
-                sessionTempFile.delete()
-                return previous
+                if (sessionFile.exists()) {
+                    val previous = decryptFile(sessionFile)
+                    sessionTempFile.delete()
+                    return previous
+                }
+                val keyStillExists = runCatching {
+                    KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(KEY_ALIAS, null) is SecretKey
+                }.getOrDefault(false)
+                if (keyStillExists) {
+                    // A partial first-write temp file is not a recoverable session; allow a clean sign-in.
+                    sessionTempFile.delete()
+                    return null
+                }
+                throw tempError
             }
             try {
                 Os.rename(sessionTempFile.absolutePath, sessionFile.absolutePath)
@@ -271,18 +281,37 @@ class NovaCloudSync(context: Context) {
             }
             return recovered
         }
-        if (sessionTempFile.exists()) sessionTempFile.delete()
-        return decryptFile(sessionFile)
+        if (!sessionFile.exists()) return null
+        return try {
+            decryptFile(sessionFile).also { sessionTempFile.delete() }
+        } catch (mainError: Exception) {
+            if (!sessionTempFile.exists()) throw mainError
+            val recovered = try {
+                decryptFile(sessionTempFile)
+            } catch (_: Exception) {
+                val keyStillExists = runCatching {
+                    KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(KEY_ALIAS, null) is SecretKey
+                }.getOrDefault(false)
+                if (keyStillExists) sessionTempFile.delete()
+                throw IllegalStateException("Saved Nova Cloud session and its recovery copy are damaged", mainError)
+            }
+            try {
+                Os.rename(sessionTempFile.absolutePath, sessionFile.absolutePath)
+            } catch (error: Exception) {
+                throw IllegalStateException("Could not recover the previous Nova Cloud session", error)
+            }
+            recovered
+        }
     }
 
     private fun saveSession(session: JSONObject) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, sessionKey())
-        FileOutputStream(sessionTempFile).use {
-            it.write(cipher.iv + cipher.doFinal(session.toString().toByteArray(Charsets.UTF_8)))
-            it.fd.sync()
-        }
         try {
+            FileOutputStream(sessionTempFile).use {
+                it.write(cipher.iv + cipher.doFinal(session.toString().toByteArray(Charsets.UTF_8)))
+                it.fd.sync()
+            }
             Os.rename(sessionTempFile.absolutePath, sessionFile.absolutePath)
         } catch (error: Exception) {
             sessionTempFile.delete()

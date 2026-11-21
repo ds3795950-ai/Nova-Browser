@@ -10,7 +10,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 - Nova Shield uses GeckoView native tracking protection, cookie isolation, Safe Browsing, GPC/fingerprinting controls and per-site permissions. Coverage depends on GeckoView's shipped lists; it is not a DNS firewall and does not guarantee every ad is blocked.
 - ChatGPT, Claude and Perplexity handoff use official websites. Prompt content is user-entered; page URL context is opt-in; page content is not scraped or sent automatically.
 - GeckoView WebExtension management and AES-GCM local password vault. Extension compatibility depends on the embedded GeckoView version. Private/Guest browsing does not save or retrieve passwords.
-- Guest Mode is local ephemeral isolation, not Tor routing or Tor-level anonymity.
+- Guest Mode is local ephemeral isolation and is not Tor by default. Optional external Orbot routing is user-configured; Nova can check current app egress with the Tor Project endpoint but cannot guarantee every request is routed or control Orbot's VPN state.
 
 ## Phase 8 — Supabase email OTP authentication
 
@@ -30,7 +30,7 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 - Both tables have RLS enabled. SELECT/INSERT/UPDATE/DELETE policies are scoped to `auth.uid() = user_id`; UPDATE includes both USING and WITH CHECK.
 - Client encrypts the sync snapshot and password-vault payload separately with AES-256-GCM. Keys are derived from a user-chosen passphrase using PBKDF2-HMAC-SHA256 (310,000 iterations), with random per-payload salt and IV.
 - Passphrase is not stored or sent to Supabase. Losing it means the cloud backup cannot be decrypted.
-- Sync is user-initiated and merge-based. It includes bookmarks, normal browsing history, saved workspaces, selected preferences and saved passwords. Private/Guest tabs, private browsing state and Guest data are excluded. The current merge is additive: deleting an item on one device does not create a cloud tombstone, so that item may be restored from another device's backup on the next merge.
+- Sync is user-initiated and merge-based. It includes bookmarks, normal browsing history, saved workspaces, selected preferences and saved passwords. Private/Guest tabs, private browsing state and Guest data are excluded. Current merge uses durable deletion tombstones for bookmarks, workspaces and saved-password records; history uses a clear timestamp. Tombstones merge by newest timestamp so older device snapshots do not resurrect deleted records. A deliberate re-add with a newer update timestamp is retained.
 - Supabase stores only encrypted envelopes. The existing password vault remains protected locally by Android Keystore.
 - Wrong passphrase/authentication-tag failure stops the sync rather than overwriting the cloud backup.
 
@@ -38,8 +38,8 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 
 ## Phase 10 — Automated QA, security checks and release builds
 
-- GitHub Actions runs JVM unit tests, debug APK assembly and unsigned release APK assembly. Android lint was removed from the blocking pipeline after the Gradle lint task stalled; it remains a separate follow-up check.
-- Unit tests cover cloud-encryption round trip, ciphertext not matching plaintext, wrong-passphrase rejection and weak-passphrase rejection, alongside existing URL, AI-routing and download-protocol tests.
+- GitHub Actions verifies the dependency lockfile and bundled 1VPN extension, runs JVM unit tests, assembles debug and release APKs, and uploads artifacts. Android lint remains a separate follow-up check.
+- Unit tests cover cloud-encryption round trip, ciphertext not matching plaintext, wrong-passphrase rejection/cache recovery, KDF validation, weak-passphrase rejection, malformed password-vault imports, credential tombstone merging, workspace bounds/tombstones, URL handling, AI routing and download protocols.
 - CI uploads debug and unsigned release APK artifacts for inspection.
 - Supabase security advisors returned no findings at the time of implementation; table policies were independently inspected.
 
@@ -48,5 +48,5 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 ## Build and security rules
 
 - Never place Supabase service-role/secret keys in Android code, Gradle config or APKs. The publishable key is intentionally public and RLS is the security boundary.
-- Never claim Guest Mode is Tor or anonymous unless a separately audited Tor transport is implemented.
+- Never claim Guest Mode is Tor by default or anonymous. Only report Tor egress after the app-level check succeeds, and retain the limitation that this does not prove every tab/request was routed.
 - Never silently replace an unreadable encrypted password vault or cloud backup.

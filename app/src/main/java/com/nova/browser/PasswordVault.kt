@@ -134,7 +134,7 @@ class PasswordVault(context: Context) {
         val tombstoneKeys = deleted.keys()
         while (tombstoneKeys.hasNext()) {
             val key = tombstoneKeys.next()
-            require(key.length <= 8192 && deleted.optLong(key, -1L) > 0L) { "Invalid password-vault deletion marker" }
+            require(key.length <= 8192 && deleted.optLong(key, -1L) in 1 until Long.MAX_VALUE) { "Invalid password-vault deletion marker" }
         }
         val entries = mutableListOf<Autocomplete.LoginEntry>()
         val metadata = JSONObject()
@@ -148,7 +148,7 @@ class PasswordVault(context: Context) {
                 .username(fields.username).password(fields.password).build()
             entries.add(entry)
             val updatedAt = item.optLong("updatedAt", 0L)
-            require(updatedAt >= 0L) { "Invalid saved-login update timestamp" }
+            require(updatedAt in 0 until Long.MAX_VALUE) { "Invalid saved-login update timestamp" }
             metadata.put(credentialKey(fields.origin, fields.username, fields.formActionOrigin, fields.httpRealm), updatedAt)
         }
         persist(entries)
@@ -228,8 +228,8 @@ class PasswordVault(context: Context) {
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
         val packed = cipher.iv + encrypted
-        FileOutputStream(vaultTempFile).use { it.write(packed); it.fd.sync() }
         try {
+            FileOutputStream(vaultTempFile).use { it.write(packed); it.fd.sync() }
             Os.rename(vaultTempFile.absolutePath, vaultFile.absolutePath)
         } catch (error: Exception) {
             vaultTempFile.delete()
@@ -244,39 +244,85 @@ class PasswordVault(context: Context) {
             completePendingClear()
             return null
         }
-        if (vaultFile.exists()) {
-            // A temp file beside a valid vault is an uncommitted write from a prior process crash.
-            vaultTempFile.delete()
-            return vaultFile.readBytes()
-        }
-        if (vaultTempFile.exists()) {
+        if (vaultFile.exists() || vaultTempFile.exists()) {
             val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             if (store.getKey(alias, null) !is SecretKey) {
-                throw IllegalStateException("An interrupted password-vault write exists but its Android Keystore key is missing; refusing to replace it.")
+                throw IllegalStateException("Password-vault ciphertext exists but its Android Keystore key is missing; refusing to replace it.")
             }
-            try {
-                Os.rename(vaultTempFile.absolutePath, vaultFile.absolutePath)
-            } catch (error: Exception) {
-                throw IllegalStateException("Could not recover the interrupted password-vault write", error)
-            }
-            return vaultFile.readBytes()
         }
-        val legacy = prefs.getString(KEY_BLOB, null) ?: return null
+        var primaryError: Throwable? = null
+        if (vaultFile.exists()) {
+            val current = runCatching { vaultFile.readBytes() }.getOrElse { primaryError = it; null }
+            if (current != null) {
+                val valid = try {
+                    validateVaultBlob(current)
+                    true
+                } catch (error: Exception) {
+                    primaryError = error
+                    false
+                }
+                if (valid) {
+                    vaultTempFile.delete()
+                    if (prefs.contains(KEY_BLOB)) check(prefs.edit().remove(KEY_BLOB).commit()) {
+                        "Could not remove legacy password-vault ciphertext"
+                    }
+                    return current
+                }
+            }
+        }
+        if (vaultTempFile.exists()) {
+            val candidate = try {
+                vaultTempFile.readBytes().also { validateVaultBlob(it) }
+            } catch (error: Exception) {
+                vaultTempFile.delete()
+                if (primaryError == null) primaryError = error
+                null
+            }
+            if (candidate != null) {
+                val renamed = try {
+                    Os.rename(vaultTempFile.absolutePath, vaultFile.absolutePath)
+                    true
+                } catch (error: Exception) {
+                    vaultTempFile.delete()
+                    if (primaryError == null) primaryError = error
+                    false
+                }
+                if (renamed) {
+                    if (prefs.contains(KEY_BLOB)) check(prefs.edit().remove(KEY_BLOB).commit()) {
+                        "Could not remove legacy password-vault ciphertext"
+                    }
+                    return candidate
+                }
+            }
+        }
+        val legacy = prefs.getString(KEY_BLOB, null)
+        if (legacy == null) {
+            if (primaryError != null) throw IllegalStateException("Saved password vault is damaged and no recoverable copy exists", primaryError)
+            return null
+        }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (store.getKey(alias, null) !is SecretKey) {
-            // An OS backup may have restored preferences without the non-exportable Keystore key.
-            // The ciphertext cannot be decrypted, so do not invent a replacement key and overwrite it silently.
             throw IllegalStateException("This password vault was restored without its Android Keystore key and cannot be decrypted. Create a new vault on this device.")
         }
         val bytes = Base64.decode(legacy, Base64.NO_WRAP)
-        FileOutputStream(vaultTempFile).use { it.write(bytes); it.fd.sync() }
+        validateVaultBlob(bytes)
         try {
+            FileOutputStream(vaultTempFile).use { it.write(bytes); it.fd.sync() }
             Os.rename(vaultTempFile.absolutePath, vaultFile.absolutePath)
         } catch (error: Exception) {
-            throw IllegalStateException("Could not migrate password vault to protected storage", error)
+            vaultTempFile.delete()
+            throw IllegalStateException("Could not recover password vault from its protected legacy copy", error)
         }
         check(prefs.edit().remove(KEY_BLOB).commit()) { "Could not finish password-vault migration" }
         return bytes
+    }
+
+    private fun validateVaultBlob(packed: ByteArray) {
+        require(packed.size > 12) { "Saved password vault is truncated" }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
+        val plaintext = cipher.doFinal(packed.copyOfRange(12, packed.size))
+        JSONArray(String(plaintext, Charsets.UTF_8))
     }
 
     private fun secretKey(): SecretKey {
@@ -304,7 +350,8 @@ class PasswordVault(context: Context) {
                 while (keys.hasNext()) {
                     val entryKey = keys.next()
                     val timestamp = json.optLong(entryKey, -1L)
-                    val validTimestamp = if (key == TOMBSTONES_KEY) timestamp > 0L else timestamp >= 0L
+                    val validTimestamp = if (key == TOMBSTONES_KEY) timestamp in 1 until Long.MAX_VALUE
+                        else timestamp in 0 until Long.MAX_VALUE
                     require(entryKey.length <= 8192 && validTimestamp) {
                         "Password-vault sync metadata contains an invalid timestamp"
                     }
@@ -343,7 +390,7 @@ class PasswordVault(context: Context) {
                 while (keys.hasNext()) {
                     val key = keys.next()
                     val timestamp = source.optLong(key, -1L)
-                    require(key.length <= 8192 && timestamp > 0L) { "Invalid password-vault deletion marker" }
+                    require(key.length <= 8192 && timestamp in 1 until Long.MAX_VALUE) { "Invalid password-vault deletion marker" }
                     tombstones.put(key, maxOf(tombstones.optLong(key), timestamp))
                 }
             }
