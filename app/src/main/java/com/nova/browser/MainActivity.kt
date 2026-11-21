@@ -176,15 +176,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(incoming: Intent?) {
-        val target = when (incoming?.action) {
+        val action = incoming?.action ?: return
+        val target = when (action) {
             Intent.ACTION_VIEW -> incoming.dataString
-            Intent.ACTION_WEB_SEARCH -> incoming.getStringExtra(SearchManager.QUERY)
+            Intent.ACTION_WEB_SEARCH -> incoming.getStringExtra(android.app.SearchManager.QUERY)
             Intent.ACTION_SEND -> if (incoming.type == "text/plain") {
                 incoming.getStringExtra(Intent.EXTRA_TEXT)
             } else null
             else -> null
         }?.trim()?.takeIf { it.isNotEmpty() } ?: return
-        if (incoming.action == Intent.ACTION_VIEW &&
+        if (action == Intent.ACTION_VIEW &&
             !target.startsWith("http://", true) && !target.startsWith("https://", true)
         ) return
         navigate(target)
