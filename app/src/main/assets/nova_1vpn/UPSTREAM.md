@@ -7,4 +7,4 @@ License: GNU General Public License v3.0. The upstream `LICENSE` and `NOTICE` ar
 
 Only the upstream free locations exposed in Nova settings (Singapore, Amsterdam, and Los Angeles) are enabled by the native bridge. The feature uses the upstream public free-tier credentials and does not require a 1VPN user account.
 
-The source-level `manifest.json` and `background.js` in this directory are reference-only and are excluded from the APK. The APK installs only the checksum-verified generated package from `nova_1vpn_runtime`.
+The source-level `manifest.json` and `background.js` in this directory are reference-only and are not installed. The app installs only the checksum-verified generated package from `nova_1vpn_runtime`.
