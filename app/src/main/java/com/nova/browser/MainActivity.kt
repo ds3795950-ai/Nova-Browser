@@ -75,6 +75,9 @@ class MainActivity : ComponentActivity() {
     private var guestContextId: String = ""
     private val novaDownloads: NovaDownloadManager
         get() = (application as NovaBrowserApplication).downloads
+    private var downloadsDialog: AlertDialog? = null
+    private var downloadsAdapter: ArrayAdapter<String>? = null
+    private var downloadsDialogItems: List<NovaDownloadManager.Item> = emptyList()
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
@@ -1669,6 +1672,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateDownloadSummary(items: List<NovaDownloadManager.Item>) {
+        refreshDownloadsDialog(items)
         if (!::pageStatus.isInitialized || items.isEmpty()) return
         val active = items.count { it.state == "RUNNING" || it.state == "QUEUED" || it.state == "FINALIZING" }
         if (active > 0 && currentTab()?.isPrivate != true && currentTab()?.isGuest != true) {
@@ -1676,32 +1680,57 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun downloadRow(item: NovaDownloadManager.Item): String {
+        val state = when (item.state) {
+            "RUNNING" -> "Downloading Â· ${item.progressLabel()}"
+            "QUEUED" -> "Queued"
+            "PAUSED" -> "Paused Â· ${item.progressLabel()}"
+            "FINALIZING", "SAVING" -> "Saving to Downloadsâ¦ Â· ${item.progressLabel()}"
+            "INTERRUPTED" -> "Interrupted Â· download again from the page"
+            "COMPLETE" -> "Complete Â· ${item.progressLabel()}"
+            "FAILED" -> "Failed Â· ${item.error}"
+            else -> item.state
+        }
+        return "${item.fileName}\n$state"
+    }
+
+    private fun refreshDownloadsDialog(items: List<NovaDownloadManager.Item> = novaDownloads.items()) {
+        val dialog = downloadsDialog ?: return
+        if (!dialog.isShowing) return
+        downloadsDialogItems = items
+        downloadsAdapter?.clear()
+        downloadsAdapter?.addAll(items.map(::downloadRow))
+        dialog.setTitle("Nova Downloads Â· ${items.size}")
+        if (items.isEmpty()) dialog.dismiss()
+    }
+
     private fun showDownloads() {
         if (denyGuestAccess("Downloads")) return
         val items = novaDownloads.items()
         if (items.isEmpty()) { downloadPrompt(); return }
-        val rows = items.map { item ->
-            val state = when (item.state) {
-                "RUNNING" -> "Downloading Â· ${item.progressLabel()}"
-                "QUEUED" -> "Queued"
-                "PAUSED" -> "Paused Â· ${item.progressLabel()}"
-                "FINALIZING", "SAVING" -> "Saving to Downloadsâ¦ Â· ${item.progressLabel()}"
-                "INTERRUPTED" -> "Interrupted Â· download again from the page"
-                "COMPLETE" -> "Complete Â· ${item.progressLabel()}"
-                "FAILED" -> "Failed Â· ${item.error}"
-                else -> item.state
+        downloadsDialog?.dismiss()
+        downloadsDialogItems = items
+        val listView = android.widget.ListView(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, items.map(::downloadRow))
+            setOnItemClickListener { _, _, which, _ ->
+                downloadsDialogItems.getOrNull(which)?.let(::showDownloadActions)
             }
-            "${item.fileName}\n$state"
-        }.toTypedArray()
+        }
+        downloadsAdapter = listView.adapter as ArrayAdapter<String>
         val dialog = AlertDialog.Builder(this).setTitle("Nova Downloads Â· ${items.size}")
-            .setItems(rows) { _, which -> showDownloadActions(items[which]) }
+            .setView(listView)
             .setPositiveButton("New download") { _, _ -> downloadPrompt() }
             .setNeutralButton("Refresh", null)
             .setNegativeButton("Close", null).create()
+        downloadsDialog = dialog
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                dialog.dismiss()
-                showDownloads()
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { refreshDownloadsDialog() }
+        }
+        dialog.setOnDismissListener {
+            if (downloadsDialog === dialog) {
+                downloadsDialog = null
+                downloadsAdapter = null
+                downloadsDialogItems = emptyList()
             }
         }
         dialog.show()
