@@ -118,6 +118,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        bookmarkTransferMode = savedInstanceState?.getString("bookmark_transfer_mode")
+        pendingHistoryExport = savedInstanceState?.getString("pending_history_export")
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationPermissionRequestPending = false
             if (!granted) toast("Downloads still work, but Android may hide their notifications until permission is enabled")
@@ -673,6 +675,8 @@ class MainActivity : ComponentActivity() {
                         addressBar.setText(styled)
                     }
                     pageStatus.text = when {
+                        tab.isGuest && NovaBrowserVpnController.isVpnEnabled() -> "VPN not applied in Guest Mode"
+                        tab.isPrivate && NovaBrowserVpnController.isVpnEnabled() -> "VPN not applied in private browsing"
                         tab.isGuest -> "Guest Mode Â· temporary data"
                         tab.isPrivate -> "Private session"
                         url.startsWith("https://", true) -> "Checking secure connection…"
@@ -816,7 +820,13 @@ class MainActivity : ComponentActivity() {
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
         showBrowserPage()
         addressBar.setText(target)
-        pageStatus.text = when { tab.isGuest -> "Guest Mode Â· history disabled"; tab.isPrivate -> "Private browsing Â· history disabled"; else -> "Loadingâ¦" }
+        pageStatus.text = when {
+            tab.isGuest && NovaBrowserVpnController.isVpnEnabled() -> "VPN not applied in Guest Mode"
+            tab.isPrivate && NovaBrowserVpnController.isVpnEnabled() -> "VPN not applied in private browsing"
+            tab.isGuest -> "Guest Mode Â· history disabled"
+            tab.isPrivate -> "Private browsing Â· history disabled"
+            else -> "Loadingâ¦"
+        }
         try {
             ensureSession(tab).loadUri(target)
             if (!tab.isPrivate && !tab.isGuest) addHistory(target)
@@ -1517,6 +1527,7 @@ class MainActivity : ComponentActivity() {
         val activeIdBeforeClose = currentTab()?.id
         guestIndices.forEach { index ->
             val removed = tabs.removeAt(index)
+            detectedPageLanguages.remove(removed.id)
             if (removed.id == splitTabId) exitSplitScreen()
             removed.session?.close()
         }
@@ -2031,6 +2042,12 @@ class MainActivity : ComponentActivity() {
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("bookmark_transfer_mode", bookmarkTransferMode)
+        outState.putString("pending_history_export", pendingHistoryExport)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onPause() {
         persistTabs()
         super.onPause()
@@ -2085,19 +2102,34 @@ class MainActivity : ComponentActivity() {
                         ?: throw IllegalStateException("Could not open export destination")
                     toast("Bookmarks exported")
                 } else {
-                    val json = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: throw IllegalStateException("Could not read bookmark file")
-                    val imported = JSONArray(json)
-                    val merged = readBookmarks().associateBy { it.url }.toMutableMap()
-                    for (i in 0 until imported.length()) {
-                        val item = imported.getJSONObject(i)
-                        val url = item.optString("url")
-                        if (url.startsWith("http://") || url.startsWith("https://")) {
-                            merged[url] = BookmarkEntry(url, item.optString("title", Uri.parse(url).host ?: url), item.optString("folder", "Imported"), item.optLong("addedAt", System.currentTimeMillis()))
+                    val json = contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(8192)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= MAX_BOOKMARK_IMPORT_BYTES) { "Bookmark file exceeds the 5 MB import limit" }
+                            output.write(buffer, 0, count)
                         }
+                        String(output.toByteArray(), Charsets.UTF_8)
+                    } ?: throw IllegalStateException("Could not read bookmark file")
+                    val imported = JSONArray(json)
+                    require(imported.length() <= MAX_BOOKMARK_IMPORT_COUNT) { "Bookmark file contains too many entries" }
+                    val merged = readBookmarks().associateBy { it.url }.toMutableMap()
+                    var importedCount = 0
+                    for (i in 0 until imported.length()) {
+                        val item = runCatching { imported.getJSONObject(i) }.getOrNull() ?: continue
+                        val url = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: continue
+                        if (url.length > MAX_URL_LENGTH_FOR_IMPORT) continue
+                        val title = item.optString("title", Uri.parse(url).host ?: url).take(512)
+                        val folder = item.optString("folder", "Imported").take(128).ifBlank { "Imported" }
+                        merged[url] = BookmarkEntry(url, title, folder, item.optLong("addedAt", System.currentTimeMillis()))
+                        importedCount++
                     }
                     saveBookmarks(merged.values.toList())
-                    toast("Imported ${imported.length()} bookmarks")
+                    toast("Imported $importedCount valid bookmarks")
                 }
             }.onFailure { toast("Bookmark transfer failed: ${it?.localizedMessage ?: "Unknown error"}") }
         }
@@ -2105,7 +2137,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         persistTabs()
+        pendingFilePrompt?.let { prompt -> pendingFileResult?.complete(prompt.dismiss()) }
+        pendingFilePrompt = null
+        pendingFileResult = null
         if (novaDownloadsDelegate.isInitialized()) novaDownloads.shutdown()
+        detectedPageLanguages.clear()
         tabs.forEach { it.session?.close() }
         if (::runtime.isInitialized) {
             tabs.filter { it.isPrivate }.forEach(::clearPrivateContext)
@@ -2119,6 +2155,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val MAX_BOOKMARK_IMPORT_BYTES = 5 * 1024 * 1024
+        private const val MAX_BOOKMARK_IMPORT_COUNT = 10_000
+        private const val MAX_URL_LENGTH_FOR_IMPORT = 2048
         private const val PRIVATE_CONTEXT_IDS_KEY = "private_context_ids"
         private const val HOME_URL = "about:blank"
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
