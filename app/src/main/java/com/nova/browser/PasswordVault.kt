@@ -34,21 +34,33 @@ class PasswordVault(context: Context) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, iv))
         val json = JSONArray(String(cipher.doFinal(encrypted), Charsets.UTF_8))
-        return (0 until json.length()).map { i ->
-            val item = json.getJSONObject(i)
-            Autocomplete.LoginEntry.Builder()
-                .guid(item.optString("guid"))
-                .origin(item.getString("origin"))
-                .formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
-                .httpRealm(item.optString("httpRealm").ifBlank { null })
-                .username(item.getString("username"))
-                .password(item.getString("password"))
-                .build()
+        return buildList {
+            for (i in 0 until json.length()) {
+                val entry = runCatching {
+                    val item = json.getJSONObject(i)
+                    Autocomplete.LoginEntry.Builder()
+                        .guid(item.optString("guid"))
+                        .origin(item.getString("origin"))
+                        .formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                        .httpRealm(item.optString("httpRealm").ifBlank { null })
+                        .username(item.getString("username"))
+                        .password(item.getString("password"))
+                        .build()
+                }.getOrNull()
+                if (entry != null) add(entry)
+            }
         }
     }
 
     @Synchronized fun save(login: Autocomplete.LoginEntry) {
-        val entries = all().filterNot { it.guid == login.guid || (it.origin == login.origin && it.username == login.username) }.toMutableList()
+        val entries = all().filterNot { existing ->
+            existing.guid == login.guid || (
+                existing.origin == login.origin &&
+                    existing.username == login.username &&
+                    existing.formActionOrigin == login.formActionOrigin &&
+                    existing.httpRealm == login.httpRealm
+                )
+        }.toMutableList()
         entries.add(login)
         persist(entries)
         val key = credentialKey(login.origin, login.username)
@@ -64,7 +76,7 @@ class PasswordVault(context: Context) {
         val removed = entries.firstOrNull { it.guid == guid }
         persist(entries.filterNot { it.guid == guid })
         if (removed != null) {
-            val key = credentialKey(removed.origin, removed.username)
+            val key = credentialKey(removed.origin, removed.username, removed.formActionOrigin, removed.httpRealm)
             val metadata = readJsonPreference(META_KEY)
             val tombstones = readJsonPreference(TOMBSTONES_KEY)
             tombstones.put(key, maxOf(System.currentTimeMillis(), metadata.optLong(key) + 1L))
@@ -87,7 +99,7 @@ class PasswordVault(context: Context) {
         val metadata = readJsonPreference(META_KEY)
         val credentials = JSONArray()
         all().forEach { login ->
-            val key = credentialKey(login.origin, login.username)
+            val key = credentialKey(login.origin, login.username, login.formActionOrigin, login.httpRealm)
             credentials.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
                 .put("origin", login.origin).put("formActionOrigin", login.formActionOrigin ?: "")
                 .put("httpRealm", login.httpRealm ?: "").put("username", login.username).put("password", login.password)
@@ -121,7 +133,7 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun importFromSync(array: JSONArray) {
         require(array.length() <= 2000) { "Cloud password vault is unexpectedly large" }
-        val merged = all().associateBy { it.origin + "|" + it.username }.toMutableMap()
+        val merged = all().associateBy { credentialKey(it.origin, it.username, it.formActionOrigin, it.httpRealm) }.toMutableMap()
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
             val origin = item.getString("origin")
@@ -130,7 +142,7 @@ class PasswordVault(context: Context) {
                 .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
                 .username(item.getString("username")).password(item.getString("password")).build()
-            merged[entry.origin + "|" + entry.username] = entry
+            merged[credentialKey(entry.origin, entry.username, entry.formActionOrigin, entry.httpRealm)] = entry
         }
         persist(merged.values.toList())
     }
@@ -194,7 +206,8 @@ class PasswordVault(context: Context) {
     }
 
     private fun readJsonPreference(key: String): JSONObject = runCatching { JSONObject(prefs.getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
-    private fun credentialKey(origin: String, username: String) = "$origin|$username"
+    private fun credentialKey(origin: String, username: String, formActionOrigin: String? = null, httpRealm: String? = null) =
+        "$origin|$username|${formActionOrigin.orEmpty()}|${httpRealm.orEmpty()}"
 
     companion object {
         private const val KEY_BLOB = "encrypted_entries_v1"

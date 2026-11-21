@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
 
     private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
-    private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
+    private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long, val id: String = UUID.randomUUID().toString())
 
     private data class BrowserTab(
         var session: GeckoSession?,
@@ -1230,11 +1230,13 @@ class MainActivity : ComponentActivity() {
 
     private fun addHistory(url: String) {
         val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return
-        val items = readHistory().filterNot { it.url == safeUrl }.toMutableList()
+        val items = readHistory().toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
-        items.add(HistoryEntry(safeUrl, Uri.parse(safeUrl).host ?: safeUrl, visitedAt))
+        items.add(HistoryEntry(safeUrl, Uri.parse(safeUrl).host ?: safeUrl, visitedAt, UUID.randomUUID().toString()))
         val array = JSONArray()
-        items.takeLast(500).forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
+        items.takeLast(500).forEach {
+            array.put(JSONObject().put("id", it.id).put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt))
+        }
         prefs.edit().putString("history_v2", array.toString()).apply()
     }
 
@@ -1248,7 +1250,14 @@ class MainActivity : ComponentActivity() {
                         val entry = runCatching {
                             val item = array.getJSONObject(i)
                             val url = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: return@runCatching null
-                            HistoryEntry(url, item.optString("title"), item.optLong("visitedAt"))
+                            HistoryEntry(
+                                url,
+                                item.optString("title"),
+                                item.optLong("visitedAt"),
+                                item.optString("id").ifBlank {
+                                    UUID.nameUUIDFromBytes("$url|${item.optLong("visitedAt")}|$i".toByteArray()).toString()
+                                }
+                            )
                         }.getOrNull()
                         if (entry != null) add(entry)
                     }

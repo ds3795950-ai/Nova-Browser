@@ -26,14 +26,25 @@ class NovaSyncMergeTest {
 
     @Test fun historyClearPropagatesButNewerVisitsRemain() {
         val remote = JSONObject().put("history", JSONArray()
-            .put(JSONObject().put("url", "https://old.example").put("visitedAt", 100))
-            .put(JSONObject().put("url", "https://new.example").put("visitedAt", 301)))
+            .put(JSONObject().put("id", "old-visit").put("url", "https://old.example").put("visitedAt", 100))
+            .put(JSONObject().put("id", "new-visit").put("url", "https://new.example").put("visitedAt", 301)))
         val local = JSONObject().put("history", JSONArray()).put("history_cleared_at", 300)
         val merged = NovaSyncMerge.merge(local, remote)
         val history = merged.getJSONArray("history")
         assertEquals(1, history.length())
         assertEquals("https://new.example", history.getJSONObject(0).getString("url"))
         assertEquals(300L, merged.getLong("history_cleared_at"))
+    }
+
+    @Test fun historyKeepsSeparateVisitsToTheSameUrlAndSkipsBlankIds() {
+        val local = JSONObject().put("history", JSONArray()
+            .put(JSONObject().put("id", "visit-1").put("url", "https://example.com").put("visitedAt", 100)))
+        val remote = JSONObject().put("history", JSONArray()
+            .put(JSONObject().put("id", "visit-2").put("url", "https://example.com").put("visitedAt", 200))
+            .put(JSONObject().put("url", "https://ignored.example").put("visitedAt", 300)))
+        val history = NovaSyncMerge.merge(local, remote).getJSONArray("history")
+        assertEquals(2, history.length())
+        assertTrue((0 until history.length()).map { history.getJSONObject(it).getString("id") }.containsAll(listOf("visit-1", "visit-2")))
     }
 
     @Test fun legacySnapshotsWithoutTombstonesStillMerge() {
