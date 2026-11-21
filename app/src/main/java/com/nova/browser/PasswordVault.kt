@@ -22,8 +22,11 @@ class PasswordVault(context: Context) {
     // noBackupFilesDir prevents Android Auto Backup from restoring ciphertext without its Keystore key.
     private val vaultFile = File(context.noBackupFilesDir, "nova-password-vault.bin")
     private val alias = "nova.password.vault.aes.v1"
+    private val entriesCache = VaultEntriesCache<List<Autocomplete.LoginEntry>>()
 
-    @Synchronized fun all(): List<Autocomplete.LoginEntry> {
+    @Synchronized fun all(): List<Autocomplete.LoginEntry> = entriesCache.getOrLoad { decryptEntries() }
+
+    private fun decryptEntries(): List<Autocomplete.LoginEntry> {
         val bytes = readEncryptedBlob() ?: return emptyList()
         require(bytes.size > 12) { "Password vault data is invalid" }
         val iv = bytes.copyOfRange(0, 12)
@@ -132,7 +135,11 @@ class PasswordVault(context: Context) {
         persist(merged.values.toList())
     }
 
-    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).apply(); vaultFile.delete() }
+    @Synchronized fun clear() {
+        prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).apply()
+        vaultFile.delete()
+        entriesCache.replace(emptyList())
+    }
 
     private fun persist(entries: List<Autocomplete.LoginEntry>) {
         val json = JSONArray()
@@ -154,6 +161,7 @@ class PasswordVault(context: Context) {
             throw IllegalStateException("Could not securely write password vault", error)
         }
         prefs.edit().remove(KEY_BLOB).apply()
+        entriesCache.replace(entries.toList())
     }
 
     private fun readEncryptedBlob(): ByteArray? {

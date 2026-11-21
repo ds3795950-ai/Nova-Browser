@@ -73,13 +73,19 @@ internal object NovaAutoSync {
     private const val UNIQUE_NAME = "nova-encrypted-cloud-sync"
 
     fun schedule(context: Context) {
-        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val constraints = buildConstraints()
         val request = PeriodicWorkRequestBuilder<NovaAutoSyncWorker>(6, TimeUnit.HOURS)
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
             .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(UNIQUE_NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
     }
+
+    internal fun buildConstraints(): Constraints = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .setRequiresBatteryNotLow(true)
+        .setRequiresCharging(true)
+        .build()
 
     fun cancel(context: Context) { WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_NAME) }
 }
