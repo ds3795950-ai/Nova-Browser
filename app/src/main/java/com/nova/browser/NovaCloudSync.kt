@@ -199,6 +199,8 @@ class NovaCloudSync(context: Context) {
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
+        if (table == "nova_sync_state") snapshotVersion = null
+        if (table == "nova_encrypted_vault") vaultVersion = null
         val path = "/rest/v1/$table?user_id=eq.$userId&select=$column,version"
         val response = request("GET", path, null, token)
         val array = org.json.JSONArray(response)
@@ -224,6 +226,8 @@ class NovaCloudSync(context: Context) {
             if (!hasUpdatedRow(response)) {
                 throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
             }
+            if (table == "nova_sync_state") snapshotVersion = nextVersion
+            if (table == "nova_encrypted_vault") vaultVersion = nextVersion
         } catch (e: IllegalStateException) {
             if (e is CloudSyncConflictException) throw e
             if (e.message?.contains("409") == true || e.message?.contains("conflict", ignoreCase = true) == true) {
