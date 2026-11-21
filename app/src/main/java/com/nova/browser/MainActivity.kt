@@ -1058,6 +1058,15 @@ class MainActivity : ComponentActivity() {
         return true
     }
 
+    private fun denyPrivateOrGuestAccess(feature: String): Boolean {
+        val tab = currentTab() ?: return false
+        if (!tab.isPrivate && !tab.isGuest) return false
+        val mode = if (tab.isGuest) "Guest Mode" else "Private Mode"
+        pageStatus.text = "$mode · temporary data"
+        toast("$feature is unavailable in $mode")
+        return true
+    }
+
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
         if (currentTab()?.isGuest == true && !tabs[index].isGuest) {
@@ -1296,7 +1305,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveNamedSession() {
-        if (denyGuestAccess("Saving workspaces")) return
+        if (denyPrivateOrGuestAccess("Saving workspaces")) return
         val input = EditText(this).apply { hint = "Session name"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Save workspace").setView(input)
             .setPositiveButton("Save") { _, _ ->
@@ -1368,7 +1377,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSavedWorkspaces() {
-        if (denyGuestAccess("Saved workspaces")) return
+        if (denyPrivateOrGuestAccess("Saved workspaces")) return
         val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
         if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
         val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " Â· long-press to delete" }
@@ -1392,7 +1401,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreWorkspace(raw: String) {
-        if (denyGuestAccess("Restoring workspaces")) return
+        if (denyPrivateOrGuestAccess("Restoring workspaces")) return
         runCatching {
             val data = JSONObject(raw).getJSONArray("tabs")
             for (i in 0 until data.length()) {
@@ -1575,6 +1584,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showBookmarkTransfer() {
+        if (denyPrivateOrGuestAccess("Bookmark backup")) return
         AlertDialog.Builder(this).setTitle("Bookmark backup")
             .setItems(arrayOf("Export bookmarks JSON", "Import bookmarks JSON")) { _, which ->
                 if (which == 0) exportBookmarks() else importBookmarks()
@@ -1747,7 +1757,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDownloads() {
-        if (denyGuestAccess("Downloads")) return
+        if (denyPrivateOrGuestAccess("Downloads")) return
         val items = novaDownloads.items()
         if (items.isEmpty()) { downloadPrompt(); return }
         downloadsDialog?.dismiss()
@@ -2352,7 +2362,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPasswordVault() {
-        if (denyGuestAccess("Password vault")) return
+        if (denyPrivateOrGuestAccess("Password vault")) return
         val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it?.localizedMessage ?: "Unknown error"}"); return }
         val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} Â· ${it.username}" }.toTypedArray()
         val labels = rows + "Add login manually"
@@ -2450,7 +2460,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exportHistory() {
-        if (denyGuestAccess("History export")) return
+        if (denyPrivateOrGuestAccess("History export")) return
         val array = JSONArray()
         readHistory().sortedByDescending { it.visitedAt }.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
         pendingHistoryExport = array.toString(2)
@@ -2790,9 +2800,4 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_DOWNLOAD_ID = "download_id"
         private const val MAX_BOOKMARK_IMPORT_BYTES = 5 * 1024 * 1024
         private const val MAX_BOOKMARK_IMPORT_COUNT = 10_000
-        private const val MAX_URL_LENGTH_FOR_IMPORT = 2048
-        private const val PRIVATE_CONTEXT_IDS_KEY = "private_context_ids"
-        private const val HOME_URL = "about:blank"
-        private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
-    }
-}
+        private const val MAX_URL_LEN
