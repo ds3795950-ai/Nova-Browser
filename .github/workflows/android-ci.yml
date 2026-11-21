@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      - name: Scan tracked source for high-confidence secrets
+        run: python3 scripts/secret_scan.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

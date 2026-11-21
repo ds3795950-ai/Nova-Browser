@@ -16,7 +16,7 @@ This repository is a fresh reconstruction. The previous repository/account could
 - Optional AdGuard DNS-over-HTTPS preference for Nova's GeckoView resolver
 - Bundled 1VPN WebExtension browser proxy
 - Guest-only Orbot hand-off with an explicit app-egress verification check
-- GitHub Actions 1VPN validation, dependency-lock verification, JVM unit tests, debug/release builds and APK artifacts
+- GitHub Actions high-confidence local secret scanning, 1VPN validation, dependency-lock verification, JVM unit tests, debug/release builds and APK artifacts
 
 ## Important limitations
 
