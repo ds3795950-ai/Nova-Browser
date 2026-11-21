@@ -823,7 +823,31 @@ class MainActivity : ComponentActivity() {
                 if (!language.isNullOrBlank()) detectedPageLanguages[tabKey(session)] = language
             }
         })
+        session.historyDelegate = object : GeckoSession.HistoryDelegate {
+            override fun onVisited(
+                session: GeckoSession,
+                url: String,
+                lastVisitedURL: String,
+                flags: Int
+            ): GeckoResult<Boolean> {
+                val tab = tabs.firstOrNull { it.session === session }
+                if (tab != null && !tab.isPrivate && !tab.isGuest) addHistory(url)
+                return GeckoResult.fromValue(true)
+            }
+
+            override fun getVisited(session: GeckoSession, urls: Array<String>): GeckoResult<BooleanArray> {
+                val tab = tabs.firstOrNull { it.session === session }
+                val visited = if (tab == null || tab.isPrivate || tab.isGuest) emptySet()
+                    else readHistory().mapTo(mutableSetOf()) { it.url }
+                return GeckoResult.fromValue(BooleanArray(urls.size) { index -> urls[index] in visited })
+            }
+        }
         session.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onCloseRequest(session: GeckoSession) {
+                val index = tabs.indexOfFirst { it.session === session }
+                if (index >= 0) closeTabAt(index)
+            }
+
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 val tab = tabs.firstOrNull { it.session === session }
                 val body = response.body
@@ -861,7 +885,7 @@ class MainActivity : ComponentActivity() {
                 tab.contentPermissions = perms
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 tab.title = Uri.parse(url).host ?: url.take(48)
-                if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
+                if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) persistTabs()
                 if (splitTabId == tab.id && !secondaryAddressBar.hasFocus()) secondaryAddressBar.setText(url)
                 if (currentTab() === tab) {
                     if (!addressBar.hasFocus()) {
