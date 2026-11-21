@@ -1134,7 +1134,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addHistory(url: String) {
-        if (url.isBlank() || url == HOME_URL) return
+        if (!HistoryPolicy.shouldPersist(url) || url == HOME_URL) return
         val items = readHistory().filterNot { it.url == url }.toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
         items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
