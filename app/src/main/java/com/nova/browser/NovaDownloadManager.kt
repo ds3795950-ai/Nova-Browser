@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** App-controlled HTTP downloader with resumable Range requests and persisted partial files. */
 class NovaDownloadManager(
     private val context: Context,
-    private val changed: (List<Item>) -> Unit
+    changed: ((List<Item>) -> Unit)? = null
 ) {
     data class Item(
         val id: String,
@@ -58,6 +58,11 @@ class NovaDownloadManager(
     init {
         loadRecords()
         cleanupOrphanPartials()
+    }
+
+    fun setChangedListener(listener: ((List<Item>) -> Unit)?) {
+        changedListener = listener
+        listener?.invoke(items())
     }
 
     fun shutdown() {

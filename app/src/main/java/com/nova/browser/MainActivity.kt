@@ -71,11 +71,8 @@ class MainActivity : ComponentActivity() {
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
-    private val novaDownloadsDelegate = lazy {
-        NovaDownloadManager(applicationContext) { items -> runOnUiThread { updateDownloadSummary(items) } }
-            .also { it.resumeInterrupted() }
-    }
-    private val novaDownloads: NovaDownloadManager by novaDownloadsDelegate
+    private val novaDownloads: NovaDownloadManager
+        get() = (application as NovaBrowserApplication).downloads
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
@@ -2497,6 +2494,17 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    override fun onStart() {
+        super.onStart()
+        novaDownloads.setChangedListener { items -> runOnUiThread { updateDownloadSummary(items) } }
+        novaDownloads.resumeInterrupted()
+    }
+
+    override fun onStop() {
+        novaDownloads.setChangedListener(null)
+        super.onStop()
+    }
+
     override fun onPause() {
         persistTabs()
         super.onPause()
@@ -2589,7 +2597,7 @@ class MainActivity : ComponentActivity() {
         pendingFilePrompt?.let { prompt -> pendingFileResult?.complete(prompt.dismiss()) }
         pendingFilePrompt = null
         pendingFileResult = null
-        if (novaDownloadsDelegate.isInitialized()) novaDownloads.shutdown()
+        novaDownloads.setChangedListener(null)
         detectedPageLanguages.clear()
         tabs.forEach { it.session?.close() }
         if (::runtime.isInitialized) {
