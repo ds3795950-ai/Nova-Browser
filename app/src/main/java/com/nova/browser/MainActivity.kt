@@ -945,10 +945,26 @@ class MainActivity : ComponentActivity() {
 
     private fun enforceSessionBudget() {
         val currentId = currentTab()?.id
+        val visibleIds = setOfNotNull(currentId, splitTabId)
+        val memoryClassMb = getSystemService(android.app.ActivityManager::class.java).memoryClass
+        val limit = SessionBudgetPolicy.maxRetainedSessions(memoryClassMb)
+        val candidates = tabs.filter { it.session != null }.map {
+            SessionBudgetPolicy.Candidate(it.id, it.lastAccess, it.isPrivate, it.isGuest)
+        }
+        SessionBudgetPolicy.evictionCandidates(candidates, limit, visibleIds).forEach { id ->
+            tabs.firstOrNull { it.id == id }?.let { tab ->
+                tab.session?.let { session ->
+                    session.setActive(false)
+                    session.setFocused(false)
+                    session.close()
+                }
+                tab.session = null
+                tab.needsReload = true
+            }
+        }
         tabs.forEach { tab ->
             val visible = SessionBudgetPolicy.shouldRemainActive(tab.id, currentId, splitTabId)
             tab.session?.let { session ->
-                // Deactivate background sessions instead of closing them and discarding page-local state.
                 session.setActive(visible)
                 session.setFocused(visible && tab.id == currentId)
             }
@@ -957,8 +973,33 @@ class MainActivity : ComponentActivity() {
         pageStatus.text = when {
             activeTab?.isGuest == true -> "Guest Mode · temporary data"
             activeTab?.isPrivate == true -> "Private session"
-            else -> "Memory saver · background tabs suspended; page state preserved"
+            else -> "Memory saver · $limit retained normal sessions; background pages reload when reopened"
         }
+    }
+
+    private fun evictBackgroundNormalSessions() {
+        val visibleIds = setOfNotNull(currentTab()?.id, splitTabId)
+        tabs.filter { it.id !in visibleIds && !it.isPrivate && !it.isGuest }.forEach { tab ->
+            tab.session?.let { session ->
+                session.setActive(false)
+                session.setFocused(false)
+                session.close()
+            }
+            if (tab.session != null) tab.needsReload = true
+            tab.session = null
+        }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            evictBackgroundNormalSessions()
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        evictBackgroundNormalSessions()
     }
 
     private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
