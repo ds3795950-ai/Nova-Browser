@@ -8,7 +8,9 @@ object BrowserEngineProfilePolicy {
         if (profile == BrowserProfileKind.NORMAL) NORMAL_CEFRIUM_PROFILE else null
 
     /** Private and Guest profiles are GeckoView-only; neither may open a Cefrium profile. */
-    fun cefriumUsesIncognitoProfile(profile: BrowserProfileKind): Boolean = false
+    fun cefriumUsesIncognitoProfile(profile: BrowserProfileKind): Boolean = when (profile) {
+        BrowserProfileKind.NORMAL, BrowserProfileKind.PRIVATE, BrowserProfileKind.GUEST -> false
+    }
 
     fun geckoContextId(profile: BrowserProfileKind, guestContextId: String): String? = when (profile) {
         BrowserProfileKind.NORMAL -> null

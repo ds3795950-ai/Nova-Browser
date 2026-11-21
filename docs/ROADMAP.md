@@ -1,6 +1,6 @@
 # Nova Browser roadmap and verification status
 
-Last reconciled: 2026-11-20. This file describes the feature branch, not the default `main` branch.
+Last reconciled: 2026-11-21. This file describes the feature branch, not the default `main` branch.
 
 Status key:
 - **IMPLEMENTED + CI VERIFIED** — source is committed and the relevant GitHub Actions checks passed.
@@ -12,9 +12,9 @@ Status key:
 
 - Default branch: `main`.
 - Active implementation branch: `feature/phase-1-dual-engine-foundation`.
-- Latest inspected commit: `5c83f759b5aeef9f310d04498070fcede1f1af96`.
+- Latest inspected implementation commit: `9735117d3bdd426a230973da2f701303e82862ae` (cloud-sync hardening); the latest CI runs for this commit are pending at the time of this update.
 - Pull request #1 is open and remains a draft. It has not been merged into `main`.
-- On the inspected commit, **Android CI** and **Android Lint** passed.
+- Android CI and Android Lint passed on commit `df04644f69492d3b1fcff83f1b9acd74d8914940`. Newer runs for the 2026-11-21 privacy and sync hardening commits are pending; do not treat the earlier green checks as validation of the latest code.
 - The Android Emulator Smoke workflow failed during emulator setup/ADB configuration after the emulator reported boot completion. The failure was an ADB broken-pipe/exit-224 error before the instrumentation test command ran; it is not evidence of an app test assertion failure. The workflow is being adjusted and must pass on a fresh run.
 - BrowserStack workflows are present, but no BrowserStack run is claimed as completed.
 
@@ -35,7 +35,7 @@ Status key:
 - Normal tabs default to Cefrium; Automatic and GeckoView choices are available.
 - Automatic mode supports exact-host affinity and GeckoView fallback for unsupported features.
 - Normal tabs can be switched explicitly after a warning that engine-native website data is not transferred.
-- Private tabs use Cefrium's memory-only incognito profile; Guest tabs are locked to GeckoView and use their separate ephemeral context.
+- Private and Guest tabs are both locked to GeckoView. Private uses a private session; Guest additionally uses a dedicated temporary context. Regression tests now enforce both selections regardless of Normal-mode preferences.
 - Cefrium supports normal-tab navigation/lifecycle, split-pane rendering, permission prompts and completed-download publication.
 - Protected DNS, desktop-site mode and Reader Mode have Cefrium paths; Nova Shield and saved-login autofill remain GeckoView-dependent.
 - `MainActivity.BrowserTab` still retains Gecko-specific session state. The common interface is not yet the sole tab owner.
@@ -56,7 +56,7 @@ Status key:
 
 **Status: IMPLEMENTED IN CODE; DEVICE TEST REQUIRED**
 
-- Private tabs use Cefrium's in-memory incognito profile when Cefrium is selected and remain excluded from normal persistence.
+- Private tabs use GeckoView private sessions and remain excluded from normal persistence.
 - Guest tabs are GeckoView-only and use a dedicated isolated Gecko context. Guest tabs are excluded from normal tabs/session restore, history, bookmarks, workspaces and saved downloads.
 - Guest context cleanup is designed to run at startup (to recover after process death), when the final Guest tab closes, and during Activity teardown. The context rotates for the next Guest session.
 - Owner credential autofill callbacks are disabled while any Private or Guest tab exists.
@@ -65,9 +65,9 @@ Status key:
 
 ## VPN and Tor
 
-- The bundled 1VPN integration is a browser proxy path; it is not an Android-wide VPN service.
-- Cefrium's proxy path is designed to fail closed when credentials or the proxy bridge are unavailable. GeckoView uses the bundled extension path.
-- The requested Guest-only Tor route is not implemented or verified. Do not label 1VPN as Tor, and do not claim Tor routing until a separately supported Tor transport is integrated, scoped only to Guest traffic, and tested for DNS/WebRTC/leak behavior.
+- The bundled 1VPN integration is a browser proxy path, not an Android-wide VPN service and not Tor.
+- Cefrium's proxy path uses a fixed proxy and is designed to fail closed when credentials or the proxy bridge are unavailable. The GeckoView extension path has not passed equivalent fail-closed/leak testing.
+- Guest-only Tor is not implemented or verified. Android app-wide VPN routing cannot isolate one Guest tab from Normal/Private tabs. GeckoView has no supported per-session proxy API; do not add a fake toggle or claim Tor routing until a dedicated transport and routing boundary are proven.
 
 ## Core browser features
 
@@ -79,7 +79,9 @@ The codebase includes address/search and provider selection, tabs, normal sessio
 
 - Passwordless email OTP send/verify, encrypted local session storage using Android Keystore, token refresh and sign-out are implemented.
 - The app contains only the public/publishable key; no service-role secret belongs in the Android app.
-- The Supabase Magic Link email template must display `{{ .Token }}` for the numeric OTP UI. A verified custom SMTP provider must be configured for normal delivery; the default provider has recipient and rate restrictions.
+- Live Auth configuration was inspected on 2026-11-21: email sign-in is enabled, OTP length is 6 and expiry is 600 seconds.
+- The deployed Magic Link template still uses `{{ .ConfirmationURL }}`, not `{{ .Token }}`; the available Auth configuration action cannot update template HTML.
+- No custom SMTP host is configured. SMTP credentials and a verified sender domain are still required for normal user delivery.
 - Remaining: project owner configures the template and SMTP, then verifies real email delivery, OTP expiry, sign-in, refresh and sign-out on-device.
 
 ## Phase 9 — opt-in encrypted cloud sync
@@ -88,7 +90,7 @@ The codebase includes address/search and provider selection, tabs, normal sessio
 
 - Sync snapshots and password-vault payloads are separately encrypted client-side with AES-256-GCM; passphrase-derived keys use PBKDF2-HMAC-SHA256.
 - The passphrase is not stored or sent to Supabase. Supabase stores encrypted envelopes and row-level policies scope records to the authenticated user.
-- Sync is manual, not continuous/background. It is additive: deletion tombstones are not implemented, so an item removed on one device may return from another device's snapshot.
+- Manual sync and opt-in six-hour WorkManager sync are implemented. Browser and password-vault ciphertext are stored in one atomic bundle revision; sync uses compare-and-swap to detect stale writes. Deletion propagation and merge behavior still require multi-device acceptance.
 - Private and Guest browsing state is excluded.
 - Remaining: verify upload/restore across two devices, wrong-passphrase handling, conflicts, sign-out and account deletion. The project owner must provide the dashboard/device access needed for acceptance.
 

@@ -52,6 +52,9 @@ class EngineSelectionPolicyTest {
         assertNull(BrowserEngineProfilePolicy.cefriumPersistentProfile(BrowserProfileKind.GUEST))
         assertFalse(BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(BrowserProfileKind.PRIVATE))
         assertFalse(BrowserEngineProfilePolicy.cefriumUsesIncognitoProfile(BrowserProfileKind.GUEST))
+        assertNull(BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.NORMAL, "guest-1"))
+        assertNull(BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.PRIVATE, "guest-1"))
+        assertEquals("guest-1", BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.GUEST, "guest-1"))
         assertTrue(BrowserEngineProfilePolicy.isEphemeral(BrowserProfileKind.PRIVATE))
         assertTrue(BrowserEngineProfilePolicy.isEphemeral(BrowserProfileKind.GUEST))
     }

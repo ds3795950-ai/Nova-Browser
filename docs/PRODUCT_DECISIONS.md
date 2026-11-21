@@ -58,14 +58,13 @@ These are the previously agreed product choices. Do not replace them with generi
 - Phishing/malware protection.
 - Also retain the previously discussed desktop-site mode with per-site preferences, downloads, file uploads, reader mode, translation, password manager/autofill and session restore as roadmap items.
 
-## Engine strategy (supersedes the earlier single-engine constraint)
-- Nova will use Cefrium (embedded Chromium) as the primary engine for normal browsing.
-- Automatic mode prefers Cefrium and falls back to GeckoView when a site is incompatible or Cefrium fails.
-- Users can explicitly choose Automatic, Cefrium or GeckoView in Settings.
-- GeckoView is the default engine in Guest Mode. The user may explicitly switch Guest Mode to Cefrium; Nova must not silently change that choice.
-- Normal and Guest browsing use separate engine profiles. Guest data remains temporary and isolated regardless of the selected engine.
-- Tor is an optional Guest-only feature, off by default. When enabled, both Guest engines must be forced through Tor with fail-closed behavior; normal browsing must remain on the ordinary route.
-- Cefrium is pre-1.0. Keep it behind an adapter and do not make it the production default until compatibility, security, performance and real-device tests pass.
+## Engine strategy (latest explicit user decision)
+- Normal Mode uses Cefrium as its primary engine, with GeckoView fallback only where a required feature or site-compatibility limitation makes Cefrium unsuitable.
+- Private Mode is GeckoView-only and must use ephemeral private sessions.
+- Guest Mode is GeckoView-only and must use a separate temporary context. Normal-mode preferences and site affinities must never override either privacy profile.
+- Tor is an optional Guest-only feature, off by default. It must use a dedicated Guest-only transport and fail closed; Normal and Private browsing must never be routed through Tor.
+- The 1VPN browser proxy is a separate VPN/proxy feature and must never be described as Tor.
+- Cefrium remains behind its adapter; compatibility, security, performance and real-device acceptance are still required before release.
 
 ## Implementation policy
 These decisions define the target product, not the current implementation status. Update docs/ROADMAP.md as features are implemented and tested. A feature is not complete until its acceptance tests pass. Never claim Tor routing, security protection, encryption, login or sync is working without technical verification.

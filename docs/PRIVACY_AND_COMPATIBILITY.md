@@ -14,7 +14,7 @@ The existing 1VPN browser proxy remains a GeckoView WebExtension and is the sour
 
 ## Guest Mode and Tor
 
-Nova exposes its Orbot handoff only from Guest Mode settings. The Tor launcher checks that the active tab is a Guest tab before opening Orbot; it is not offered in normal or Private Mode. This is a user-interface and launch restriction, not a per-tab network isolation guarantee: Orbot's Android VPN routing is device/profile-level and can affect other apps unless Orbot's own app-selection mode is configured to include only Nova. Guest Mode remains an isolated, ephemeral GeckoView private session; it does not itself create a Tor circuit. The user must install and configure Orbot, enable its VPN mode, and select Nova in Orbot. Nova cannot verify the Tor circuit or guarantee fail-closed routing. Android Always-on VPN plus Block connections without VPN can provide OS-level fail-closed behavior, but should be configured and tested on-device.
+Guest Mode currently displays an explanation that Guest-only Tor is unavailable. Nova does not launch or configure Orbot because Android VPN routing is app/profile-level and would affect Normal and Private tabs in the same app package. Guest Mode is an isolated, ephemeral GeckoView private session; it does not create a Tor circuit. A dedicated Guest-only Tor transport is not implemented. Do not claim Tor routing, Tor anonymity, or a kill switch.
 
 ## Browser VPN boundaries
 
@@ -34,12 +34,12 @@ Cloud sync is end-to-end encrypted with a passphrase that is not uploaded. Each 
 ## Cefrium settings compatibility — Phase 1 update
 
 - Normal mode defaults to Cefrium with a named persistent profile.
-- Private mode uses Cefrium's in-memory incognito profile when the current site does not require a Gecko-only feature. Private tabs share the Private profile, which is cleared when the final Private Cefrium browser closes.
+- Private mode is GeckoView-only and uses ephemeral private sessions. It is excluded from normal persistence and cloud sync.
 - Guest mode remains GeckoView-only. Its engine and isolated Gecko context are unchanged.
 - Protected DNS now applies to both engines. Cefrium uses strict Secure DNS; GeckoView uses TRR_MODE_ONLY. This is browser-only protection, not a full-device VPN.
 - Desktop Site uses a Chromium desktop user agent plus a document-start viewport adjustment in Cefrium.
 - Reader Mode extracts and sanitizes article content before displaying it in a simplified Cefrium reading page. Source scripts and event handlers are removed.
-- Nova Shield and saved-password autofill remain GeckoView-only. When either is required, engine selection conservatively falls back to GeckoView.
+- Nova Shield and saved-password autofill remain GeckoView-only. Normal tabs may fall back to GeckoView when these features are required; Private and Guest are always GeckoView.
 - Cefrium component updates are disabled because the SDK documents that they do not use a profile proxy.
 - 1VPN now has a Cefrium adapter: the GeckoView extension provides the authenticated proxy credentials through a native bridge, while Cefrium applies its own fixed profile proxy and WebRTC policy. Runtime connectivity and leak tests are still pending.
 
