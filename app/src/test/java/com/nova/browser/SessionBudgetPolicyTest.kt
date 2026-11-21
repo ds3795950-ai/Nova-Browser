@@ -15,7 +15,7 @@ class SessionBudgetPolicyTest {
     }
     @Test fun scalesRetainedSessionLimitWithMemoryClass() {
         assertEquals(3, SessionBudgetPolicy.maxRetainedSessions(96))
-        assertEquals(5, SessionBudgetPolicy.maxRetainedSessions(256))
+        assertEquals(6, SessionBudgetPolicy.maxRetainedSessions(256))
         assertEquals(10, SessionBudgetPolicy.maxRetainedSessions(512))
     }
 
