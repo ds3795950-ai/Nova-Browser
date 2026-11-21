@@ -148,7 +148,7 @@ class MainActivity : ComponentActivity() {
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
-        runtime = GeckoRuntime.create(this)
+        runtime = sharedRuntime ?: GeckoRuntime.create(applicationContext).also { sharedRuntime = it }
         configureAddonManagerDelegate()
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
@@ -2789,12 +2789,13 @@ class MainActivity : ComponentActivity() {
         tabs.clear()
         if (::runtime.isInitialized) {
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
-            runtime.shutdown()
+            // GeckoRuntime is process-wide; keep it alive across Activity recreation and downloads.
         }
         super.onDestroy()
     }
 
     companion object {
+        @Volatile private var sharedRuntime: GeckoRuntime? = null
         const val ACTION_PAUSE_DOWNLOAD = "com.nova.browser.action.PAUSE_DOWNLOAD"
         const val ACTION_CANCEL_DOWNLOAD = "com.nova.browser.action.CANCEL_DOWNLOAD"
         const val EXTRA_DOWNLOAD_ID = "download_id"
