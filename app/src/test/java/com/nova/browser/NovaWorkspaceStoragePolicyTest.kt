@@ -25,6 +25,8 @@ class NovaWorkspaceStoragePolicyTest {
             NovaWorkspaceStoragePolicy.serialize((0..NovaWorkspaceStoragePolicy.MAX_WORKSPACES).map { workspace("W$it") }.toSet())
         }
         assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.serialize(setOf("not-json")) }
+        assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.parse("not-json") }
+        assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.parse("[1]") }
         assertThrows(IllegalArgumentException::class.java) {
             NovaWorkspaceStoragePolicy.serialize(setOf(JSONObject().put("name", "Work").put("createdAt", -1L)
                 .put("tabs", JSONArray()).toString()))
@@ -40,6 +42,7 @@ class NovaWorkspaceStoragePolicyTest {
 
     @Test
     fun rejectsInvalidWorkspaceTombstones() {
+        assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.validateTombstones("not-json") }
         assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.validateTombstones(JSONObject().put("Work", 0L).toString()) }
         assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.validateTombstones(JSONObject().put("Work", -1L).toString()) }
         assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.validateTombstones(JSONObject().put("Work", Long.MAX_VALUE).toString()) }

@@ -1,6 +1,7 @@
 package com.nova.browser
 
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 /** Bounds and validates workspace data before it is encrypted or restored from cloud sync. */
@@ -28,16 +29,31 @@ internal object NovaWorkspaceStoragePolicy {
 
     fun parse(serialized: String): Set<String> {
         require(serialized.length <= MAX_TOTAL_WORKSPACE_CHARS) { "Saved workspace data is too large" }
-        val array = JSONArray(serialized)
+        val array = try {
+            JSONArray(serialized)
+        } catch (error: JSONException) {
+            throw IllegalArgumentException("Saved workspace list is malformed", error)
+        }
         require(array.length() <= MAX_WORKSPACES) { "Too many saved workspaces" }
         val result = linkedSetOf<String>()
-        for (i in 0 until array.length()) result.add(array.getString(i))
+        for (i in 0 until array.length()) {
+            val raw = try {
+                array.getString(i)
+            } catch (error: JSONException) {
+                throw IllegalArgumentException("Saved workspace entry is malformed", error)
+            }
+            result.add(raw)
+        }
         serialize(result)
         return result
     }
 
     fun validateTombstones(serialized: String): String {
-        val tombstones = JSONObject(serialized)
+        val tombstones = try {
+            JSONObject(serialized)
+        } catch (error: JSONException) {
+            throw IllegalArgumentException("Workspace deletion history is malformed", error)
+        }
         require(tombstones.length() <= 4000) { "Workspace deletion history is too large" }
         val keys = tombstones.keys()
         while (keys.hasNext()) {
@@ -53,7 +69,11 @@ internal object NovaWorkspaceStoragePolicy {
 
     private fun validateWorkspace(raw: String) {
         require(raw.isNotBlank() && raw.length <= MAX_WORKSPACE_CHARS) { "Saved workspace is too large or empty" }
-        val workspace = JSONObject(raw)
+        val workspace = try {
+            JSONObject(raw)
+        } catch (error: JSONException) {
+            throw IllegalArgumentException("Saved workspace is malformed", error)
+        }
         val name = workspace.opt("name")
         require(name is String && name.isNotBlank() && name.length <= MAX_NAME_LENGTH) {
             "Saved workspace has an invalid name"
