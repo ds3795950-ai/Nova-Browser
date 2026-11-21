@@ -16,7 +16,10 @@ import java.net.URL
 import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** App-controlled HTTP downloader with resumable Range requests and persisted partial files. */
@@ -51,7 +54,13 @@ class NovaDownloadManager(
 
     private val prefs = context.getSharedPreferences("nova_downloads", Context.MODE_PRIVATE)
     @Volatile private var changedListener: ((List<Item>) -> Unit)? = changed
-    private val executor = Executors.newFixedThreadPool(MAX_CONCURRENT_DOWNLOADS)
+    private val executor = ThreadPoolExecutor(
+        MAX_CONCURRENT_DOWNLOADS,
+        MAX_CONCURRENT_DOWNLOADS,
+        60L,
+        TimeUnit.SECONDS,
+        ArrayBlockingQueue(MAX_QUEUED_DOWNLOADS)
+    ).apply { allowCoreThreadTimeOut(true) }
     private val running = ConcurrentHashMap<String, Running>()
     private val records = LinkedHashMap<String, Item>()
 
@@ -158,7 +167,12 @@ class NovaDownloadManager(
         val worker = Running(item.copy(state = "RUNNING", error = ""))
         if (running.putIfAbsent(id, worker) != null) return
         put(worker.item)
-        executor.execute { transfer(worker) }
+        try {
+            executor.execute { transfer(worker) }
+        } catch (_: RejectedExecutionException) {
+            running.remove(id)
+            put(worker.item.copy(state = "FAILED", error = "Download queue is full; try again later"))
+        }
     }
 
     fun pause(id: String) {
@@ -316,7 +330,8 @@ class NovaDownloadManager(
         val worker = Running(item, input = stream)
         running[id] = worker
         put(item)
-        executor.execute {
+        try {
+            executor.execute {
             val part = partial(id)
             try {
                 part.parentFile?.mkdirs()
@@ -366,6 +381,11 @@ class NovaDownloadManager(
                 running.remove(id)
                 updateServiceNotification()
             }
+            }
+        } catch (_: RejectedExecutionException) {
+            running.remove(id)
+            runCatching { stream.close() }
+            put(item.copy(state = "FAILED", error = "Download queue is full; try again later"))
         }
     }
 
@@ -416,6 +436,7 @@ class NovaDownloadManager(
 
     companion object {
         private const val MAX_CONCURRENT_DOWNLOADS = 3
+        private const val MAX_QUEUED_DOWNLOADS = 20
         private const val MAX_REDIRECTS = 5
         private const val CONNECT_TIMEOUT_MS = 20_000
         private const val READ_TIMEOUT_MS = 30_000
