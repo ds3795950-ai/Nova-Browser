@@ -69,6 +69,8 @@ class NovaCloudSync(context: Context) {
         private const val BASE_URL = BuildConfig.SUPABASE_URL
         private const val API_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         private const val KEY_ALIAS = "nova.cloud.session.aes.v1"
+
+        internal fun hasUpdatedRow(response: String): Boolean = org.json.JSONArray(response).length() > 0
     }
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
@@ -208,12 +210,23 @@ class NovaCloudSync(context: Context) {
     }
 
     private fun upsertRow(table: String, column: String, userId: String, payload: JSONObject, token: String, expectedVersion: String?) {
-        val body = JSONObject().put("user_id", userId).put(column, payload).put("version", java.util.UUID.randomUUID().toString()).toString()
-        val prefer = if (expectedVersion != null) "resolution=merge-duplicates,return=representation" else "resolution=merge-duplicates,return=representation"
+        val nextVersion = java.util.UUID.randomUUID().toString()
         try {
-            request("POST", "/rest/v1/$table", body, token, prefer)
+            val response = if (expectedVersion == null) {
+                // Insert-only when no row was observed; never overwrite a row created concurrently.
+                val body = JSONObject().put("user_id", userId).put(column, payload).put("version", nextVersion).toString()
+                request("POST", "/rest/v1/$table", body, token, "return=representation")
+            } else {
+                // Update only the version downloaded by this client (optimistic concurrency control).
+                val body = JSONObject().put(column, payload).put("version", nextVersion).toString()
+                request("PATCH", "/rest/v1/$table?user_id=eq.$userId&version=eq.$expectedVersion", body, token, "return=representation")
+            }
+            if (!hasUpdatedRow(response)) {
+                throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
+            }
         } catch (e: IllegalStateException) {
-            if (e.message?.contains("409") == true || e.message?.contains("conflict") == true) {
+            if (e is CloudSyncConflictException) throw e
+            if (e.message?.contains("409") == true || e.message?.contains("conflict", ignoreCase = true) == true) {
                 throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
             }
             throw e
