@@ -24,7 +24,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.net.Uri
 import android.os.Bundle
+import android.graphics.Color
 import android.graphics.Typeface
+import android.util.TypedValue
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
