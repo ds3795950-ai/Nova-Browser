@@ -277,5 +277,8 @@ val prepare1VpnAssets by tasks.registering {
         backgroundFile.writeText(background + "\n" + novaBridge)
     }
 }
-android.sourceSets.getByName("main").assets.srcDir(generatedAssetsRoot.get().asFile)
+android.sourceSets.getByName("main").assets {
+    srcDir(generatedAssetsRoot.get().asFile)
+    exclude("nova_1vpn/manifest.json", "nova_1vpn/background.js")
+}
 tasks.named("preBuild").configure { dependsOn(prepare1VpnAssets) }
