@@ -68,7 +68,8 @@ class PasswordVault(context: Context) {
         val metadata = readJsonPreference(META_KEY)
         val tombstones = readJsonPreference(TOMBSTONES_KEY)
         metadata.put(key, maxOf(System.currentTimeMillis(), tombstones.optLong(key) + 1L, tombstones.optLong(legacyKey) + 1L))
-        tombstones.remove(key).remove(legacyKey)
+        tombstones.remove(key)
+        tombstones.remove(legacyKey)
         prefs.edit().putString(META_KEY, metadata.toString()).putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
 
@@ -82,7 +83,8 @@ class PasswordVault(context: Context) {
             val tombstones = readJsonPreference(TOMBSTONES_KEY)
             val legacyKey = legacyCredentialKey(removed.origin, removed.username)
             tombstones.put(key, maxOf(System.currentTimeMillis(), metadata.optLong(key) + 1L, metadata.optLong(legacyKey) + 1L))
-            metadata.remove(key).remove(legacyKey)
+            metadata.remove(key)
+            metadata.remove(legacyKey)
             prefs.edit().putString(META_KEY, metadata.toString()).putString(TOMBSTONES_KEY, tombstones.toString()).apply()
         }
     }
