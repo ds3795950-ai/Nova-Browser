@@ -21,7 +21,7 @@ object DownloadProtocol {
     fun safeFileName(value: String): String {
         val leaf = value.substringAfterLast('/').substringAfterLast('\\')
             .replace(Regex("[\\p{Cntrl}]"), "_")
-            .replace(Regex("[^\\p{L}\\p{M}\\p{N}._ -]"), "_")
+            .replace(Regex("[^\\p{L}\\p{M}\\p{N}._ %+\\-]"), "_")
             .trim().trim('.')
         val limited = limitLength(leaf, 120).trimEnd('.')
         return limited.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "nova-download.bin"
