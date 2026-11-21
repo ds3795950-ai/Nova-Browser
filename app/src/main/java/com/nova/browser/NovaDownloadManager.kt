@@ -38,7 +38,7 @@ class NovaDownloadManager(
         val error: String = "",
         val originLabel: String = ""
     ) {
-        fun progressLabel(): String = if (total > 0) "${(downloaded * 100 / total).coerceIn(0, 100)}% Â· ${formatBytes(downloaded)} / ${formatBytes(total)}" else "${formatBytes(downloaded)} downloaded"
+        fun progressLabel(): String = if (total > 0) "${(downloaded.toDouble() * 100.0 / total).toInt().coerceIn(0, 100)}% Â· ${formatBytes(downloaded)} / ${formatBytes(total)}" else "${formatBytes(downloaded)} downloaded"
     }
 
     private data class Running(
@@ -163,7 +163,7 @@ class NovaDownloadManager(
             worker.connection?.disconnect()
         } else {
             val item = synchronized(this) { records[id] } ?: return
-            if (item.state == "QUEUED" || item.state == "FAILED") put(item.copy(state = "PAUSED"))
+            if (item.state in setOf("QUEUED", "FAILED", "INTERRUPTED")) put(item.copy(state = "PAUSED"))
         }
     }
 
@@ -349,7 +349,7 @@ class NovaDownloadManager(
                 runCatching { stream.close() }
                 if (!worker.cancel.get()) {
                     worker.item = worker.item.copy(
-                        state = if (worker.item.url.isBlank()) "INTERRUPTED" else "FAILED",
+                        state = "FAILED",
                         error = error.message ?: "Could not save browser download"
                     )
                     put(worker.item)
