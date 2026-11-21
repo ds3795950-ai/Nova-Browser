@@ -124,7 +124,8 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
-                if (tab?.lastUrl == HOME_URL) finish()
+                if (tab?.lastUrl == HOME_URL && tabs.size > 1) closeTabAt(activeIndex)
+                else if (tab?.lastUrl == HOME_URL) finish()
                 else if (tab?.canGoBack == true) tab.session?.goBack()
                 else finish()
             }
@@ -197,7 +198,7 @@ class MainActivity : ComponentActivity() {
                 } else false
             }
         }
-        val homeButton = actionButton("⌂") { goHome() }.apply {
+        val homeButton = actionButton("â") { goHome() }.apply {
             contentDescription = "Home"
             textSize = 18f
             minWidth = 40
@@ -207,7 +208,7 @@ class MainActivity : ComponentActivity() {
         homeButton.minimumHeight = dp(48)
         addressRow.addView(homeButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         addressRow.addView(addressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
-        searchEngineButton = actionButton("$searchEngine ▾") { chooseSearchEngine() }
+        searchEngineButton = actionButton("$searchEngine â¾") { chooseSearchEngine() }
         searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
         searchEngineButton.minWidth = dp(64)
         searchEngineButton.minimumWidth = dp(64)
@@ -222,17 +223,17 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        controls.addView(actionButton("←") { goBack() })
-        controls.addView(actionButton("→") { goForward() })
-        controls.addView(actionButton("↻") { reloadPage() })
-        controls.addView(actionButton("＋") {
+        controls.addView(actionButton("â") { goBack() })
+        controls.addView(actionButton("â") { goForward() })
+        controls.addView(actionButton("â»") { reloadPage() })
+        controls.addView(actionButton("ï¼") {
             if (currentTab()?.isGuest == true) createGuestTab() else createTab(false, HOME_URL)
         })
         controls.addView(actionButton("Tabs") { showTabs() })
         controls.addView(actionButton("Split") { chooseSplitTab() })
         controls.addView(actionButton("Private") {
             if (currentTab()?.isGuest == true) {
-                pageStatus.text = "Guest Mode · temporary data"
+                pageStatus.text = "Guest Mode Â· temporary data"
                 toast("Private tabs are unavailable in Guest Mode")
             } else createTab(true, HOME_URL)
         })
@@ -243,7 +244,7 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        tools.addView(actionButton("☆") { toggleBookmark() })
+        tools.addView(actionButton("â") { toggleBookmark() })
         tools.addView(actionButton("Bookmarks") { showBookmarks() })
         tools.addView(actionButton("History") { showHistory() })
         tools.addView(actionButton("Downloads") { showDownloads() })
@@ -334,7 +335,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         val dragon = TextView(this).apply {
-            text = "🐉"
+            text = "ð"
             textSize = 58f
             gravity = Gravity.CENTER
             contentDescription = "Nova dragon emblem"
@@ -386,14 +387,14 @@ class MainActivity : ComponentActivity() {
         browserPane.visibility = View.GONE
         addressBar.setText("")
         dismissAddressBarInput()
-        tabLabel.text = "Nova Browser · Home"
+        tabLabel.text = "Nova Browser Â· Home"
         val activeTab = currentTab()
         pageStatus.text = when {
-            activeTab?.isGuest == true -> "Guest Mode · temporary data"
+            activeTab?.isGuest == true -> "Guest Mode Â· temporary data"
             activeTab?.isPrivate == true -> "Private session"
-            else -> "Ready · $searchEngine"
+            else -> "Ready Â· $searchEngine"
         }
-        searchEngineButton.text = "$searchEngine ▾"
+        searchEngineButton.text = "$searchEngine â¾"
         searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
     }
@@ -459,7 +460,7 @@ class MainActivity : ComponentActivity() {
         session.setFocused(true)
         tab.lastAccess = System.nanoTime()
         addressBar.setText(url)
-        tabLabel.text = when { isGuest -> "Guest tab · temporary"; isPrivate -> "Private tab · ${tabs.size} total"; else -> "Tab ${tabs.size}" }
+        tabLabel.text = when { isGuest -> "Guest tab Â· temporary"; isPrivate -> "Private tab Â· ${tabs.size} total"; else -> "Tab ${tabs.size}" }
         if (!isPrivate && !isGuest) persistTabs()
         if (url == HOME_URL) showHomeScreen() else navigate(url)
         enforceSessionBudget()
@@ -467,7 +468,7 @@ class MainActivity : ComponentActivity() {
 
     private fun createGuestTab() {
         createTab(isPrivate = false, url = HOME_URL, isGuest = true)
-        toast("Guest Mode started · temporary browsing data")
+        toast("Guest Mode started Â· temporary browsing data")
     }
 
     private fun isDesktopUrl(url: String): Boolean {
@@ -561,7 +562,7 @@ class MainActivity : ComponentActivity() {
         session.setTranslationsSessionDelegate(object : TranslationsController.SessionTranslation.Delegate {
             override fun onOfferTranslate(session: GeckoSession) {
                 val tab = tabs.firstOrNull { it.session === session } ?: return
-                if (currentTab() === tab) runOnUiThread { toast("This page may be available in another language · tap Translate") }
+                if (currentTab() === tab) runOnUiThread { toast("This page may be available in another language Â· tap Translate") }
             }
             override fun onExpectedTranslate(session: GeckoSession) {
                 val tab = tabs.firstOrNull { it.session === session } ?: return
@@ -586,7 +587,7 @@ class MainActivity : ComponentActivity() {
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
                 requestDownloadNotificationPermission()
                 novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
-                toast("Webpage download received · saving to Downloads/Nova")
+                toast("Webpage download received Â· saving to Downloads/Nova")
             }
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 if (!title.isNullOrBlank()) {
@@ -609,7 +610,7 @@ class MainActivity : ComponentActivity() {
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
                 if (currentTab() === tab) {
                     addressBar.setText(url)
-                    pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
+                    pageStatus.text = when { tab.isGuest -> "Guest Mode Â· temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
                 }
             }
         }
@@ -622,22 +623,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enforceSessionBudget() {
-        val keep = tabs.sortedByDescending { if (it === currentTab()) Long.MAX_VALUE else it.lastAccess }
-            .take(4).toSet()
+        val currentId = currentTab()?.id
         tabs.forEach { tab ->
-            if (tab !in keep && tab.session != null && tab.id != splitTabId) {
-                tab.session?.setActive(false)
-                tab.session?.setFocused(false)
-                tab.session?.close()
-                tab.session = null
-                tab.needsReload = true
+            val visible = SessionBudgetPolicy.shouldRemainActive(tab.id, currentId, splitTabId)
+            tab.session?.let { session ->
+                // Deactivate background sessions instead of closing them and discarding page-local state.
+                session.setActive(visible)
+                session.setFocused(visible && tab.id == currentId)
             }
         }
         val activeTab = currentTab()
         pageStatus.text = when {
             activeTab?.isGuest == true -> "Guest Mode · temporary data"
             activeTab?.isPrivate == true -> "Private session"
-            else -> "Memory saver · up to 4 live tabs; sleeping tabs reload when reopened"
+            else -> "Memory saver · background tabs suspended; page state preserved"
         }
     }
 
@@ -645,7 +644,7 @@ class MainActivity : ComponentActivity() {
 
     private fun denyGuestAccess(feature: String): Boolean {
         if (currentTab()?.isGuest != true) return false
-        pageStatus.text = "Guest Mode · temporary data"
+        pageStatus.text = "Guest Mode Â· temporary data"
         toast("$feature is unavailable in Guest Mode")
         return true
     }
@@ -667,8 +666,8 @@ class MainActivity : ComponentActivity() {
         session.setActive(true)
         session.setFocused(true)
         addressBar.setText(tab.lastUrl)
-        tabLabel.text = (when { tab.isGuest -> "Guest tab"; tab.isPrivate -> "Private tab"; else -> "Tab" }) + " · ${index + 1}/${tabs.size}"
-        pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Normal session · ${tab.group}" }
+        tabLabel.text = (when { tab.isGuest -> "Guest tab"; tab.isPrivate -> "Private tab"; else -> "Tab" }) + " Â· ${index + 1}/${tabs.size}"
+        pageStatus.text = when { tab.isGuest -> "Guest Mode Â· temporary data"; tab.isPrivate -> "Private session"; else -> "Normal session Â· ${tab.group}" }
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
         enforceSessionBudget()
         persistTabs()
@@ -731,7 +730,7 @@ class MainActivity : ComponentActivity() {
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
         showBrowserPage()
         addressBar.setText(target)
-        pageStatus.text = when { tab.isGuest -> "Guest Mode · history disabled"; tab.isPrivate -> "Private browsing · history disabled"; else -> "Loading…" }
+        pageStatus.text = when { tab.isGuest -> "Guest Mode Â· history disabled"; tab.isPrivate -> "Private browsing Â· history disabled"; else -> "Loadingâ¦" }
         try {
             ensureSession(tab).loadUri(target)
             if (!tab.isPrivate && !tab.isGuest) addHistory(target)
@@ -760,12 +759,12 @@ class MainActivity : ComponentActivity() {
         val guestMode = currentTab()?.isGuest == true
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         if (guestMode) {
-            actions.addView(actionButton("＋ Guest") { createGuestTab() })
+            actions.addView(actionButton("ï¼ Guest") { createGuestTab() })
             actions.addView(actionButton("Exit Guest") { confirmExitGuestMode() })
         } else {
-            actions.addView(actionButton("＋ Normal") { createTab(false, HOME_URL) })
-            actions.addView(actionButton("＋ Private") { createTab(true, HOME_URL) })
-            actions.addView(actionButton("＋ Guest") { createGuestTab() })
+            actions.addView(actionButton("ï¼ Normal") { createTab(false, HOME_URL) })
+            actions.addView(actionButton("ï¼ Private") { createTab(true, HOME_URL) })
+            actions.addView(actionButton("ï¼ Guest") { createGuestTab() })
             actions.addView(actionButton("Exit Guest") { closeGuestTabs() })
             actions.addView(actionButton("Save session") { saveNamedSession() })
             actions.addView(actionButton("Workspaces") { showSavedWorkspaces() })
@@ -786,7 +785,7 @@ class MainActivity : ComponentActivity() {
             grouped.forEach { (groupName, groupIndices) ->
                 val groupKey = "$label::$groupName"
                 val groupHeading = TextView(this).apply {
-                    text = (if (groupKey in collapsedGroups) "▸ " else "▾ ") + "$groupName (${groupIndices.size})"
+                    text = (if (groupKey in collapsedGroups) "â¸ " else "â¾ ") + "$groupName (${groupIndices.size})"
                     textSize = 12f; typeface = Typeface.DEFAULT_BOLD; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 12, 8, 10)
                     setOnClickListener { if (!collapsedGroups.add(groupKey)) collapsedGroups.remove(groupKey); tabDialog?.dismiss(); showTabs() }
                 }
@@ -813,7 +812,7 @@ class MainActivity : ComponentActivity() {
         addSection("GUEST TABS", guestIndices)
         scroll.addView(grid)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        tabDialog = AlertDialog.Builder(this).setTitle(if (guestMode) "Guest tabs · ${guestIndices.size}" else "Tabs · ${tabs.size}")
+        tabDialog = AlertDialog.Builder(this).setTitle(if (guestMode) "Guest tabs Â· ${guestIndices.size}" else "Tabs Â· ${tabs.size}")
             .setView(content).setNegativeButton("Done", null).create()
         tabDialog?.show()
     }
@@ -934,7 +933,7 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Saved workspaces")) return
         val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
         if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
-        val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " · long-press to delete" }
+        val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " Â· long-press to delete" }
         val list = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels) }
         val dialog = AlertDialog.Builder(this).setTitle("Saved workspaces").setView(list).setNegativeButton("Close", null).create()
         list.setOnItemClickListener { _, _, which, _ ->
@@ -1034,7 +1033,7 @@ class MainActivity : ComponentActivity() {
         val scroll = ScrollView(this).apply { addView(list) }
         content.addView(search)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val dialog = AlertDialog.Builder(this).setTitle("Bookmarks · ${items.size}").setView(content)
+        val dialog = AlertDialog.Builder(this).setTitle("Bookmarks Â· ${items.size}").setView(content)
             .setPositiveButton("New folder") { _, _ -> createBookmarkFolder() }
             .setNeutralButton("Import / export") { _, _ -> showBookmarkTransfer() }
             .setNegativeButton("Close", null).create()
@@ -1046,7 +1045,7 @@ class MainActivity : ComponentActivity() {
                 list.addView(TextView(this).apply { text = "$folder (${entries.size})"; setTextColor(0xFFD8CBE8.toInt()); textSize = 12f; setPadding(8, 12, 8, 5); typeface = Typeface.DEFAULT_BOLD })
                 entries.forEach { entry ->
                     list.addView(TextView(this).apply {
-                        text = "★  ${entry.title}\n${entry.url}"; textSize = 13f; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 10, 8, 10)
+                        text = "â  ${entry.title}\n${entry.url}"; textSize = 13f; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 10, 8, 10)
                         setOnClickListener { dialog.dismiss(); navigate(entry.url) }
                         setOnLongClickListener { showBookmarkActions(entry); true }
                     })
@@ -1149,7 +1148,7 @@ class MainActivity : ComponentActivity() {
         val search = EditText(this).apply { hint = "Search history"; isSingleLine = true }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(search); content.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        val dialog = AlertDialog.Builder(this).setTitle("History · ${items.size}").setView(content)
+        val dialog = AlertDialog.Builder(this).setTitle("History Â· ${items.size}").setView(content)
             .setNeutralButton("Clear history") { _, _ -> clearBrowsingHistory(); toast("Browsing history cleared") }
             .setNegativeButton("Close", null).create()
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
@@ -1192,7 +1191,7 @@ class MainActivity : ComponentActivity() {
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
         requestDownloadNotificationPermission()
-        runCatching { novaDownloads.enqueue(url); toast("Download started · resumable") }
+        runCatching { novaDownloads.enqueue(url); toast("Download started Â· resumable") }
             .onFailure { toast("Download could not start: ${it?.localizedMessage ?: "Unknown error"}") }
     }
 
@@ -1200,7 +1199,7 @@ class MainActivity : ComponentActivity() {
         if (!::pageStatus.isInitialized || items.isEmpty()) return
         val active = items.count { it.state == "RUNNING" || it.state == "QUEUED" || it.state == "FINALIZING" }
         if (active > 0 && currentTab()?.isPrivate != true && currentTab()?.isGuest != true) {
-            pageStatus.text = "Downloads · $active active"
+            pageStatus.text = "Downloads Â· $active active"
         }
     }
 
@@ -1210,18 +1209,18 @@ class MainActivity : ComponentActivity() {
         if (items.isEmpty()) { downloadPrompt(); return }
         val rows = items.map { item ->
             val state = when (item.state) {
-                "RUNNING" -> "Downloading · ${item.progressLabel()}"
+                "RUNNING" -> "Downloading Â· ${item.progressLabel()}"
                 "QUEUED" -> "Queued"
-                "PAUSED" -> "Paused · ${item.progressLabel()}"
-                "FINALIZING", "SAVING" -> "Saving to Downloads… · ${item.progressLabel()}"
-                "INTERRUPTED" -> "Interrupted · download again from the page"
-                "COMPLETE" -> "Complete · ${item.progressLabel()}"
-                "FAILED" -> "Failed · ${item.error}"
+                "PAUSED" -> "Paused Â· ${item.progressLabel()}"
+                "FINALIZING", "SAVING" -> "Saving to Downloadsâ¦ Â· ${item.progressLabel()}"
+                "INTERRUPTED" -> "Interrupted Â· download again from the page"
+                "COMPLETE" -> "Complete Â· ${item.progressLabel()}"
+                "FAILED" -> "Failed Â· ${item.error}"
                 else -> item.state
             }
             "${item.fileName}\n$state"
         }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Nova Downloads · ${items.size}")
+        AlertDialog.Builder(this).setTitle("Nova Downloads Â· ${items.size}")
             .setItems(rows) { _, which -> showDownloadActions(items[which]) }
             .setPositiveButton("New download") { _, _ -> downloadPrompt() }
             .setNeutralButton("Refresh", null)
@@ -1240,8 +1239,8 @@ class MainActivity : ComponentActivity() {
         }
         AlertDialog.Builder(this).setTitle(item.fileName).setItems(actions) { _, which ->
             when (actions[which]) {
-                "Pause" -> { novaDownloads.pause(item.id); toast("Pausing download…") }
-                "Resume" -> { novaDownloads.resume(item.id); toast("Resuming with HTTP Range when supported…") }
+                "Pause" -> { novaDownloads.pause(item.id); toast("Pausing downloadâ¦") }
+                "Resume" -> { novaDownloads.resume(item.id); toast("Resuming with HTTP Range when supportedâ¦") }
                 "Cancel" -> { novaDownloads.cancel(item.id); toast("Download cancelled") }
                 "Open file" -> openDownloadedFile(item)
                 "Remove from list" -> novaDownloads.cancel(item.id)
@@ -1319,7 +1318,7 @@ class MainActivity : ComponentActivity() {
         )
         var source = detectedPageLanguages[tab.id] ?: "en"
         val sourceIndex = languages.indexOfFirst { it.second == source }.let { if (it >= 0) it else 0 }
-        AlertDialog.Builder(this).setTitle("Translate from · detected ${source}")
+        AlertDialog.Builder(this).setTitle("Translate from Â· detected ${source}")
             .setItems((listOf("Use detected ($source)") + languages.map { it.first }).toTypedArray()) { _, fromIndex ->
                 if (fromIndex > 0) source = languages[fromIndex - 1].second
                 AlertDialog.Builder(this).setTitle("Translate to")
@@ -1328,11 +1327,11 @@ class MainActivity : ComponentActivity() {
                         if (source == target) { toast("Choose two different languages"); return@setItems }
                         val translation = tab.session?.sessionTranslation
                         if (translation == null) { toast("GeckoView translation is unavailable for this session"); return@setItems }
-                        toast("Preparing translation models…")
+                        toast("Preparing translation modelsâ¦")
                         translation.translate(source, target,
                             TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
                         ).accept(
-                            { runOnUiThread { toast("Translation started · $source → $target") } },
+                            { runOnUiThread { toast("Translation started Â· $source â $target") } },
                             { error -> runOnUiThread { toast("Translation unavailable: ${error?.localizedMessage ?: "language model not supported"}") } }
                         )
                     }.setNegativeButton("Cancel", null).show()
@@ -1383,7 +1382,7 @@ class MainActivity : ComponentActivity() {
         activeIndex = tabs.indexOfFirst { it.id == activeIdBeforeClose }.takeIf { it >= 0 } ?: (activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0))
         cleanupGuestContextIfIdle()
         if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex.coerceIn(tabs.indices))
-        toast("Guest session closed · cookies and site data cleared")
+        toast("Guest session closed Â· cookies and site data cleared")
     }
 
     private fun chooseSearchEngine() {
@@ -1392,7 +1391,7 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this).setTitle("Default search engine")
             .setSingleChoiceItems(engines, engines.indexOf(searchEngine)) { dialog, which ->
                 searchEngine = engines[which]
-                searchEngineButton.text = "$searchEngine ▾"
+                searchEngineButton.text = "$searchEngine â¾"
                 searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
                 prefs.edit().putString("search_engine", searchEngine).apply()
                 dialog.dismiss(); toast("$searchEngine selected")
@@ -1418,9 +1417,9 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<WebExtension.PermissionPromptResponse>()
                 val detail = buildString {
                     append("Extension ID: ").append(extension.id)
-                    if (permissions.isNotEmpty()) append("\\n\\nPermissions:\\n• ").append(permissions.joinToString("\\n• "))
-                    if (origins.isNotEmpty()) append("\\n\\nWebsite access:\\n• ").append(origins.joinToString("\\n• "))
-                    if (dataCollectionPermissions.isNotEmpty()) append("\\n\\nData collection requested:\\n• ").append(dataCollectionPermissions.joinToString("\\n• "))
+                    if (permissions.isNotEmpty()) append("\\n\\nPermissions:\\nâ¢ ").append(permissions.joinToString("\\nâ¢ "))
+                    if (origins.isNotEmpty()) append("\\n\\nWebsite access:\\nâ¢ ").append(origins.joinToString("\\nâ¢ "))
+                    if (dataCollectionPermissions.isNotEmpty()) append("\\n\\nData collection requested:\\nâ¢ ").append(dataCollectionPermissions.joinToString("\\nâ¢ "))
                     append("\\n\\nPrivate browsing access and optional data collection remain disabled.")
                 }
                 runOnUiThread {
@@ -1445,8 +1444,8 @@ class MainActivity : ComponentActivity() {
         val current = NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD"))
         val tab = currentTab()
         val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log")
-        AlertDialog.Builder(this).setTitle("Nova Shield · ${current.name}")
+        val items = arrayOf("Off", "Standard Â· recommended", "Aggressive Â· may break sites", "Allow trackers on this site", "Show this page's protection log")
+        AlertDialog.Builder(this).setTitle("Nova Shield Â· ${current.name}")
             .setItems(items) { _, which ->
                 when (which) {
                     0, 1, 2 -> {
@@ -1460,14 +1459,14 @@ class MainActivity : ComponentActivity() {
                         if (permission == null) { toast("Open a website first; site tracking controls are not available on this page"); return@setItems }
                         val allow = permission.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                         runtime.storageController.setPermission(permission, if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
-                        toast(if (allow) "Trackers allowed for $host · reload the page" else "Tracking protection restored for $host · reload the page")
+                        toast(if (allow) "Trackers allowed for $host Â· reload the page" else "Tracking protection restored for $host Â· reload the page")
                         tab.session?.reload()
                     }
                     4 -> {
                         val session = tab?.session
                         if (session == null) { toast("Open a page first"); return@setItems }
                         runtime.getContentBlockingController().getLog(session).accept({ entries ->
-                            runOnUiThread { AlertDialog.Builder(this).setTitle("Nova Shield · $host")
+                            runOnUiThread { AlertDialog.Builder(this).setTitle("Nova Shield Â· $host")
                                 .setMessage("${entries?.size ?: 0} content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
                                 .setPositiveButton("OK", null).show() }
                         }, { error -> runOnUiThread { toast("Protection log unavailable: ${error?.localizedMessage ?: "Unknown error"}") } })
@@ -1495,7 +1494,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(12), dp(20), dp(12))
         }
         AlertDialog.Builder(this)
-            .setTitle("Protected DNS · AdGuard DNS")
+            .setTitle("Protected DNS Â· AdGuard DNS")
             .setMessage("When enabled, Nova's GeckoView browser engine sends DNS lookups to AdGuard over DNS-over-HTTPS. Strict mode does not fall back to unencrypted DNS if the resolver is unavailable.\n\nThis protects DNS lookups made by Nova only. It is not a VPN, does not hide your IP address, and does not change DNS for other apps or Android itself.")
             .setView(check)
             .setPositiveButton("Save") { _, _ ->
@@ -1517,7 +1516,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
-            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
+            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings â Network & internet â VPN â Orbot â Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
             .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
             .setNegativeButton("Cancel", null).show()
     }
@@ -1527,11 +1526,11 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this).setTitle("Choose browser AI")
             .setItems(providers.map { it.label }.toTypedArray()) { _, selected ->
                 val provider = providers[selected]
-                val prompt = EditText(this).apply { hint = "Ask ${provider.label} anything…"; minLines = 2; setSingleLine(false) }
+                val prompt = EditText(this).apply { hint = "Ask ${provider.label} anythingâ¦"; minLines = 2; setSingleLine(false) }
                 val includePage = CheckBox(this).apply { text = "Include current page URL in the prompt"; isChecked = false }
                 val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 0); addView(prompt); addView(includePage) }
                 AlertDialog.Builder(this).setTitle("Ask ${provider.label}")
-                    .setMessage("Your prompt will be sent to ${provider.label} when you press Send. If you enable the checkbox, Nova also includes only the current page URL—not the page contents.")
+                    .setMessage("Your prompt will be sent to ${provider.label} when you press Send. If you enable the checkbox, Nova also includes only the current page URLânot the page contents.")
                     .setView(content)
                     .setPositiveButton("Send") { _, _ ->
                         val question = prompt.text.toString().trim()
@@ -1550,8 +1549,8 @@ class MainActivity : ComponentActivity() {
         controller.list().accept({ extensions ->
             runOnUiThread {
                 val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
-                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
+                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} Â· ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+                AlertDialog.Builder(this).setTitle("Nova Add-ons Â· ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
                     .setItems(rows) { _, which ->
                         val extension = installed[which]
                         val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
@@ -1574,7 +1573,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun installExtensionPrompt() {
-        val input = EditText(this).apply { hint = "https://…/extension.xpi"; setSingleLine(true) }
+        val input = EditText(this).apply { hint = "https://â¦/extension.xpi"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Install signed extension")
             .setMessage("Enter an HTTPS .xpi URL. GeckoView verifies Mozilla signing and asks before granting permissions.")
             .setView(input).setPositiveButton("Install") { _, _ ->
@@ -1588,9 +1587,9 @@ class MainActivity : ComponentActivity() {
     private fun showPasswordVault() {
         if (denyGuestAccess("Password vault")) return
         val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it?.localizedMessage ?: "Unknown error"}"); return }
-        val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} · ${it.username}" }.toTypedArray()
+        val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} Â· ${it.username}" }.toTypedArray()
         val labels = rows + "Add login manually"
-        AlertDialog.Builder(this).setTitle("Encrypted password vault · ${entries.size}")
+        AlertDialog.Builder(this).setTitle("Encrypted password vault Â· ${entries.size}")
             .setItems(labels) { _, which ->
                 if (which == entries.size) { addManualLogin(); return@setItems }
                 val entry = entries[which]
@@ -1628,7 +1627,7 @@ class MainActivity : ComponentActivity() {
     private fun copyToClipboard(label: String, value: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
-        toast("$label copied · clear your clipboard when finished")
+        toast("$label copied Â· clear your clipboard when finished")
     }
 
     private fun showSiteControls() {
@@ -1648,16 +1647,16 @@ class MainActivity : ComponentActivity() {
             GeckoSession.PermissionDelegate.PERMISSION_LOCAL_NETWORK_ACCESS to "Local network",
             GeckoSession.PermissionDelegate.PERMISSION_LOCAL_DEVICE_ACCESS to "Local device"
         )
-        val rows = perms.map { "${permissionNames[it.permission] ?: "Permission ${it.permission}"} · ${when (it.value) { GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"; GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"; else -> "Ask" }}" }.toTypedArray()
+        val rows = perms.map { "${permissionNames[it.permission] ?: "Permission ${it.permission}"} Â· ${when (it.value) { GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"; GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"; else -> "Ask" }}" }.toTypedArray()
         val options = rows + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
-        AlertDialog.Builder(this).setTitle("Site controls · $host")
+        AlertDialog.Builder(this).setTitle("Site controls Â· $host")
             .setItems(options) { _, which ->
                 when {
                     which < perms.size -> {
                         val perm = perms[which]
                         val next = if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY else GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                         runtime.storageController.setPermission(perm, next)
-                        toast("Site permission updated · reload the page")
+                        toast("Site permission updated Â· reload the page")
                     }
                     which == perms.size -> showShieldSettings()
                     else -> AlertDialog.Builder(this).setMessage("Clear cookies, caches, and site storage for $host? Other sites are not affected.")
@@ -1673,7 +1672,7 @@ class MainActivity : ComponentActivity() {
         val factors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
         val labels = arrayOf("90%", "100%", "115%", "130%", "150%")
         val selected = prefs.getInt("font_scale_index", 1).coerceIn(factors.indices)
-        AlertDialog.Builder(this).setTitle("Accessibility · page text size")
+        AlertDialog.Builder(this).setTitle("Accessibility Â· page text size")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
                 prefs.edit().putInt("font_scale_index", which).apply()
                 runtime.settings.setFontSizeFactor(factors[which])
@@ -1698,13 +1697,13 @@ class MainActivity : ComponentActivity() {
         if (currentTab()?.isGuest == true) {
             AlertDialog.Builder(this).setTitle("Guest Mode settings")
                 .setMessage("Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden while Guest Mode is active.")
-                .setPositiveButton("Tor routing · Orbot") { _, _ -> openOrbotTorRouting() }
+                .setPositiveButton("Tor routing Â· Orbot") { _, _ -> openOrbotTorRouting() }
                 .setNegativeButton("Exit Guest Mode") { _, _ -> confirmExitGuestMode() }
                 .setNeutralButton("Close", null).show()
             return
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "VPN & Firewall · 1VPN")
+        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS Â· AdGuard DNS", "VPN & Firewall Â· 1VPN")
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
@@ -1738,7 +1737,7 @@ class MainActivity : ComponentActivity() {
                 10 -> showSiteControls()
                 11 -> showAccessibilitySettings()
                 12 -> exportHistory()
-                13 -> AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
+                13 -> AlertDialog.Builder(this).setMessage("Nova Browser Â· GeckoView engine")
                     .setPositiveButton("OK", null).show()
                 14 -> showCloudAccount()
                 15 -> showProtectedDnsSettings()
@@ -1756,7 +1755,7 @@ class MainActivity : ComponentActivity() {
             AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
                 .setView(input).setPositiveButton("Send code") { _, _ ->
                     val address = input.text.toString().trim()
-                    toast("Requesting sign-in code…")
+                    toast("Requesting sign-in codeâ¦")
                     Thread {
                         runCatching { cloudSync.sendEmailOtp(address) }
                             .onSuccess { runOnUiThread { showCloudOtp(address) } }
@@ -1771,7 +1770,7 @@ class MainActivity : ComponentActivity() {
         val syncError = prefs.getString("cloud_sync_last_error", null)
         val check = CheckBox(this).apply { text = "Allow encrypted cloud sync from this device"; isChecked = enabled; setPadding(24, 12, 24, 12) }
         val syncMessage = "Your sync data is encrypted before upload. The passphrase is never sent to Nova or Supabase and is stored only as Android-Keystore-protected ciphertext on this device after the first successful sync. Passwords, bookmarks, history and saved workspaces are included; private and Guest data is excluded.\n\nAutomatic sync: every 6 hours when a network is available.\nLast successful sync: $lastSyncText" + if (!syncError.isNullOrBlank()) "\nLast sync issue: $syncError" else ""
-        AlertDialog.Builder(this).setTitle("Nova Cloud · $email").setMessage(syncMessage)
+        AlertDialog.Builder(this).setTitle("Nova Cloud Â· $email").setMessage(syncMessage)
             .setView(check).setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("cloud_sync_enabled", check.isChecked).apply()
                 if (check.isChecked) showSyncPassphrase() else {
@@ -1795,7 +1794,7 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the six-digit code sent to $email")
             .setView(input).setPositiveButton("Verify") { _, _ ->
                 val code = input.text.toString().trim()
-                toast("Verifying code…")
+                toast("Verifying codeâ¦")
                 Thread {
                     runCatching { cloudSync.verifyEmailOtp(email, code) }
                         .onSuccess { runOnUiThread { toast("Signed in to Nova Cloud"); showCloudAccount() } }
@@ -1815,7 +1814,7 @@ class MainActivity : ComponentActivity() {
             .setView(input).setPositiveButton("Sync now") { _, _ ->
                 val passphrase = input.text.toString().toCharArray()
                 if (passphrase.size < 10) { passphrase.fill('\u0000'); toast("Passphrase must be at least 10 characters"); return@setPositiveButton }
-                toast("Downloading, merging and encrypting your data…")
+                toast("Downloading, merging and encrypting your dataâ¦")
                 Thread { performCloudSync(passphrase) }.start()
             }.setNegativeButton("Cancel", null).show()
     }
@@ -1866,7 +1865,7 @@ class MainActivity : ComponentActivity() {
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
         runtime.settings.setForceUserScalableEnabled(true)
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
-        searchEngineButton.text = "$searchEngine ▾"
+        searchEngineButton.text = "$searchEngine â¾"
     }
 
     private fun JSONArray?.toStringSet(): Set<String> {
