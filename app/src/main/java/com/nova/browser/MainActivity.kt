@@ -848,11 +848,15 @@ class MainActivity : ComponentActivity() {
             override fun onVisited(
                 session: GeckoSession,
                 url: String,
-                lastVisitedURL: String,
+                lastVisitedURL: String?,
                 flags: Int
             ): GeckoResult<Boolean> {
                 val tab = tabs.firstOrNull { it.session === session }
-                if (tab != null && !tab.isPrivate && !tab.isGuest) addHistory(url)
+                val redirectSource = flags and (
+                    GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE or
+                        GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE_PERMANENT
+                    ) != 0
+                if (!redirectSource && tab != null && !tab.isPrivate && !tab.isGuest) addHistory(url)
                 return GeckoResult.fromValue(true)
             }
 
