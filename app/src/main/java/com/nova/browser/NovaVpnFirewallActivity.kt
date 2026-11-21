@@ -28,7 +28,7 @@ open class NovaVpnFirewallActivity : Activity() {
         }
         root.addView(TextView(this).apply { text = "1VPN browser proxy"; textSize = 22f })
         root.addView(TextView(this).apply {
-            text = "Routes Nova browser traffic only. It is not a full-device VPN."
+            text = "Browser proxy only—not an Android VPN. Coverage and leak protection are not yet verified; do not rely on it as a kill switch."
             textSize = 14f
             setPadding(0, 12, 0, 20)
         })

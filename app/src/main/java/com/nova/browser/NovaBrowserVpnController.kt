@@ -90,7 +90,7 @@ object NovaBrowserVpnController {
                                         if (nativePort === port) nativePort = null
                                         closeCredentialBootstrap()
                                         if (isVpnEnabled()) CefriumVpnController.updateCredentials(null)
-                                        preferences?.edit()?.putString("nova_vpn_status", "Proxy bridge disconnected; Cefrium remains fail-closed")?.apply()
+                                        preferences?.edit()?.putString("nova_vpn_status", "Proxy bridge disconnected; Cefrium uses its fail-closed proxy target, but GeckoView routing is not verified")?.apply()
                                         statusListener?.invoke()
                                     }
                                 })

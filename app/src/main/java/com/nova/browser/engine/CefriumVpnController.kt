@@ -50,7 +50,7 @@ object CefriumVpnController {
                 it.username.isNotBlank() && it.password.isNotBlank()
         }
         applyAllProfiles()
-        publish(if (credentials == null) "1VPN configuration unavailable; Cefrium traffic is blocked"
+        publish(if (credentials == null) "1VPN credentials unavailable; Cefrium is assigned a fail-closed proxy target (tunnel not verified)"
             else "1VPN proxy configured · " + credentials!!.location.uppercase())
     }
 
@@ -104,7 +104,7 @@ object CefriumVpnController {
             }
         }
         if (!proxyApplied || !rtcProtected) {
-            publish("Cefrium rejected 1VPN proxy or WebRTC protection; traffic is blocked")
+            publish("Cefrium rejected 1VPN proxy or WebRTC protection; routing is not verified and may be unprotected")
         }
     }
 

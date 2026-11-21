@@ -12,6 +12,13 @@ class CefriumVpnControllerTest {
         CefriumVpnController.updateCredentials(null)
     }
 
+    @Test fun missingCredentialsNeverReportsAnActiveProxy() {
+        CefriumVpnController.setEnabled(true)
+        CefriumVpnController.updateCredentials(null)
+        assertTrue(CefriumVpnController.statusText().contains("fail-closed proxy target"))
+        assertFalse(CefriumVpnController.statusText().contains("proxy configured"))
+    }
+
     @Test fun matchingProxyChallengeReceivesExtensionCredentials() {
         CefriumVpnController.setEnabled(true)
         CefriumVpnController.updateCredentials(
