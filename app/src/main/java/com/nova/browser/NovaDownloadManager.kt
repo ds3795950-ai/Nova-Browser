@@ -37,7 +37,7 @@ class NovaDownloadManager(
         val savedUri: String = "",
         val error: String = ""
     ) {
-        fun progressLabel(): String = if (total > 0) "${(downloaded * 100 / total).coerceIn(0, 100)}% · ${formatBytes(downloaded)} / ${formatBytes(total)}" else "${formatBytes(downloaded)} downloaded"
+        fun progressLabel(): String = if (total > 0) "${(downloaded * 100 / total).coerceIn(0, 100)}% Â· ${formatBytes(downloaded)} / ${formatBytes(total)}" else "${formatBytes(downloaded)} downloaded"
     }
 
     private data class Running(
@@ -49,7 +49,7 @@ class NovaDownloadManager(
     )
 
     private val prefs = context.getSharedPreferences("nova_downloads", Context.MODE_PRIVATE)
-    private val executor = Executors.newCachedThreadPool()
+    private val executor = Executors.newFixedThreadPool(MAX_CONCURRENT_DOWNLOADS)
     private val running = ConcurrentHashMap<String, Running>()
     private val records = LinkedHashMap<String, Item>()
 
@@ -144,17 +144,16 @@ class NovaDownloadManager(
         NovaDownloadService.update(context, running.size)
     }
 
-    private fun transfer(worker: Running) {
-        val id = worker.item.id
-        try {
-            val part = partial(id)
-            part.parentFile?.mkdirs()
-            var offset = part.length()
-            var connection = URL(worker.item.url).openConnection() as HttpURLConnection
+    private fun openConnection(worker: Running, offset: Long): HttpURLConnection {
+        var target = URL(worker.item.url)
+        repeat(MAX_REDIRECTS + 1) { redirectCount ->
+            if (worker.cancel.get() || worker.pause.get()) throw java.io.IOException("Download interrupted")
+            require(target.protocol == "http" || target.protocol == "https") { "Only HTTP(S) redirects are supported" }
+            val connection = target.openConnection() as HttpURLConnection
             worker.connection = connection
-            connection.instanceFollowRedirects = true
-            connection.connectTimeout = 20000
-            connection.readTimeout = 30000
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = READ_TIMEOUT_MS
             connection.setRequestProperty("User-Agent", "NovaBrowser/0.2 GeckoView")
             if (offset > 0) {
                 connection.setRequestProperty("Range", "bytes=$offset-")
@@ -162,6 +161,30 @@ class NovaDownloadManager(
                 if (validator.isNotBlank()) connection.setRequestProperty("If-Range", validator)
             }
             connection.connect()
+            val code = connection.responseCode
+            if (code !in 300..399) return connection
+            val location = connection.getHeaderField("Location")
+            connection.disconnect()
+            if (redirectCount == MAX_REDIRECTS) throw java.io.IOException("Too many redirects")
+            if (location.isNullOrBlank()) throw java.io.IOException("Redirect response did not include a destination")
+            target = URL(target, location)
+        }
+        throw java.io.IOException("Too many redirects")
+    }
+
+    private fun ensureAvailableSpace(part: File, bytesNeeded: Long) {
+        val available = part.parentFile?.usableSpace ?: context.filesDir.usableSpace
+        val required = bytesNeeded.coerceAtLeast(0L) + MIN_FREE_SPACE_BYTES
+        if (available < required) throw java.io.IOException("Not enough free storage space to continue this download")
+    }
+
+    private fun transfer(worker: Running) {
+        val id = worker.item.id
+        try {
+            val part = partial(id)
+            part.parentFile?.mkdirs()
+            var offset = part.length()
+            var connection = openConnection(worker, offset)
             var code = connection.responseCode
             if (code !in 200..299) throw IllegalStateException("Server returned HTTP $code")
             val contentRange = DownloadProtocol.parseContentRange(connection.getHeaderField("Content-Range"))
@@ -182,6 +205,7 @@ class NovaDownloadManager(
                 else -> worker.item.total
             }
             worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified)
+            if (total > 0) ensureAvailableSpace(part, (total - offset).coerceAtLeast(0))
             put(worker.item)
             connection.inputStream.use { input ->
                 FileOutputStream(part, offset > 0).use { output ->
@@ -191,6 +215,7 @@ class NovaDownloadManager(
                         if (worker.cancel.get() || worker.pause.get()) break
                         val count = input.read(buffer)
                         if (count < 0) break
+                        ensureAvailableSpace(part, count.toLong())
                         output.write(buffer, 0, count)
                         val now = System.currentTimeMillis()
                         if (now - lastUpdate >= 500) {
@@ -252,6 +277,7 @@ class NovaDownloadManager(
                         while (!worker.cancel.get()) {
                             val count = input.read(buffer)
                             if (count < 0) break
+                            ensureAvailableSpace(part, count.toLong())
                             output.write(buffer, 0, count)
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate >= 500) {
@@ -317,6 +343,12 @@ class NovaDownloadManager(
     private fun sanitize(value: String): String = DownloadProtocol.safeFileName(value)
 
     companion object {
+        private const val MAX_CONCURRENT_DOWNLOADS = 3
+        private const val MAX_REDIRECTS = 5
+        private const val CONNECT_TIMEOUT_MS = 20_000
+        private const val READ_TIMEOUT_MS = 30_000
+        private const val MIN_FREE_SPACE_BYTES = 1L * 1024 * 1024
+
         fun formatBytes(bytes: Long): String = when {
             bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
             bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))

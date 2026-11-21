@@ -583,7 +583,9 @@ class MainActivity : ComponentActivity() {
                     return
                 }
                 if (body == null) { toast("This download has no readable response body"); return }
-                val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
+                val disposition = response.headers.entries.firstOrNull { it.key.equals("Content-Disposition", true) }?.value
+                val rawName = DownloadProtocol.fileNameFromContentDisposition(disposition)
+                    ?: response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
                 requestDownloadNotificationPermission()
                 novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))

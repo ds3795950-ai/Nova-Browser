@@ -1,5 +1,7 @@
 package com.nova.browser
 
+import java.net.URLDecoder
+
 /** Pure validation and filename rules shared by the download pipeline and JVM tests. */
 object DownloadProtocol {
     data class ContentRange(val start: Long, val end: Long, val total: Long?)
@@ -12,6 +14,22 @@ object DownloadProtocol {
         val total = match.groupValues[3].takeUnless { it == "*" }?.toLongOrNull()
         if (end < start || (total != null && (total <= end || total <= 0))) return null
         return ContentRange(start, end, total)
+    }
+
+    fun fileNameFromContentDisposition(header: String?): String? {
+        if (header.isNullOrBlank()) return null
+        val extended = Regex("filename\\*\\s*=\\s*([^;]+)", RegexOption.IGNORE_CASE)
+            .find(header)?.groupValues?.get(1)?.trim()?.trim('"', '\'')
+        val standard = Regex("filename\\s*=\\s*(?:\"([^\"]*)\"|([^;]*))", RegexOption.IGNORE_CASE)
+            .find(header)?.let { it.groupValues[1].ifBlank { it.groupValues[2] }.trim().trim('"', '\'') }
+        val decoded = when {
+            extended != null -> {
+                val encoded = extended.substringAfter("''", extended)
+                runCatching { URLDecoder.decode(encoded.replace("+", "%2B"), "UTF-8") }.getOrDefault(encoded)
+            }
+            else -> standard
+        } ?: return null
+        return safeFileName(decoded)
     }
 
     fun safeFileName(value: String): String {
