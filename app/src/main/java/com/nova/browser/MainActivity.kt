@@ -130,7 +130,7 @@ class MainActivity : ComponentActivity() {
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
-        runtime = GeckoRuntime.create(this)
+        runtime = sharedRuntime ?: GeckoRuntime.create(applicationContext).also { sharedRuntime = it }
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
@@ -319,6 +319,8 @@ class MainActivity : ComponentActivity() {
         }
         root.isFocusableInTouchMode = true
         setContentView(root)
+        root.applySystemBarPadding()
+        window.useLightSystemBarIcons()
         root.requestFocus()
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
     }
@@ -582,7 +584,8 @@ class MainActivity : ComponentActivity() {
                     return
                 }
                 if (body == null) { toast("This download has no readable response body"); return }
-                val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
+                val rawName = DownloadProtocol.fileNameFromResponse(response.uri, response.headers["Content-Disposition"] ?: response.headers["content-disposition"])
+                    .ifBlank { "nova-download-${System.currentTimeMillis()}" }
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
                 requestDownloadNotificationPermission()
                 novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
@@ -734,7 +737,6 @@ class MainActivity : ComponentActivity() {
         pageStatus.text = when { tab.isGuest -> "Guest Mode · history disabled"; tab.isPrivate -> "Private browsing · history disabled"; else -> "Loading…" }
         try {
             ensureSession(tab).loadUri(target)
-            if (!tab.isPrivate && !tab.isGuest) addHistory(target)
         } catch (error: Exception) {
             pageStatus.text = "Navigation error"
             toast("Could not open page: ${error?.localizedMessage ?: "Unknown error"}")
@@ -1125,7 +1127,7 @@ class MainActivity : ComponentActivity() {
 
     private fun addHistory(url: String) {
         if (url.isBlank() || url == HOME_URL) return
-        val items = readHistory().filterNot { it.url == url }.toMutableList()
+        val items = readHistory().sortedBy { it.visitedAt }.filterNot { it.url == url }.toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
         items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
         val array = JSONArray()
@@ -1784,7 +1786,7 @@ class MainActivity : ComponentActivity() {
                     cloudSync.signOut()
                     NovaAutoSync.cancel(this@MainActivity)
                     AutoSyncPassphraseStore.clear(this@MainActivity)
-                    prefs.edit().putBoolean("cloud_sync_enabled", false).apply()
+                    prefs.edit().putBoolean("cloud_sync_enabled", false).remove("cloud_sync_user_id").apply()
                     runOnUiThread { toast("Signed out. Local browsing data is unchanged.") }
                 }.start()
             }.setNegativeButton("Close", null).show()
@@ -1836,6 +1838,9 @@ class MainActivity : ComponentActivity() {
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
+            // Apply to the local vault first, off the UI thread and inside this try/catch, so a bad bundle
+            // can neither crash the app nor be uploaded.
+            passwordVault.importSyncBundle(mergedVault)
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             if (prefs.getBoolean("cloud_sync_enabled", false)) {
@@ -1844,7 +1849,6 @@ class MainActivity : ComponentActivity() {
             }
             runOnUiThread {
                 applySyncSnapshot(merged)
-                passwordVault.importSyncBundle(mergedVault)
                 prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
                 toast("Encrypted cloud sync completed")
             }
@@ -1954,13 +1958,15 @@ class MainActivity : ComponentActivity() {
         tabs.clear()
         if (::runtime.isInitialized) {
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
-            runtime.shutdown()
+            // Keep the process-wide GeckoRuntime alive. GeckoRuntime.create() throws if a runtime is still
+            // active, and shutdown() can terminate the process (also killing in-flight downloads).
         }
         super.onDestroy()
     }
 
     companion object {
         private const val HOME_URL = "about:blank"
+        @Volatile private var sharedRuntime: GeckoRuntime? = null
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
     }
 }

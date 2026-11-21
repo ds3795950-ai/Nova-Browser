@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 
@@ -88,7 +89,13 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
                 bottomMargin = dp(8)
             })
         }
-        setContentView(root)
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        setContentView(scroll)
+        scroll.applySystemBarPadding()
         NovaBrowserVpnController.setStatusListener { runOnUiThread { refreshStatus() } }
         refreshStatus()
     }

@@ -29,21 +29,29 @@ class NovaDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val count = (intent?.getIntExtra(EXTRA_COUNT, 1) ?: 1).coerceAtLeast(0)
+        val notification = buildNotification(maxOf(count, 1))
+        if (!foreground) {
+            // startForegroundService() requires startForeground() within seconds, even if we stop right away.
+            if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            else startForeground(NOTIFICATION_ID, notification)
+            foreground = true
+        }
         if (count == 0) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             return START_NOT_STICKY
         }
         activeCount = count
-        val notification = buildNotification(count)
-        if (!foreground) {
-            if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            else startForeground(NOTIFICATION_ID, notification)
-            foreground = true
-        } else if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
         }
         return START_NOT_STICKY
+    }
+
+    /** Android 15+ limits dataSync foreground services to 6 hours; stop cleanly instead of crashing the app. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
     }
 
     private fun buildNotification(count: Int): Notification {

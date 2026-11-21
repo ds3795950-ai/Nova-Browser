@@ -100,14 +100,16 @@ class PasswordVault(context: Context) {
         val entries = mutableListOf<Autocomplete.LoginEntry>()
         val metadata = JSONObject()
         for (i in 0 until credentials.length()) {
-            val item = credentials.getJSONObject(i)
-            val origin = item.getString("origin")
-            require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
-            val username = item.getString("username")
+            // Skip malformed remote entries instead of throwing: one bad entry must not block sync or crash the app.
+            val item = credentials.optJSONObject(i) ?: continue
+            val origin = item.optString("origin")
+            if (!(origin.startsWith("https://") || origin.startsWith("http://"))) continue
+            if (!item.has("username") || !item.has("password")) continue
+            val username = item.optString("username")
             val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
                 .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
-                .username(username).password(item.getString("password")).build()
+                .username(username).password(item.optString("password")).build()
             entries.add(entry)
             metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
         }
@@ -209,7 +211,7 @@ class PasswordVault(context: Context) {
             val merged = linkedMapOf<String, JSONObject>()
             for (source in listOf(remote.optJSONArray("credentials") ?: JSONArray(), local.optJSONArray("credentials") ?: JSONArray())) {
                 for (i in 0 until source.length()) {
-                    val item = source.getJSONObject(i)
+                    val item = source.optJSONObject(i) ?: continue
                     val key = item.optString("origin") + "|" + item.optString("username")
                     val previous = merged[key]
                     if (previous == null || item.optLong("updatedAt") >= previous.optLong("updatedAt")) merged[key] = item

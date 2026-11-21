@@ -32,6 +32,24 @@ class DownloadProtocolTest {
         assertEquals("report_.pdf", DownloadProtocol.safeFileName("report?.pdf"))
     }
 
+    @Test fun keepsNonAsciiLettersAndExtension() {
+        assertEquals("रिपोर्ट.pdf", DownloadProtocol.safeFileName("रिपोर्ट.pdf"))
+        val long = DownloadProtocol.safeFileName("a".repeat(200) + ".apk")
+        assertEquals(120, long.length)
+        assertEquals(true, long.endsWith(".apk"))
+    }
+
+    @Test fun fileNameFromResponsePrefersContentDisposition() {
+        assertEquals("report.pdf", DownloadProtocol.fileNameFromResponse("https://x.example/download?id=3", "attachment; filename=\"report.pdf\""))
+        assertEquals("ফাইল.txt", DownloadProtocol.fileNameFromResponse("https://x.example/d", "attachment; filename*=UTF-8''%E0%A6%AB%E0%A6%BE%E0%A6%87%E0%A6%B2.txt"))
+    }
+
+    @Test fun fileNameFromUrlDecodesAndIgnoresQuery() {
+        assertEquals("my file.zip", DownloadProtocol.fileNameFromResponse("https://x.example/a/my%20file.zip?next=/a/b#frag", null))
+        assertEquals("c++.zip", DownloadProtocol.fileNameFromResponse("https://x.example/c++.zip", null))
+        assertEquals("100%.zip", DownloadProtocol.fileNameFromResponse("https://x.example/100%.zip", null))
+    }
+
     @Test fun limitsFilenameLength() {
         assertEquals(120, DownloadProtocol.safeFileName("a".repeat(200)).length)
     }

@@ -41,7 +41,7 @@ internal object NovaSyncSnapshotRepository {
         val settings = JSONObject().put("search_engine", searchEngine ?: p.getString("search_engine", "Google"))
             .put("shield_mode", p.getString("shield_mode", "STANDARD"))
             .put("show_home_shortcuts", p.getBoolean("show_home_shortcuts", true))
-            .put("font_scale_index", p.getInt("font_scale_index", 2))
+            .put("font_scale_index", p.getInt("font_scale_index", 1))
             .put("desktop_sites", JSONArray(p.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
             .put("bookmark_folders", JSONArray(p.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
         val tombstones = runCatching { JSONObject(p.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
@@ -65,7 +65,7 @@ internal object NovaSyncSnapshotRepository {
         }
         val history = snapshot.optJSONArray("history") ?: JSONArray()
         val safeHistory = (0 until history.length()).mapNotNull { history.optJSONObject(it) }
-            .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && it.optLong("visitedAt") > snapshot.optLong("history_cleared_at", 0L) }
+            .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && (snapshot.optLong("history_cleared_at", 0L) == 0L || it.optLong("visitedAt") > snapshot.optLong("history_cleared_at", 0L)) }
             .sortedByDescending { it.optLong("visitedAt") }.take(500)
         val historyArray = JSONArray().also { array -> safeHistory.forEach { array.put(it) } }
         val workspaceSet = mutableSetOf<String>()
@@ -80,7 +80,7 @@ internal object NovaSyncSnapshotRepository {
             .putString("search_engine", settings.optString("search_engine", "Google"))
             .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
             .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
-            .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
+            .putInt("font_scale_index", settings.optInt("font_scale_index", 1))
             .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
             .putStringSet("bookmark_folders", settings.optJSONArray("bookmark_folders").toStringSet())
         editor.apply()
