@@ -2643,6 +2643,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         persistTabs()
+        activeExtensionPopup?.dismiss()
+        activeExtensionPopup = null
         pendingFilePrompt?.let { prompt -> pendingFileResult?.complete(prompt.dismiss()) }
         pendingFilePrompt = null
         pendingFileResult = null
