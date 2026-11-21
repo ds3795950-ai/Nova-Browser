@@ -263,6 +263,8 @@ class NovaCloudSync(context: Context) {
 
     private fun request(method: String, path: String, body: String?, bearer: String? = null, prefer: String? = null): String {
         val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+            // Never forward Supabase access or refresh tokens to a redirect target.
+            instanceFollowRedirects = false
             requestMethod = method
             connectTimeout = 20_000
             readTimeout = 30_000
