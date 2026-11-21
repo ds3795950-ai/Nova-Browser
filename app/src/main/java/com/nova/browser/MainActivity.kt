@@ -179,6 +179,17 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(incoming: Intent?) {
         val action = incoming?.action ?: return
+        val downloadId = incoming.getStringExtra(EXTRA_DOWNLOAD_ID)
+        if (action == ACTION_PAUSE_DOWNLOAD && !downloadId.isNullOrBlank()) {
+            novaDownloads.pause(downloadId)
+            toast("Download paused")
+            return
+        }
+        if (action == ACTION_CANCEL_DOWNLOAD && !downloadId.isNullOrBlank()) {
+            novaDownloads.cancel(downloadId)
+            toast("Download cancelled")
+            return
+        }
         val target = when (action) {
             Intent.ACTION_VIEW -> incoming.dataString
             Intent.ACTION_WEB_SEARCH -> incoming.getStringExtra(android.app.SearchManager.QUERY)
@@ -2159,6 +2170,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        const val ACTION_PAUSE_DOWNLOAD = "com.nova.browser.action.PAUSE_DOWNLOAD"
+        const val ACTION_CANCEL_DOWNLOAD = "com.nova.browser.action.CANCEL_DOWNLOAD"
+        const val EXTRA_DOWNLOAD_ID = "download_id"
         private const val MAX_BOOKMARK_IMPORT_BYTES = 5 * 1024 * 1024
         private const val MAX_BOOKMARK_IMPORT_COUNT = 10_000
         private const val MAX_URL_LENGTH_FOR_IMPORT = 2048

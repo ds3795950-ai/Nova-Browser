@@ -76,7 +76,7 @@ class NovaDownloadManager(
 
     private fun updateServiceNotification() {
         val active = running.values.firstOrNull { it.item.state in setOf("RUNNING", "SAVING", "FINALIZING") }?.item
-        NovaDownloadService.update(context, running.size, active?.fileName, active?.downloaded ?: 0L, active?.total ?: 0L)
+        NovaDownloadService.update(context, running.size, active?.fileName, active?.downloaded ?: 0L, active?.total ?: 0L, active?.id)
     }
 
     @Synchronized private fun persist() {
@@ -280,6 +280,7 @@ class NovaDownloadManager(
                 val uri = publish(part, worker.item.fileName, worker.item.mimeType)
                 worker.item = worker.item.copy(state = "COMPLETE", savedUri = uri.toString(), downloaded = part.length(), error = "")
                 put(worker.item)
+                NovaDownloadService.notifyResult(context, worker.item)
                 part.delete()
             }
         } catch (error: Exception) {
@@ -289,7 +290,10 @@ class NovaDownloadManager(
             } else if (!worker.cancel.get()) {
                 worker.item = worker.item.copy(downloaded = part.length(), state = "FAILED", error = error.message ?: "Download failed")
             }
-            if (!worker.cancel.get()) put(worker.item)
+            if (!worker.cancel.get()) {
+                put(worker.item)
+                if (worker.item.state == "FAILED") NovaDownloadService.notifyResult(context, worker.item)
+            }
         } finally {
             worker.connection?.disconnect()
             if (worker.cancel.get()) partial(id).delete()
@@ -339,13 +343,18 @@ class NovaDownloadManager(
                     val uri = publish(part, item.fileName, item.mimeType)
                     worker.item = worker.item.copy(downloaded = part.length(), state = "COMPLETE", savedUri = uri.toString())
                     put(worker.item)
+                    NovaDownloadService.notifyResult(context, worker.item)
                 }
             } catch (error: Exception) {
                 runCatching { stream.close() }
-                if (!worker.cancel.get()) put(worker.item.copy(
-                    state = if (worker.item.url.isBlank()) "INTERRUPTED" else "FAILED",
-                    error = error.message ?: "Could not save browser download"
-                ))
+                if (!worker.cancel.get()) {
+                    worker.item = worker.item.copy(
+                        state = if (worker.item.url.isBlank()) "INTERRUPTED" else "FAILED",
+                        error = error.message ?: "Could not save browser download"
+                    )
+                    put(worker.item)
+                    if (worker.item.state == "FAILED") NovaDownloadService.notifyResult(context, worker.item)
+                }
             } finally {
                 runCatching { stream.close() }
                 part.delete()
