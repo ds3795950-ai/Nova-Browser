@@ -205,12 +205,15 @@ class PasswordVault(context: Context) {
     }
 
     private fun validateLoginEntry(login: Autocomplete.LoginEntry) {
+        val guid = login.guid
+        val formActionOrigin = login.formActionOrigin
+        val httpRealm = login.httpRealm
         PasswordVaultValidation.validateWebOrigin(login.origin)
-        login.formActionOrigin?.takeIf { it.isNotBlank() }?.let { PasswordVaultValidation.validateWebOrigin(it) }
-        require(login.guid.isNullOrBlank() || login.guid!!.length <= 256) { "Saved login identifier is too long" }
+        formActionOrigin?.takeIf { it.isNotBlank() }?.let { PasswordVaultValidation.validateWebOrigin(it) }
+        require(guid.isNullOrBlank() || guid.length <= 256) { "Saved login identifier is too long" }
         require(login.username.length <= 4096) { "Saved login username is too long" }
         require(login.password.length <= 16_384) { "Saved login password is too long" }
-        require(login.httpRealm == null || login.httpRealm.length <= 4096) { "Saved login HTTP realm is too long" }
+        require(httpRealm == null || httpRealm.length <= 4096) { "Saved login HTTP realm is too long" }
     }
 
     private fun persist(entries: List<Autocomplete.LoginEntry>) {
