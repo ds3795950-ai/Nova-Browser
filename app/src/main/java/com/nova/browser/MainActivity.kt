@@ -2192,7 +2192,8 @@ class MainActivity : ComponentActivity() {
         session.setFocused(true)
         tab.lastAccess = System.nanoTime()
         addressBar.setText(url)
-        tabLabel.text = "Tab ${tabs.size}"
+        val modeTabs = tabs.filter { it.isPrivate == tab.isPrivate && it.isGuest == tab.isGuest }
+        tabLabel.text = "Tab ${modeTabs.indexOf(tab) + 1}/${modeTabs.size}"
         if (!geckoWillNavigate) session.loadUri(url)
         persistTabs()
         enforceSessionBudget()
