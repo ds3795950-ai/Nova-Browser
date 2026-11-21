@@ -199,8 +199,9 @@ class NovaCloudSync(context: Context) {
                 if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
                 if (status == 429 && attempt < MAX_RATE_LIMIT_ATTEMPTS - 1) {
-                    val retryAfter = connection.getHeaderField("Retry-After")?.toLongOrNull()
-                    val waitSeconds = (retryAfter ?: (1L shl attempt)).coerceIn(1L, MAX_RETRY_AFTER_SECONDS)
+                    val waitSeconds = CloudRetryPolicy.delaySeconds(
+                        connection.getHeaderField("Retry-After"), attempt
+                    ).coerceAtMost(MAX_RETRY_AFTER_SECONDS)
                     connection.disconnect()
                     Thread.sleep(waitSeconds * 1000L)
                     return@repeat
