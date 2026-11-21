@@ -1496,12 +1496,13 @@ class MainActivity : ComponentActivity() {
 
     private fun applyProtectedDns(enabled: Boolean) {
         if (!::runtime.isInitialized) return
-        if (enabled) {
-            runtime.settings.setTrustedRecursiveResolverUri(ADGUARD_DOH_ENDPOINT)
-            // ONLY mode intentionally has no system-DNS fallback if the encrypted resolver fails.
-            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_ONLY)
-        } else {
-            runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_OFF)
+        when (ProtectedDnsPolicy.mode(enabled)) {
+            ProtectedDnsMode.PREFER_HTTPS -> {
+                runtime.settings.setTrustedRecursiveResolverUri(ADGUARD_DOH_ENDPOINT)
+                // Prefer AdGuard DoH but fall back to the platform resolver if the endpoint is unavailable.
+                runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_FIRST)
+            }
+            ProtectedDnsMode.OFF -> runtime.settings.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_OFF)
         }
     }
 
