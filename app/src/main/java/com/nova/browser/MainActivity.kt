@@ -1977,9 +1977,19 @@ class MainActivity : ComponentActivity() {
             val remote = cloudSync.downloadEncrypted()
             val remoteSnapshot = remote.first
             val remoteVaultPayload = remote.second
-            val merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(local,
-                JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
-            val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
+            val decryptionCache = CloudCrypto.DecryptionKeyCache()
+            val merged: JSONObject
+            val remoteVault: JSONObject
+            try {
+                merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(
+                    local, JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase, decryptionCache))
+                )
+                remoteVault = remoteVaultPayload?.let {
+                    PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase, decryptionCache))
+                } ?: JSONObject()
+            } finally {
+                decryptionCache.clear()
+            }
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))

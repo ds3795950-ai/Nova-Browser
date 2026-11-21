@@ -43,21 +43,37 @@ internal object CloudCrypto {
         } finally { keyBytes.fill(0) }
     }
 
-    fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
+    class DecryptionKeyCache {
+        private val keys = mutableMapOf<String, ByteArray>()
+        @Synchronized internal fun getOrCreate(id: String, create: () -> ByteArray): ByteArray =
+            keys.getOrPut(id, create)
+        @Synchronized fun clear() {
+            keys.values.forEach { it.fill(0) }
+            keys.clear()
+        }
+    }
+
+    fun decrypt(envelope: JSONObject, passphrase: CharArray, cache: DecryptionKeyCache? = null): String {
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
-        require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
+        require(iterations in 100_000..400_000) { "Encryption work factor is outside Nova's safe limit" }
         val salt = unb64(envelope.getString("salt"))
         val iv = unb64(envelope.getString("iv"))
         require(salt.size == 16 && iv.size == 12) { "Invalid encrypted backup" }
-        val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
-        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        spec.clearPassword()
+        val cacheId = "$iterations:${b64(salt)}"
+        val createKey = {
+            val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
+            try { SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded }
+            finally { spec.clearPassword() }
+        }
+        val keyBytes = cache?.getOrCreate(cacheId, createKey) ?: createKey()
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
             String(cipher.doFinal(unb64(envelope.getString("ciphertext"))), Charsets.UTF_8)
-        } finally { keyBytes.fill(0) }
+        } finally {
+            if (cache == null) keyBytes.fill(0)
+        }
     }
 }
 
@@ -69,6 +85,9 @@ class NovaCloudSync(context: Context) {
         private const val BASE_URL = BuildConfig.SUPABASE_URL
         private const val API_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         private const val KEY_ALIAS = "nova.cloud.session.aes.v1"
+        private const val MAX_RATE_LIMIT_ATTEMPTS = 3
+        private const val MAX_RETRY_AFTER_SECONDS = 30L
+        private const val MAX_RESPONSE_CHARS = 2 * 1024 * 1024
     }
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
@@ -99,7 +118,7 @@ class NovaCloudSync(context: Context) {
     fun signedInUserId(): String? = runCatching { validSession()?.optString("user_id")?.takeIf { it.isNotBlank() } }.getOrNull()
 
     fun signOut() {
-        runCatching { validSession()?.let { request("POST", "/auth/v1/logout", "{}", it.getString("access_token")) } }
+        runCatching { validSession()?.let { request("POST", "/auth/v1/logout?scope=local", "{}", it.getString("access_token")) } }
         sessionFile.delete()
     }
 
@@ -123,7 +142,8 @@ class NovaCloudSync(context: Context) {
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
-        val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
+        val encodedUserId = java.net.URLEncoder.encode(userId, "UTF-8")
+        val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$encodedUserId", null, token)
         val rows = org.json.JSONArray(result)
         if (rows.length() == 0) {
             if (column == "snapshot") snapshotVersion = null else vaultVersion = null
@@ -164,27 +184,49 @@ class NovaCloudSync(context: Context) {
     }
 
     private fun request(method: String, path: String, body: String?, bearer: String? = null, prefer: String? = null): String {
-        val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 20_000
-            readTimeout = 30_000
-            setRequestProperty("apikey", API_KEY)
-            if (bearer != null) setRequestProperty("Authorization", "Bearer $bearer")
-            setRequestProperty("Accept", "application/json")
-            if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
-            if (prefer != null) setRequestProperty("Prefer", prefer)
-        }
-        try {
-            if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) {
-                val message = runCatching { JSONObject(response).optString("msg").ifBlank { JSONObject(response).optString("message") } }.getOrNull()
-                throw IllegalStateException(message?.take(180)?.ifBlank { "Cloud request failed ($status)" } ?: "Cloud request failed ($status)")
+        repeat(MAX_RATE_LIMIT_ATTEMPTS) { attempt ->
+            val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 20_000
+                readTimeout = 30_000
+                setRequestProperty("apikey", API_KEY)
+                if (bearer != null) setRequestProperty("Authorization", "Bearer $bearer")
+                setRequestProperty("Accept", "application/json")
+                if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
+                if (prefer != null) setRequestProperty("Prefer", prefer)
             }
-            return response
-        } finally { connection.disconnect() }
+            try {
+                if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                if (status == 429 && attempt < MAX_RATE_LIMIT_ATTEMPTS - 1) {
+                    val retryAfter = connection.getHeaderField("Retry-After")?.toLongOrNull()
+                    val waitSeconds = (retryAfter ?: (1L shl attempt)).coerceIn(1L, MAX_RETRY_AFTER_SECONDS)
+                    connection.disconnect()
+                    Thread.sleep(waitSeconds * 1000L)
+                    return@repeat
+                }
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val response = stream?.bufferedReader()?.use { reader ->
+                    val output = StringBuilder()
+                    val buffer = CharArray(8192)
+                    while (true) {
+                        val count = reader.read(buffer)
+                        if (count < 0) break
+                        if (output.length + count > MAX_RESPONSE_CHARS) {
+                            throw IllegalStateException("Cloud response exceeded Nova's size limit")
+                        }
+                        output.append(buffer, 0, count)
+                    }
+                    output.toString()
+                }.orEmpty()
+                if (status !in 200..299) {
+                    val message = runCatching { JSONObject(response).optString("msg").ifBlank { JSONObject(response).optString("message") } }.getOrNull()
+                    throw IllegalStateException(message?.take(180)?.ifBlank { "Cloud request failed ($status)" } ?: "Cloud request failed ($status)")
+                }
+                return response
+            } finally { connection.disconnect() }
+        }
+        throw IllegalStateException("Cloud service is rate-limiting Nova. Try again shortly.")
     }
 
     private fun loadSession(): JSONObject? {
