@@ -34,10 +34,12 @@ class PasswordVaultMergeTest {
 
     @Test
     fun invalidDeleteTimestampIsRejected() {
-        val bundle = JSONObject().put("credentials", JSONArray())
-            .put("deleted", JSONObject().put("https://example.com|alice", -1L))
-        assertThrows(IllegalArgumentException::class.java) {
-            PasswordVault.mergeSyncBundles(JSONObject(), bundle)
+        listOf(-1L, 0L).forEach { timestamp ->
+            val bundle = JSONObject().put("credentials", JSONArray())
+                .put("deleted", JSONObject().put("https://example.com|alice", timestamp))
+            assertThrows(IllegalArgumentException::class.java) {
+                PasswordVault.mergeSyncBundles(JSONObject(), bundle)
+            }
         }
     }
 }

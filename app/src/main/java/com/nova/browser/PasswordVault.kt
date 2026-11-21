@@ -43,15 +43,10 @@ class PasswordVault(context: Context) {
         return buildList {
             for (i in 0 until json.length()) {
                 val entry = runCatching {
-                    val item = json.getJSONObject(i)
-                    Autocomplete.LoginEntry.Builder()
-                        .guid(item.optString("guid"))
-                        .origin(item.getString("origin"))
-                        .formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
-                        .httpRealm(item.optString("httpRealm").ifBlank { null })
-                        .username(item.getString("username"))
-                        .password(item.getString("password"))
-                        .build()
+                    val fields = PasswordVaultValidation.fromJson(json.getJSONObject(i))
+                    Autocomplete.LoginEntry.Builder().guid(fields.guid)
+                        .origin(fields.origin).formActionOrigin(fields.formActionOrigin).httpRealm(fields.httpRealm)
+                        .username(fields.username).password(fields.password).build()
                 }.getOrNull()
                 if (entry != null) {
                     val key = credentialKey(entry.origin, entry.username, entry.formActionOrigin, entry.httpRealm)
@@ -139,7 +134,7 @@ class PasswordVault(context: Context) {
         val tombstoneKeys = deleted.keys()
         while (tombstoneKeys.hasNext()) {
             val key = tombstoneKeys.next()
-            require(key.length <= 8192 && deleted.optLong(key, -1L) >= 0L) { "Invalid password-vault deletion marker" }
+            require(key.length <= 8192 && deleted.optLong(key, -1L) > 0L) { "Invalid password-vault deletion marker" }
         }
         val entries = mutableListOf<Autocomplete.LoginEntry>()
         val metadata = JSONObject()
@@ -305,7 +300,9 @@ class PasswordVault(context: Context) {
                 val keys = json.keys()
                 while (keys.hasNext()) {
                     val entryKey = keys.next()
-                    require(entryKey.length <= 8192 && json.optLong(entryKey, -1L) >= 0L) {
+                    val timestamp = json.optLong(entryKey, -1L)
+                    val validTimestamp = if (key == TOMBSTONES_KEY) timestamp > 0L else timestamp >= 0L
+                    require(entryKey.length <= 8192 && validTimestamp) {
                         "Password-vault sync metadata contains an invalid timestamp"
                     }
                 }
@@ -343,7 +340,7 @@ class PasswordVault(context: Context) {
                 while (keys.hasNext()) {
                     val key = keys.next()
                     val timestamp = source.optLong(key, -1L)
-                    require(key.length <= 8192 && timestamp >= 0L) { "Invalid password-vault deletion marker" }
+                    require(key.length <= 8192 && timestamp > 0L) { "Invalid password-vault deletion marker" }
                     tombstones.put(key, maxOf(tombstones.optLong(key), timestamp))
                 }
             }
