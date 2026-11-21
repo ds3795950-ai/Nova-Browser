@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "Nova 1VPN Proxy Bridge",
+  "version": "1.0.0",
+  "description": "No-account 1VPN free proxy bridge for Nova Browser GeckoView.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "1vpn-internal@nova.browser",
+      "strict_min_version": "114.0"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "permissions": [
+    "proxy",
+    "webRequest",
+    "webRequestBlocking",
+    "storage",
+    "privacy",
+    "nativeMessaging",
+    "<all_urls>"
+  ]
+}
