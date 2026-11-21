@@ -11,9 +11,15 @@ internal object NovaSyncMerge {
             val merged = linkedMapOf<String, JSONObject>()
             val old = remote.optJSONArray(key) ?: JSONArray()
             val current = local.optJSONArray(key) ?: JSONArray()
-            for (i in 0 until old.length()) { val item = old.getJSONObject(i); merged[item.optString(idField)] = item }
+            for (i in 0 until old.length()) {
+                val item = old.optJSONObject(i) ?: continue
+                val id = item.optString(idField).trim()
+                if (id.isNotBlank()) merged[id] = item
+            }
             for (i in 0 until current.length()) {
-                val item = current.getJSONObject(i); val id = item.optString(idField)
+                val item = current.optJSONObject(i) ?: continue
+                val id = item.optString(idField).trim()
+                if (id.isBlank()) continue
                 val prior = merged[id]
                 if (prior == null || maxField == null || item.optLong(maxField) >= prior.optLong(maxField)) merged[id] = item
             }
