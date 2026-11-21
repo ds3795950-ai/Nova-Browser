@@ -940,6 +940,8 @@ class MainActivity : ComponentActivity() {
         val wasActive = index == activeIndex
         val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
+
+        detectedPageLanguages.remove(removed.id)
         if (removed.id == splitTabId) exitSplitScreen()
         detectedPageLanguages.remove(removed.id)
         removed.session?.close()
@@ -1874,6 +1876,8 @@ class MainActivity : ComponentActivity() {
                     val activeId = currentTab()?.id
                     tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
                         val removed = tabs.removeAt(index)
+
+                        detectedPageLanguages.remove(removed.id)
                         if (removed.id == splitTabId) exitSplitScreen()
                         removed.session?.close()
                         clearPrivateContext(removed)

@@ -64,7 +64,9 @@ android {
     buildTypes {
         debug {
             val debugUrl = providers.gradleProperty("NOVA_DEBUG_SUPABASE_URL").orElse("https://debug.invalid").get()
+                .replace("\\", "\\\\").replace("\"", "\\\"")
             val debugKey = providers.gradleProperty("NOVA_DEBUG_SUPABASE_PUBLISHABLE_KEY").orElse("debug-publishable-placeholder").get()
+                .replace("\\", "\\\\").replace("\"", "\\\"")
             buildConfigField("String", "SUPABASE_URL", "\"$debugUrl\"")
             buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$debugKey\"")
         }
