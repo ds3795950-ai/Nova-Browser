@@ -902,11 +902,19 @@ class MainActivity : ComponentActivity() {
         }
         session.open(runtime)
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) { tab.canGoBack = canGoBack }
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) { tab.canGoForward = canGoForward }
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                tab.canGoBack = canGoBack && tab.lastUrl != HOME_URL && browserPane.visibility == View.VISIBLE
+            }
+            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                tab.canGoForward = canGoForward && tab.lastUrl != HOME_URL && browserPane.visibility == View.VISIBLE
+            }
             override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                 if (url.isNullOrBlank()) return
                 tab.lastUrl = url
+                if (url == HOME_URL) {
+                    tab.canGoBack = false
+                    tab.canGoForward = false
+                }
                 tab.contentPermissions = perms
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 tab.title = Uri.parse(url).host ?: url.take(48)
@@ -1132,15 +1140,26 @@ class MainActivity : ComponentActivity() {
 
     private fun goBack() {
         val tab = currentTab() ?: return
-        if (tab.canGoBack) tab.session?.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
+        if (browserPane.visibility != View.VISIBLE || tab.lastUrl == HOME_URL) {
+            tab.canGoBack = false
+            return
+        }
+        if (tab.canGoBack) tab.session?.goBack() else toast("No previous page")
     }
 
     private fun goForward() {
         val tab = currentTab() ?: return
+        if (browserPane.visibility != View.VISIBLE || tab.lastUrl == HOME_URL) {
+            tab.canGoForward = false
+            return
+        }
         if (tab.canGoForward) tab.session?.goForward() else toast("No next page")
     }
 
-    private fun reloadPage() { currentTab()?.let { ensureSession(it).reload() } }
+    private fun reloadPage() {
+        val tab = currentTab() ?: return
+        if (browserPane.visibility == View.VISIBLE && tab.lastUrl != HOME_URL) ensureSession(tab).reload()
+    }
 
     private fun showTabs() {
         if (tabs.isEmpty()) return
