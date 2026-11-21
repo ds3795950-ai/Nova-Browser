@@ -21,7 +21,7 @@ kotlin {
 
 android {
     namespace = "com.nova.browser"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.nova.browser"
