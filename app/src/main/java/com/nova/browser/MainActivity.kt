@@ -247,11 +247,11 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        addressBar = EditText(this).apply {
+        addressBar = AutoCompleteTextView(this).apply {
             hint = getString(R.string.address_bar_hint)
             contentDescription = getString(R.string.address_bar_accessibility)
             isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_NO_AUTO_CORRECT
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             textSize = 15f
             setTextColor(getColor(R.color.nova_text_primary))
             setHintTextColor(getColor(R.color.nova_text_secondary))
@@ -296,14 +296,14 @@ class MainActivity : ComponentActivity() {
         goButton.minWidth = dp(48)
         goButton.minimumWidth = dp(48)
         addressRow.addView(goButton, LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT))
-        top.addView(addressRow)
+        topChrome.addView(addressRow)
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progress = 0
             visibility = View.GONE
             contentDescription = getString(R.string.page_loading_progress)
         }
-        top.addView(progressBar, LinearLayout.LayoutParams(-1, dp(2)))
+        topChrome.addView(progressBar, LinearLayout.LayoutParams(-1, dp(2)))
 
         tabLabel = TextView(this).apply {
             text = getString(R.string.app_name)
@@ -320,8 +320,8 @@ class MainActivity : ComponentActivity() {
             setTextColor(getColor(R.color.nova_text_secondary))
             setPadding(dp(4), 0, dp(4), dp(4))
         }
-        top.addView(tabLabel)
-        top.addView(pageStatus)
+        topChrome.addView(tabLabel)
+        topChrome.addView(pageStatus)
 
         browserView = GeckoView(this)
         secondaryBrowserView = GeckoView(this)
@@ -1342,9 +1342,14 @@ class MainActivity : ComponentActivity() {
         session.getFinder().setDisplayFlags(GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL)
         session.getFinder().find(query, flags).accept({ result ->
             runOnUiThread {
-                setPageStatus(if (result.found) {
-                    if (result.total > 0) getString(R.string.find_result_count, result.current, result.total) else getString(R.string.find_match_number, result.current)
-                } else getString(R.string.find_no_matches), 2)
+                val finderResult = result
+                if (finderResult == null) {
+                    setPageStatus(getString(R.string.find_no_matches), 2)
+                } else {
+                    setPageStatus(if (finderResult.found) {
+                        if (finderResult.total > 0) getString(R.string.find_result_count, finderResult.current, finderResult.total) else getString(R.string.find_match_number, finderResult.current)
+                    } else getString(R.string.find_no_matches), 2)
+                }
             }
         }, { runOnUiThread { setPageStatus(getString(R.string.find_failed), 2) } })
     }
@@ -3114,7 +3119,7 @@ class MainActivity : ComponentActivity() {
 
 
     @Suppress("DEPRECATION")
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_SITE_PERMISSIONS) return
         val callback = pendingAndroidPermissionCallback ?: return
