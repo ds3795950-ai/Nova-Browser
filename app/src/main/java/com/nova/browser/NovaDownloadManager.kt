@@ -61,7 +61,12 @@ class NovaDownloadManager(
         records[item.id] = item
         persist()
         changed(items())
-        NovaDownloadService.update(context, running.size)
+        updateServiceNotification()
+    }
+
+    private fun updateServiceNotification() {
+        val active = running.values.firstOrNull { it.item.state in setOf("RUNNING", "SAVING", "FINALIZING") }?.item
+        NovaDownloadService.update(context, running.size, active?.fileName, active?.downloaded ?: 0L, active?.total ?: 0L)
     }
 
     @Synchronized private fun persist() {
@@ -141,7 +146,7 @@ class NovaDownloadManager(
         runCatching { worker?.input?.close() }
         if (worker == null) partial(id).delete()
         synchronized(this) { records.remove(id); persist(); changed(items()) }
-        NovaDownloadService.update(context, running.size)
+        updateServiceNotification()
     }
 
     private fun openConnection(worker: Running, offset: Long): HttpURLConnection {
@@ -260,7 +265,7 @@ class NovaDownloadManager(
             worker.connection?.disconnect()
             if (worker.cancel.get()) partial(id).delete()
             running.remove(id)
-            NovaDownloadService.update(context, running.size)
+            updateServiceNotification()
         }
     }
 
@@ -310,7 +315,7 @@ class NovaDownloadManager(
                 runCatching { stream.close() }
                 part.delete()
                 running.remove(id)
-                NovaDownloadService.update(context, running.size)
+                updateServiceNotification()
             }
         }
     }
