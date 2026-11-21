@@ -1440,7 +1440,7 @@ class MainActivity : ComponentActivity() {
                     list.addView(TextView(this).apply {
                         text = "â  ${entry.title}\n${entry.url}"; textSize = 13f; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 10, 8, 10)
                         setOnClickListener { dialog.dismiss(); navigate(entry.url) }
-                        setOnLongClickListener { showBookmarkActions(entry); true }
+                        setOnLongClickListener { dialog.dismiss(); showBookmarkActions(entry); true }
                     })
                 }
             }
@@ -1460,7 +1460,7 @@ class MainActivity : ComponentActivity() {
             .setItems(arrayOf("Edit title / folder", "Delete bookmark", "Open")) { _, which ->
                 when (which) {
                     0 -> editBookmark(entry)
-                    1 -> { val items = readBookmarks().filterNot { it.url == entry.url }; saveBookmarks(items); toast("Bookmark deleted") }
+                    1 -> { val items = readBookmarks().filterNot { it.url == entry.url }; saveBookmarks(items); toast("Bookmark deleted"); showBookmarks() }
                     2 -> navigate(entry.url)
                 }
             }.show()
@@ -1474,7 +1474,7 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this).setTitle("Edit bookmark").setView(form)
             .setPositiveButton("Save") { _, _ ->
                 val items = readBookmarks().map { if (it.url == entry.url) it.copy(title = title.text.toString().trim().ifBlank { entry.title }, folder = folder.text.toString().trim().ifBlank { "General" }) else it }
-                saveBookmarks(items); toast("Bookmark updated")
+                saveBookmarks(items); toast("Bookmark updated"); showBookmarks()
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -1640,11 +1640,18 @@ class MainActivity : ComponentActivity() {
             }
             "${item.fileName}\n$state"
         }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Nova Downloads Â· ${items.size}")
+        val dialog = AlertDialog.Builder(this).setTitle("Nova Downloads Â· ${items.size}")
             .setItems(rows) { _, which -> showDownloadActions(items[which]) }
             .setPositiveButton("New download") { _, _ -> downloadPrompt() }
             .setNeutralButton("Refresh", null)
-            .setNegativeButton("Close", null).show()
+            .setNegativeButton("Close", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                dialog.dismiss()
+                showDownloads()
+            }
+        }
+        dialog.show()
     }
 
     private fun showDownloadActions(item: NovaDownloadManager.Item) {
@@ -1747,13 +1754,22 @@ class MainActivity : ComponentActivity() {
                         if (source == target) { toast("Choose two different languages"); return@setItems }
                         val translation = tab.session?.sessionTranslation
                         if (translation == null) { toast("GeckoView translation is unavailable for this session"); return@setItems }
-                        toast("Preparing translation modelsâ¦")
-                        translation.translate(source, target,
-                            TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
-                        ).accept(
-                            { runOnUiThread { toast("Translation started Â· $source â $target") } },
-                            { error -> runOnUiThread { toast("Translation unavailable: ${error?.localizedMessage ?: "language model not supported"}") } }
-                        )
+                        val startTranslation = {
+                            toast("Preparing translation modelsâ¦")
+                            translation.translate(source, target,
+                                TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
+                            ).accept(
+                                { runOnUiThread { toast("Translation started Â· $source â $target") } },
+                                { error -> runOnUiThread { toast("Translation unavailable: ${error?.localizedMessage ?: "language model not supported"}") } }
+                            )
+                        }
+                        val connectivity = getSystemService(android.net.ConnectivityManager::class.java)
+                        if (connectivity.isActiveNetworkMetered) {
+                            AlertDialog.Builder(this).setTitle("Download translation model?")
+                                .setMessage("Nova needs to download language models. You are on a metered network; this may use mobile data.")
+                                .setPositiveButton("Download over mobile data") { _, _ -> startTranslation() }
+                                .setNegativeButton("Cancel", null).show()
+                        } else startTranslation()
                     }.setNegativeButton("Cancel", null).show()
             }.setNegativeButton("Cancel", null).show()
     }
@@ -1986,8 +2002,10 @@ class MainActivity : ComponentActivity() {
                 AlertDialog.Builder(this).setTitle("Nova Add-ons Â· ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
                     .setItems(rows) { _, which ->
                         val extension = installed[which]
-                        val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
-                        AlertDialog.Builder(this).setTitle(extension.metaData.name ?: extension.id)
+                        if (extension == null) { toast("This add-on entry is unavailable"); return@setItems }
+                        val metadata = extension.metaData
+                        val actions = if (metadata?.enabled == true) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
+                        AlertDialog.Builder(this).setTitle(metadata?.name ?: extension.id)
                             .setItems(actions) { _, action ->
                                 when (actions[action]) {
                                     "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it?.localizedMessage ?: "Unknown error"}") })
