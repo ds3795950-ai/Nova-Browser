@@ -2800,4 +2800,9 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_DOWNLOAD_ID = "download_id"
         private const val MAX_BOOKMARK_IMPORT_BYTES = 5 * 1024 * 1024
         private const val MAX_BOOKMARK_IMPORT_COUNT = 10_000
-        private const val MAX_URL_LEN
+        private const val MAX_URL_LENGTH_FOR_IMPORT = 2048
+        private const val PRIVATE_CONTEXT_IDS_KEY = "private_context_ids"
+        private const val HOME_URL = "about:blank"
+        private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
+    }
+}
