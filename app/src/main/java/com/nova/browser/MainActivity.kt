@@ -477,6 +477,12 @@ class MainActivity : ComponentActivity() {
         browserPane.visibility = View.VISIBLE
     }
 
+    private fun themeTextColor(attribute: Int): Int {
+        val value = TypedValue()
+        if (!theme.resolveAttribute(attribute, value, true)) return Color.WHITE
+        return if (value.resourceId != 0) getColor(value.resourceId) else value.data
+    }
+
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density + 0.5f).toInt()
 
@@ -1186,14 +1192,14 @@ class MainActivity : ComponentActivity() {
         val guestIndices = tabs.indices.filter { tabs[it].isGuest }
         fun addSection(label: String, indices: List<Int>) {
             if (indices.isEmpty()) return
-            val heading = TextView(this).apply { text = "$label (${indices.size})"; textSize = 13f; setTextColor(0xFFD8CBE8.toInt()); setPadding(8, 14, 8, 6) }
+            val heading = TextView(this).apply { text = "$label (${indices.size})"; textSize = 13f; setTextColor(themeTextColor(android.R.attr.textColorSecondary)); setPadding(8, 14, 8, 6) }
             grid.addView(heading, GridLayout.LayoutParams().apply { columnSpec = GridLayout.spec(0, 2); width = -1 })
             val grouped = indices.groupBy { tabs[it].group.ifBlank { "Ungrouped" } }.toSortedMap()
             grouped.forEach { (groupName, groupIndices) ->
                 val groupKey = "$label::$groupName"
                 val groupHeading = TextView(this).apply {
                     text = (if (groupKey in collapsedGroups) "â¸ " else "â¾ ") + "$groupName (${groupIndices.size})"
-                    textSize = 12f; typeface = Typeface.DEFAULT_BOLD; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 12, 8, 10)
+                    textSize = 12f; typeface = Typeface.DEFAULT_BOLD; setTextColor(themeTextColor(android.R.attr.textColorPrimary)); setPadding(12, 12, 8, 10)
                     setOnClickListener { if (!collapsedGroups.add(groupKey)) collapsedGroups.remove(groupKey); tabDialog?.dismiss(); showTabs() }
                 }
                 grid.addView(groupHeading, GridLayout.LayoutParams().apply { columnSpec = GridLayout.spec(0, 2); width = -1 })
@@ -1204,8 +1210,8 @@ class MainActivity : ComponentActivity() {
                         orientation = LinearLayout.VERTICAL; setPadding(12, 12, 12, 12)
                         background = GradientDrawable().apply { setColor(0xFF241B30.toInt()); cornerRadius = 18f; setStroke(1, 0xFF6D4C83.toInt()) }
                     }
-                    val headingText = TextView(this).apply { text = tab.title.ifBlank { "New tab" }; textSize = 14f; setTextColor(0xFFFFFFFF.toInt()); maxLines = 2 }
-                    val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(0xFFB9AEC8.toInt()); maxLines = 2; setPadding(0, 5, 0, 5) }
+                    val headingText = TextView(this).apply { text = tab.title.ifBlank { "New tab" }; textSize = 14f; setTextColor(themeTextColor(android.R.attr.textColorPrimary)); maxLines = 2 }
+                    val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(themeTextColor(android.R.attr.textColorSecondary)); maxLines = 2; setPadding(0, 5, 0, 5) }
                     card.addView(headingText); card.addView(urlText)
                     card.addView(actionButton("Open") { tabDialog?.dismiss(); switchTab(index) })
                     card.addView(actionButton("Group / rename") { tabDialog?.dismiss(); editTabGroup(index) })
@@ -1480,10 +1486,10 @@ class MainActivity : ComponentActivity() {
             val filtered = items.filter { it.title.contains(query, true) || it.url.contains(query, true) || it.folder.contains(query, true) }
                 .sortedWith(compareBy<BookmarkEntry> { it.folder.lowercase(Locale.ROOT) }.thenBy { it.title.lowercase(Locale.ROOT) })
             filtered.groupBy { it.folder }.forEach { (folder, entries) ->
-                list.addView(TextView(this).apply { text = "$folder (${entries.size})"; setTextColor(0xFFD8CBE8.toInt()); textSize = 12f; setPadding(8, 12, 8, 5); typeface = Typeface.DEFAULT_BOLD })
+                list.addView(TextView(this).apply { text = "$folder (${entries.size})"; setTextColor(themeTextColor(android.R.attr.textColorSecondary)); textSize = 12f; setPadding(8, 12, 8, 5); typeface = Typeface.DEFAULT_BOLD })
                 entries.forEach { entry ->
                     list.addView(TextView(this).apply {
-                        text = "â  ${entry.title}\n${entry.url}"; textSize = 13f; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 10, 8, 10)
+                        text = "â  ${entry.title}\n${entry.url}"; textSize = 13f; setTextColor(themeTextColor(android.R.attr.textColorPrimary)); setPadding(12, 10, 8, 10)
                         setOnClickListener { dialog.dismiss(); navigate(entry.url) }
                         setOnLongClickListener { dialog.dismiss(); showBookmarkActions(entry); true }
                     })
@@ -1619,11 +1625,11 @@ class MainActivity : ComponentActivity() {
             list.removeAllViews()
             val filtered = items.filter { it.url.contains(query, true) || it.title.contains(query, true) }
             filtered.groupBy { if (it.visitedAt > 0) dateFormat.format(Date(it.visitedAt)) else "Earlier history" }.forEach { (day, entries) ->
-                list.addView(TextView(this).apply { text = day; setTextColor(0xFFD8CBE8.toInt()); typeface = Typeface.DEFAULT_BOLD; setPadding(8, 12, 8, 6) })
+                list.addView(TextView(this).apply { text = day; setTextColor(themeTextColor(android.R.attr.textColorSecondary)); typeface = Typeface.DEFAULT_BOLD; setPadding(8, 12, 8, 6) })
                 entries.forEach { entry ->
                     list.addView(TextView(this).apply {
                         text = "${entry.title}  ${if (entry.visitedAt > 0) timeFormat.format(Date(entry.visitedAt)) else ""}\n${entry.url}"
-                        setTextColor(0xFFFFFFFF.toInt()); textSize = 12f; setPadding(12, 9, 8, 9)
+                        setTextColor(themeTextColor(android.R.attr.textColorPrimary)); textSize = 12f; setPadding(12, 9, 8, 9)
                         setOnClickListener { dialog.dismiss(); navigate(entry.url) }
                     })
                 }
