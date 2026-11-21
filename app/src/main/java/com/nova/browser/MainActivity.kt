@@ -1738,11 +1738,12 @@ class MainActivity : ComponentActivity() {
         val sites = desktopSites
         tab.desktopSite = if (host in sites) { sites.remove(host); false } else { sites.add(host); true }
         prefs.edit().putStringSet("desktop_sites", sites).apply()
-        tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
-        tab.session = null; tab.needsReload = true
         val session = ensureSession(tab)
-        browserView.setSession(session); session.setActive(true); session.setFocused(true)
-        // ensureSession consumes needsReload and loads the saved URL exactly once.
+        applyDesktopSettings(tab)
+        browserView.setSession(session)
+        session.setActive(true)
+        session.setFocused(true)
+        session.reload()
         toast(if (tab.desktopSite) "Desktop site enabled for $host" else "Mobile site restored for $host")
     }
 
@@ -1825,16 +1826,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun applyDesktopSettings(tab: BrowserTab) {
+        val session = tab.session ?: return
+        session.settings.userAgentMode = if (tab.desktopSite) {
+            GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+        } else {
+            GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+        }
+        session.settings.viewportMode = if (tab.desktopSite) {
+            GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+        } else {
+            GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+        }
+    }
+
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
         val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
         if (desired != tab.desktopSite) {
-            tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
-            tab.session = null
             tab.desktopSite = desired
-            tab.needsReload = false
-            val newSession = ensureSession(tab)
-            if (currentTab() === tab) browserView.setSession(newSession)
-            if (tab.id == splitTabId) secondaryBrowserView.setSession(newSession)
+            // The caller performs the target navigation once after these in-place settings changes.
+            applyDesktopSettings(tab)
         }
     }
 
