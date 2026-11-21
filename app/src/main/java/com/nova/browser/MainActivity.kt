@@ -1405,9 +1405,9 @@ class MainActivity : ComponentActivity() {
                     for (i in 0 until array.length()) {
                         runCatching {
                             val item = array.getJSONObject(i)
-                            val url = item.optString("url")
-                            if (HistoryPolicy.shouldPersist(url)) add(
-                                BookmarkEntry(url, item.optString("title"), item.optString("folder", "General"), item.optLong("addedAt", 0L))
+                            val url = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: return@runCatching
+                            if (url.length <= MAX_URL_LENGTH_FOR_IMPORT) add(
+                                BookmarkEntry(url, item.optString("title").take(512), item.optString("folder", "General").take(128), item.optLong("addedAt", 0L))
                             )
                         }
                     }
@@ -1418,15 +1418,22 @@ class MainActivity : ComponentActivity() {
                 prefs.edit().putString("bookmarks_v2_corrupt_backup", raw).apply()
             }
         }
-        return (prefs.getStringSet("bookmarks", emptySet()) ?: emptySet()).map {
-            BookmarkEntry(it, Uri.parse(it).host ?: it, "General", System.currentTimeMillis())
+        return (prefs.getStringSet("bookmarks", emptySet()) ?: emptySet()).mapNotNull { raw ->
+            val url = HistoryPolicy.sanitizeForStorage(raw) ?: return@mapNotNull null
+            if (url.length > MAX_URL_LENGTH_FOR_IMPORT) return@mapNotNull null
+            BookmarkEntry(url, Uri.parse(url).host ?: url, "General", System.currentTimeMillis())
         }.toMutableList()
     }
 
     private fun saveBookmarks(items: List<BookmarkEntry>, trackDeletes: Boolean = true) {
+        val safeItems = items.mapNotNull { item ->
+            val url = HistoryPolicy.sanitizeForStorage(item.url) ?: return@mapNotNull null
+            if (url.length > MAX_URL_LENGTH_FOR_IMPORT) return@mapNotNull null
+            item.copy(url = url, title = item.title.take(512), folder = item.folder.take(128))
+        }.take(MAX_BOOKMARK_IMPORT_COUNT)
         if (trackDeletes) {
             val previous = readBookmarks()
-            val retained = items.map { it.url }.toSet()
+            val retained = safeItems.map { it.url }.toSet()
             val removed = previous.filterNot { it.url in retained }
             if (removed.isNotEmpty()) {
                 val tombstones = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
@@ -1436,20 +1443,22 @@ class MainActivity : ComponentActivity() {
             }
         }
         val array = JSONArray()
-        items.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-        prefs.edit().putString("bookmarks_v2", array.toString()).putStringSet("bookmarks", items.map { it.url }.toSet()).apply()
+        safeItems.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
+        prefs.edit().putString("bookmarks_v2", array.toString()).putStringSet("bookmarks", safeItems.map { it.url }.toSet()).apply()
     }
 
     private fun toggleBookmark() {
         val tab = currentTab() ?: return
         if (tab.isPrivate || tab.isGuest) { toast("Private and Guest tabs cannot save bookmarks"); return }
         if (tab.lastUrl == HOME_URL) { toast("Open a page before bookmarking"); return }
+        val safeUrl = HistoryPolicy.sanitizeForStorage(tab.lastUrl)
+        if (safeUrl == null) { toast("This page URL contains sensitive query data and cannot be bookmarked"); return }
         val items = readBookmarks()
-        val existing = items.indexOfFirst { it.url == tab.lastUrl }
+        val existing = items.indexOfFirst { it.url == safeUrl }
         if (existing >= 0) { items.removeAt(existing); saveBookmarks(items); toast("Bookmark removed") }
         else {
-            val priorDelete = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}").optLong(tab.lastUrl) }.getOrDefault(0L)
-            items.add(BookmarkEntry(tab.lastUrl, tab.title, "General", maxOf(System.currentTimeMillis(), priorDelete + 1L)))
+            val priorDelete = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}").optLong(safeUrl) }.getOrDefault(0L)
+            items.add(BookmarkEntry(safeUrl, tab.title.take(512), "General", maxOf(System.currentTimeMillis(), priorDelete + 1L)))
             saveBookmarks(items); toast("Bookmark saved")
         }
     }
