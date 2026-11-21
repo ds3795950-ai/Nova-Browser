@@ -2122,7 +2122,7 @@ class MainActivity : ComponentActivity() {
     private fun configureExtensionDelegates(extension: WebExtension) {
         extension.setActionDelegate(object : WebExtension.ActionDelegate {
             override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
-                if (action.enabled == true) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
+                if (action.enabled != false) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
             }
             override fun onPageAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
                 if (action.enabled == true) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
