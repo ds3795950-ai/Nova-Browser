@@ -45,7 +45,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Verify failed/partial migrations leave the source profile intact and provide a user-visible recovery path.
 
 ## Acceptance gates
-- Unit tests cover Cefrium as the Normal default, Automatic fallback, Private GeckoView-only selection, Guest GeckoView locking, profile isolation, migration consent, portable-state counts and failed destination verification. The latest debug Engine Lab constructor fix, typed Cefrium permission handler and password fallback are committed; the CI/lint reruns are pending.
+- Unit tests cover Cefrium as the Normal default, Automatic fallback, Private GeckoView-only selection, Guest GeckoView locking, profile isolation, migration consent, portable-state counts and failed destination verification. Private/Guest engine-selection and engine-switch guards are committed; the latest CI/lint/emulator runs are pending.
 - Instrumented tests cover both engines in one process, multiple tabs, split-pane, pause/resume, crash recovery and close.
 - Device tests cover Android 10+ ARM64, Cefrium memory/APK footprint, site compatibility and GeckoView regressions.
 - Migration tests use disposable profiles and confirm destination state before any optional source cleanup.
@@ -56,7 +56,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 
 ### Implemented in the feature branch
 - Normal uses the named persistent Cefrium profile by default.
-- Private uses Cefrium's memory-only incognito profile when no Gecko-only feature is required. Private tabs share that private profile; it is cleared when the last private Cefrium browser closes.
+- Private tabs always use GeckoView private sessions; they are not stored in a Cefrium profile.
 - Guest remains GeckoView-only. Its engine and existing isolated Gecko context are not changed.
 - Protected DNS is applied to Cefrium through the SDK's global Secure DNS setting in strict mode, alongside GeckoView's TRR_MODE_ONLY configuration. Cefrium component updates are disabled because they use a separate system network context outside profile routing.
 - Desktop Site applies a desktop Chromium user agent and document-start desktop viewport handling. Per-site Normal preferences are retained; Private changes are session-only.

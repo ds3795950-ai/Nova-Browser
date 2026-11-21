@@ -9,7 +9,7 @@
 - Nova is a Kotlin Android app (`com.nova.browser`) with a single large `MainActivity` that owns the browser UI, tab list and most GeckoView delegates.
 - `MainActivity` creates one `GeckoRuntime` and a `GeckoSession` per tab. Two `GeckoView` instances support the split-pane UI. The runtime is shut down with the activity.
 - The tab model already distinguishes normal, private and Guest tabs. Guest sessions use Gecko private mode plus a fresh session context ID, and the previous Guest context is cleared at startup/exit. Guest and private tabs are excluded from normal tab persistence, password autofill and cloud sync.
-- Bookmarks, history, downloads, password vault, Shield, protected DNS and encrypted cloud sync are implemented in existing app services. The existing Orbot handoff is not an embedded Tor transport and does not prove per-tab fail-closed routing.
+- Bookmarks, history, downloads, password vault, Shield, protected DNS and encrypted cloud sync are implemented in existing app services. Guest Mode currently displays an explicit Tor-unavailable explanation. No Orbot handoff or embedded Tor transport is enabled because app-wide VPN routing cannot isolate one tab.
 - The current production tab manager is tightly coupled to `GeckoSession`; switching it in one step would risk breaking permissions, downloads, extensions, translation, Shield, split-screen and Guest isolation.
 
 ## Cefrium compatibility decision
@@ -50,18 +50,17 @@ The first combined-engine manifest merge exposed a conflict: GeckoView declares 
 
 ## Engine profile policy for later phases
 
-- Normal Cefrium tabs will use a named persistent Nova profile.
-- Guest Cefrium tabs must use Cefrium's in-memory `CefriumProfile.incognito()` (or a verified disposable profile lifecycle), never the normal profile.
-- GeckoView Guest tabs retain their existing isolated Guest context until the tab manager is migrated.
-- The normal and Guest stores must never be merged. Cross-engine website data migration remains best-effort and must preserve the source profile until the destination session is verified.
+- Normal Cefrium tabs use the named persistent Nova profile.
+- Private and Guest tabs are GeckoView-only. Private uses GeckoView private sessions; Guest uses Gecko private mode plus a dedicated temporary context ID.
+- The Normal, Private and Guest stores must never be merged. Cross-engine website data migration remains best-effort and must preserve the source profile until the destination session is verified.
 
 ## Tor feasibility findings for Phase 4
 
-- Cefrium exposes a proxy on each `CefriumProfile`; a fixed proxy has no direct fallback. Its documentation explicitly warns that WebRTC is not covered by that proxy, so WebRTC/IP handling and DNS need separate enforcement and leak tests.
-- GeckoView has no simple supported per-session proxy API. Its configuration must be investigated at runtime/process level; do not assume a Gecko session can independently inherit a SOCKS route.
-- An app-wide Android `VpnService` can capture normal-mode and Guest traffic together. It is not sufficient by itself to guarantee Guest-only Tor while normal tabs continue using the ordinary route.
-- Tor Project's Arti Android guide says there is no stable Rust API/binding yet and a custom JNI wrapper is required. Arti is viable for experimentation but not a drop-in Android library. The mature C Tor/Orbot route is an external VPN handoff, not the required in-app per-Guest-engine route.
-- Phase 4 must prove routing for both engines, including DNS, UDP/WebRTC, redirects, proxy failure, circuit changes and normal-mode non-interference. No Tor implementation is added in Phase 1.
+- Cefrium exposes a proxy on each CefriumProfile; the current adapter is scoped to Normal Cefrium profiles and must pass independent DNS/WebRTC/IP leak tests.
+- GeckoView has no supported public per-session proxy API. Runtime-level preference/configuration workarounds are not a supported or verified security boundary.
+- An app-wide Android VpnService captures the whole Nova package and cannot isolate one Guest tab from Normal/Private tabs.
+- Arti Android integration requires a custom JNI wrapper; it is not a drop-in stable Android library. Orbot's mature Android VPN mode is app/profile-level and does not meet Guest-only routing.
+- Guest-only Tor requires a dedicated transport and runtime/network boundary, then tests for DNS, UDP/WebRTC, redirects, proxy failure, circuit changes and Normal/Private non-interference. No Tor implementation is present.
 
 References: [Arti Android integration](https://arti.torproject.org/integrating-arti/custom-wrappers/android/), [Arti status](https://arti.torproject.org/FAQs/).
 
@@ -72,6 +71,6 @@ References: [Arti Android integration](https://arti.torproject.org/integrating-a
 - [ ] Back, forward, reload, renderer recovery and activity pause/resume work in the Engine Lab.
 - [ ] The Cefrium profile used by the probe is distinct from the production profile.
 - [ ] Existing GeckoView regression suite remains green.
-- [ ] Real-device memory, APK size and stability are measured before Phase 2 makes Cefrium a normal-mode default.
+- [ ] Real-device memory, APK size and stability are measured before release acceptance of Cefrium Normal mode.
 
 A successful build alone does not satisfy the device acceptance criteria.
