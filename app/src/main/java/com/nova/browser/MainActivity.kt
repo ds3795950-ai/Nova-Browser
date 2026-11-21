@@ -1034,7 +1034,7 @@ class MainActivity : ComponentActivity() {
             tab.session = null
         }
         // Enforce the hard cap for inactive private/Guest sessions if normal-page eviction is not enough.
-        evictInactiveSessions()
+        enforceSessionBudget()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -2083,8 +2083,27 @@ class MainActivity : ComponentActivity() {
                 applyProtectedDns(check.isChecked)
                 toast(if (check.isChecked) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
             }
+            .setNeutralButton("Test DNS endpoint") { _, _ -> checkProtectedDnsEndpoint(check.isChecked) }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun checkProtectedDnsEndpoint(willBeEnabled: Boolean) {
+        toast("Testing AdGuard DNS-over-HTTPS endpoint…")
+        ProtectedDnsHealthCheck.check { result ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess {
+                    val status = "AdGuard's DoH endpoint is reachable. This confirms endpoint reachability only; it does not verify GeckoView's live resolver selection. ${if (willBeEnabled) "The checkbox is selected; press Save to apply it." else "The checkbox is clear; press Save to leave Protected DNS disabled."}"
+                    AlertDialog.Builder(this).setTitle("Protected DNS endpoint reachable")
+                        .setMessage(status).setPositiveButton("OK", null).show()
+                }.onFailure { error ->
+                    AlertDialog.Builder(this).setTitle("Protected DNS endpoint unavailable")
+                        .setMessage("The AdGuard DoH probe failed: ${error.localizedMessage ?: "network error"}. If Protected DNS is enabled, GeckoView may fall back to Android system DNS.")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+        }
     }
 
     private fun openOrbotTorRouting() {
@@ -2097,9 +2116,37 @@ class MainActivity : ComponentActivity() {
             return
         }
         AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
-            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings â Network & internet â VPN â Orbot â Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
+            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings > Network & internet > VPN > Orbot > Always-on VPN and Block connections without VPN. Android protects Orbot's VPN service, so Nova cannot switch it on or off directly. After connecting, use Verify Tor route to check this app's network egress. If Nova is not selected in Orbot, that check may use your regular connection. Guest Mode itself does not create a Tor circuit.")
             .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
+            .setNeutralButton("Verify Tor route") { _, _ -> verifyGuestTorRoute() }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun verifyGuestTorRoute() {
+        if (currentTab()?.isGuest != true) {
+            toast("Tor route verification is available only in Guest Mode")
+            return
+        }
+        toast("Checking Tor route with Tor Project…")
+        TorRouteVerifier.verify { result ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed || currentTab()?.isGuest != true) return@runOnUiThread
+                result.onSuccess { isTor ->
+                    if (isTor) {
+                        toast("Tor egress verified for Nova app traffic")
+                    } else {
+                        AlertDialog.Builder(this).setTitle("Tor route not detected")
+                            .setMessage("Tor Project did not recognize this connection as Tor. In Orbot, enable VPN mode and select Nova Browser in its per-app list. This check verifies the app's current egress, not every browser request individually.")
+                            .setPositiveButton("Open Orbot") { _, _ ->
+                                packageManager.getLaunchIntentForPackage("org.torproject.android")?.let { startActivity(it) }
+                            }
+                            .setNegativeButton("Close", null).show()
+                    }
+                }.onFailure { error ->
+                    toast("Tor route check failed: ${error.localizedMessage ?: "network error"}")
+                }
+            }
+        }
     }
 
     private fun showAiAssistant() {
