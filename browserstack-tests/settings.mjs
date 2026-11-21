@@ -99,28 +99,28 @@ try {
     ['Close private and Guest tabs', false], ['Exit Guest Mode', false], ['Exit Reader view', false],
     ['Nova Shield', false], ['AI assistants', false], ['Extensions', false], ['Password manager', false],
     ['Site permissions', false], ['Accessibility', false], ['Export history', false], ['About Nova', false],
-    ['Account & encrypted cloud sync', false], ['Protected DNS · AdGuard DNS', false], ['VPN & Firewall · 1VPN', false]
+    ['Account & encrypted cloud sync', false], ['Protected DNS · AdGuard DNS', false], ['Browser proxy & Shield · 1VPN', false]
   ];
   for (const [label, startsWith] of menuEntries) {
     await scrollToSetting(label, startsWith);
     record('Settings menu entry available: ' + label, true);
   }
   await driver.saveScreenshot(`${out}/settings-menu.png`);
-  const vpnMenuEntry = await scrollToSetting('VPN & Firewall · 1VPN');
+  const vpnMenuEntry = await scrollToSetting('Browser proxy & Shield · 1VPN');
   await vpnMenuEntry.click();
 
-  const heading = await driver.$('android=new UiSelector().text("Nova VPN & Firewall")');
+  const heading = await driver.$('android=new UiSelector().description("Nova Browser Proxy & Shield")');
   await heading.waitForDisplayed({ timeout: 20000 });
   const headingVisible = await heading.isDisplayed().catch(() => false);
-  record('VPN and firewall settings screen opens from Nova Settings', headingVisible, headingVisible ? '' : 'Expected Nova VPN & Firewall heading');
-  if (!headingVisible) throw new Error('VPN and firewall settings screen did not open from Nova Settings');
+  record('Browser proxy and Shield settings screen opens from Nova Settings', headingVisible, headingVisible ? '' : 'Expected Nova Browser Proxy & Shield heading');
+  if (!headingVisible) throw new Error('Browser proxy and Shield settings screen did not open from Nova Settings');
 
-  const vpn = await driver.$('android=new UiSelector().text("Enable 1VPN for Nova")');
-  const firewall = await driver.$('android=new UiSelector().text("Enable browser firewall")');
+  const vpn = await driver.$('android=new UiSelector().description("Enable 1VPN browser proxy for Nova")');
+  const firewall = await driver.$('android=new UiSelector().description("Enable GeckoView tracking protection")');
   const vpnVisible = await vpn.isDisplayed().catch(() => false);
   const firewallVisible = await firewall.isDisplayed().catch(() => false);
-  record('1VPN toggle is visible', vpnVisible);
-  record('Firewall toggle is visible', firewallVisible);
+  record('1Browser proxy toggle is visible', vpnVisible);
+  record('Shield toggle is visible', firewallVisible);
   if (!vpnVisible || !firewallVisible) throw new Error('One or more settings toggles are missing');
 
   const checked = async el => (await el.getAttribute('checked')) === 'true';
@@ -131,9 +131,9 @@ try {
   await driver.pause(500);
   const vpnChanged = (await checked(vpn)) !== originalVpn;
   const firewallUnaffectedByVpn = (await checked(firewall)) === originalFirewall;
-  record('VPN toggle changes its own state', vpnChanged);
+  record('Browser proxy toggle changes its own state', vpnChanged);
   record('VPN and firewall toggles are independent', firewallUnaffectedByVpn);
-  if (!vpnChanged || !firewallUnaffectedByVpn) throw new Error('VPN toggle state/independence check failed');
+  if (!vpnChanged || !firewallUnaffectedByVpn) throw new Error('Browser proxy toggle state/independence check failed');
   await vpn.click();
   await driver.pause(400);
 
@@ -141,9 +141,9 @@ try {
   await driver.pause(500);
   const firewallChanged = (await checked(firewall)) !== originalFirewall;
   const vpnUnaffectedByFirewall = (await checked(vpn)) === originalVpn;
-  record('Firewall toggle changes its own state', firewallChanged);
-  record('Firewall toggle does not change VPN state', vpnUnaffectedByFirewall);
-  if (!firewallChanged || !vpnUnaffectedByFirewall) throw new Error('Firewall toggle state/independence check failed');
+  record('Shield toggle changes its own state', firewallChanged);
+  record('Shield toggle does not change VPN state', vpnUnaffectedByFirewall);
+  if (!firewallChanged || !vpnUnaffectedByFirewall) throw new Error('Shield toggle state/independence check failed');
   await firewall.click();
   await driver.pause(400);
 
@@ -171,18 +171,18 @@ try {
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
   await driver.pause(1500);
-  const vpnScreenAfterRestart = driver.$('android=new UiSelector().text("Nova VPN & Firewall")');
+  const vpnScreenAfterRestart = driver.$('android=new UiSelector().description("Nova Browser Proxy & Shield")');
   const restoredVpnScreen = await vpnScreenAfterRestart.isDisplayed().catch(() => false);
   if (!restoredVpnScreen) {
     const homeAfterRestart = driver.$('android=new UiSelector().textContains("Nova Browser")');
     await homeAfterRestart.waitForDisplayed({ timeout: 30000 });
     await tapToolbar('Settings', 1);
-    const vpnMenuAfterRestart = await scrollToSetting('VPN & Firewall · 1VPN');
+    const vpnMenuAfterRestart = await scrollToSetting('Browser proxy & Shield · 1VPN');
     await vpnMenuAfterRestart.click();
     await driver.pause(1200);
   }
-  const vpnAfterRestart = await driver.$('android=new UiSelector().text("Enable 1VPN for Nova")');
-  const firewallAfterRestart = await driver.$('android=new UiSelector().text("Enable browser firewall")');
+  const vpnAfterRestart = await driver.$('android=new UiSelector().description("Enable 1VPN browser proxy for Nova")');
+  const firewallAfterRestart = await driver.$('android=new UiSelector().description("Enable GeckoView tracking protection")');
   const vpnPersistedAfterRestart = (await checked(vpnAfterRestart)) === finalVpn;
   const firewallPersistedAfterRestart = (await checked(firewallAfterRestart)) === finalFirewall;
   record('VPN preference persists after app restart', vpnPersistedAfterRestart);
