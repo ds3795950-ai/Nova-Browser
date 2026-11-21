@@ -79,9 +79,9 @@ class NovaDownloadService : Service() {
         return builder.build()
     }
 
-remove unused result method    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
 
-remove unused channel helper    companion object {
+    companion object {
         private const val CHANNEL_ID = "nova_downloads"
         private const val NOTIFICATION_ID = 7301
         private const val EXTRA_COUNT = "active_count"
