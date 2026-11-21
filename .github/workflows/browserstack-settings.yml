@@ -43,6 +43,7 @@ jobs:
           gradle-version: "9.3.1"
 
       - name: Parse and verify BrowserStack credentials
+        id: credentials
         env:
           ROHANSAHA_NGXOSY: ${{ secrets.ROHANSAHA_NGXOSY }}
         run: |
@@ -74,15 +75,18 @@ jobs:
           echo "::add-mask::$BROWSERSTACK_USERNAME"
           echo "::add-mask::$BROWSERSTACK_ACCESS_KEY"
           {
-            printf 'BROWSERSTACK_USERNAME=%s\n' "$BROWSERSTACK_USERNAME"
-            printf 'BROWSERSTACK_ACCESS_KEY=%s\n' "$BROWSERSTACK_ACCESS_KEY"
-          } >> "$GITHUB_ENV"
+            printf 'username=%s\n' "$BROWSERSTACK_USERNAME"
+            printf 'access_key=%s\n' "$BROWSERSTACK_ACCESS_KEY"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build debug App Bundle
         run: gradle --no-daemon :app:bundleDebug
 
       - name: Upload Nova to BrowserStack App Automate
         id: upload
+        env:
+          BROWSERSTACK_USERNAME: ${{ steps.credentials.outputs.username }}
+          BROWSERSTACK_ACCESS_KEY: ${{ steps.credentials.outputs.access_key }}
         run: |
           set -euo pipefail
           APP_FILE="app/build/outputs/bundle/debug/app-debug.aab"
@@ -105,12 +109,12 @@ jobs:
           echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
 
       - name: Install Appium test dependency
-        run: npm install --no-save webdriverio@9
+        run: npm install --no-save webdriverio@9.33.1
 
       - name: Run VPN and firewall settings tests
         env:
-          BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}
+          BROWSERSTACK_USERNAME: ${{ steps.credentials.outputs.username }}
+          BROWSERSTACK_ACCESS_KEY: ${{ steps.credentials.outputs.access_key }}
           BROWSERSTACK_APP_URL: ${{ steps.upload.outputs.app_url }}
           BROWSERSTACK_DEVICE_NAME: ${{ inputs.device_name }}
           BROWSERSTACK_OS_VERSION: ${{ inputs.os_version }}
@@ -125,4 +129,4 @@ jobs:
           name: nova-settings-test-results-${{ github.run_number }}
           path: test-results/settings/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 2
