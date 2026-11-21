@@ -2141,6 +2141,7 @@ class MainActivity : ComponentActivity() {
     private fun showExtensionPopup(): GeckoResult<GeckoSession> {
         activeExtensionPopup?.dismiss()
         val popupSession = GeckoSession()
+        popupSession.open(runtime)
         val popupView = GeckoView(this)
         val dialog = Dialog(this)
         popupView.setSession(popupSession)
