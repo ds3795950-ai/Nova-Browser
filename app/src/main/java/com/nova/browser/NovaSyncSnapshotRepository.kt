@@ -1,7 +1,6 @@
 package com.nova.browser
 
 import android.content.Context
-import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -12,7 +11,7 @@ internal object NovaSyncSnapshotRepository {
 
     fun build(context: Context, searchEngine: String? = null): JSONObject {
         val p = prefs(context)
-        val bookmarks = readArray(p.getString("bookmarks_v2", null))
+        val bookmarks = readArray(NovaLocalDataStore.readBookmarksJson(context))
         val safeBookmarks = if (bookmarks != null) JSONArray().also { out ->
             for (i in 0 until bookmarks.length()) {
                 val item = bookmarks.optJSONObject(i) ?: continue
@@ -24,16 +23,9 @@ internal object NovaSyncSnapshotRepository {
                 }
                 if (out.length() >= MAX_BOOKMARKS) break
             }
-        } else JSONArray().also { out ->
-            (p.getStringSet("bookmarks", emptySet()) ?: emptySet()).forEach { url ->
-                val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return@forEach
-                if (safeUrl.length <= MAX_URL_LENGTH && out.length() < MAX_BOOKMARKS) {
-                    out.put(JSONObject().put("url", safeUrl).put("title", Uri.parse(safeUrl).host ?: safeUrl).put("folder", "General").put("addedAt", 0L))
-                }
-            }
-        }
+        } else JSONArray()
 
-        val historySource = readArray(p.getString("history_v2", null))
+        val historySource = readArray(NovaLocalDataStore.readHistoryJson(context))
         val history = if (historySource != null) JSONArray().also { out ->
             for (i in 0 until historySource.length()) {
                 val item = historySource.optJSONObject(i) ?: continue
@@ -47,15 +39,7 @@ internal object NovaSyncSnapshotRepository {
                 out.put(normalized)
                 if (out.length() >= MAX_HISTORY) break
             }
-        } else JSONArray().also { out ->
-            (p.getStringSet("history", emptySet()) ?: emptySet()).forEachIndexed { index, url ->
-                val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return@forEachIndexed
-                if (safeUrl.length <= MAX_URL_LENGTH && out.length() < MAX_HISTORY) {
-                    val id = UUID.nameUUIDFromBytes("$safeUrl|0|$index".toByteArray()).toString()
-                    out.put(JSONObject().put("id", id).put("url", safeUrl).put("title", Uri.parse(safeUrl).host ?: safeUrl).put("visitedAt", 0L))
-                }
-            }
-        }
+        } else JSONArray()
         val workspaces = JSONArray()
         p.getStringSet("saved_workspaces", emptySet())?.take(MAX_WORKSPACES)?.forEach { raw ->
             runCatching {
@@ -80,7 +64,7 @@ internal object NovaSyncSnapshotRepository {
             .put("font_scale_index", p.getInt("font_scale_index", 2))
             .put("desktop_sites", JSONArray(p.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
             .put("bookmark_folders", JSONArray(p.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
-        val tombstones = runCatching { JSONObject(p.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val tombstones = JSONObject(NovaLocalDataStore.readBookmarkTombstonesJson(context) ?: "{}")
         val workspaceTombstones = runCatching { JSONObject(p.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
         return JSONObject().put("schema", 3).put("bookmarks", safeBookmarks).put("history", history)
             .put("bookmark_tombstones", tombstones).put("workspace_tombstones", workspaceTombstones)
@@ -98,7 +82,6 @@ internal object NovaSyncSnapshotRepository {
         require(history.length() <= MAX_HISTORY) { "Cloud snapshot has too much history" }
         require(workspaces.length() <= MAX_WORKSPACES) { "Cloud snapshot has too many workspaces" }
         val safeBookmarks = JSONArray()
-        val urls = linkedSetOf<String>()
         for (i in 0 until bookmarks.length()) {
             val item = bookmarks.optJSONObject(i) ?: continue
             val url = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: continue
@@ -106,7 +89,6 @@ internal object NovaSyncSnapshotRepository {
             safeBookmarks.put(JSONObject(item.toString()).put("url", url)
                 .put("title", item.optString("title").take(MAX_TITLE_LENGTH))
                 .put("folder", item.optString("folder", "General").take(MAX_FOLDER_LENGTH)))
-            urls.add(url)
         }
         val safeHistory = (0 until history.length()).mapNotNull { history.optJSONObject(it) }
             .mapNotNull { item ->
@@ -132,11 +114,19 @@ internal object NovaSyncSnapshotRepository {
             workspaceSet.add(JSONObject(item.toString()).put("name", name).put("tabs", safeTabs).toString())
         }
         val settings = snapshot.optJSONObject("settings") ?: JSONObject()
-        val editor = p.edit().putString("bookmarks_v2", safeBookmarks.toString()).putStringSet("bookmarks", urls)
-            .putString("bookmark_tombstones", (snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()).toString())
+        NovaLocalDataStore.migrateLegacyBackups(context)
+        val encryptedBookmarks = NovaLocalDataStore.encrypt(context, "bookmarks", safeBookmarks.toString())
+        val encryptedHistory = NovaLocalDataStore.encrypt(context, "history", historyArray.toString())
+        val encryptedBookmarkTombstones = NovaLocalDataStore.encrypt(
+            context, "bookmark_tombstones", (snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()).toString()
+        )
+        val editor = p.edit()
+            .putString(NovaLocalDataStore.BOOKMARKS_PREF_KEY, encryptedBookmarks).remove("bookmarks_v2").remove("bookmarks")
+            .putString(NovaLocalDataStore.HISTORY_PREF_KEY, encryptedHistory).remove("history_v2").remove("history")
+            .putString(NovaLocalDataStore.BOOKMARK_TOMBSTONES_PREF_KEY, encryptedBookmarkTombstones).remove("bookmark_tombstones")
             .putString("workspace_tombstones", (snapshot.optJSONObject("workspace_tombstones") ?: JSONObject()).toString())
             .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L))
-            .putString("history_v2", historyArray.toString()).putStringSet("saved_workspaces", workspaceSet)
+            .putStringSet("saved_workspaces", workspaceSet)
             .putString("search_engine", settings.optString("search_engine", "Google"))
             .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
             .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
@@ -146,7 +136,7 @@ internal object NovaSyncSnapshotRepository {
         check(editor.commit()) { "Could not persist the restored Nova sync snapshot" }
     }
 
-    private fun readArray(raw: String?): JSONArray? = raw?.let { runCatching { JSONArray(it) }.getOrNull() }
+    private fun readArray(raw: String?): JSONArray? = raw?.let { JSONArray(it) }
 
     private const val MAX_SNAPSHOT_CHARS = 2 * 1024 * 1024
     private const val MAX_BOOKMARKS = 1000
