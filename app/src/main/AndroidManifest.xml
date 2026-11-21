@@ -35,7 +35,7 @@
             android:name=".MainActivity"
             android:resizeableActivity="true"
             android:windowSoftInputMode="stateUnchanged|adjustResize"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|density|locale|layoutDirection"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection|fontScale"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
