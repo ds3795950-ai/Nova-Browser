@@ -2146,12 +2146,17 @@ class MainActivity : ComponentActivity() {
             override fun onNewTab(source: WebExtension, createDetails: WebExtension.CreateTabDetails): GeckoResult<GeckoSession>? {
                 if (currentTab()?.isGuest == true) return null
                 val url = createDetails.url ?: HOME_URL
-                val session = createExtensionTab(url, geckoWillNavigate = true) ?: return null
+                val session = createExtensionTab(
+                    url,
+                    geckoWillNavigate = true,
+                    activate = createDetails.active != false,
+                    isPrivate = currentTab()?.isPrivate == true
+                ) ?: return null
                 return GeckoResult.fromValue(session)
             }
             override fun onOpenOptionsPage(source: WebExtension) {
                 val optionsUrl = source.metaData?.optionsPageUrl ?: return
-                createExtensionTab(optionsUrl, geckoWillNavigate = false)
+                createExtensionTab(optionsUrl, geckoWillNavigate = false, activate = true, isPrivate = currentTab()?.isPrivate == true)
             }
         })
     }
@@ -2179,21 +2184,34 @@ class MainActivity : ComponentActivity() {
         return GeckoResult.fromValue(popupSession)
     }
 
-    private fun createExtensionTab(url: String, geckoWillNavigate: Boolean): GeckoSession? {
+    private fun createExtensionTab(
+        url: String,
+        geckoWillNavigate: Boolean,
+        activate: Boolean = true,
+        isPrivate: Boolean = currentTab()?.isPrivate == true
+    ): GeckoSession? {
         if (currentTab()?.isGuest == true) return null
-        currentTab()?.session?.setActive(false)
-        currentTab()?.session?.setFocused(false)
-        val tab = BrowserTab(null, false, false, lastUrl = url, desktopSite = isDesktopUrl(url))
+        if (activate) {
+            currentTab()?.session?.setActive(false)
+            currentTab()?.session?.setFocused(false)
+        }
+        val tab = BrowserTab(null, isPrivate, false, lastUrl = url, desktopSite = isDesktopUrl(url))
+        tab.needsReload = false
         tabs.add(tab)
-        activeIndex = tabs.lastIndex
+        if (activate) activeIndex = tabs.lastIndex
         val session = ensureSession(tab)
-        browserView.setSession(session)
-        session.setActive(true)
-        session.setFocused(true)
+        if (activate) {
+            browserView.setSession(session)
+            session.setActive(true)
+            session.setFocused(true)
+            addressBar.setText(url)
+            val modeTabs = tabs.filter { it.isPrivate == tab.isPrivate && it.isGuest == tab.isGuest }
+            tabLabel.text = "Tab ${modeTabs.indexOf(tab) + 1}/${modeTabs.size}"
+        } else {
+            session.setActive(false)
+            session.setFocused(false)
+        }
         tab.lastAccess = System.nanoTime()
-        addressBar.setText(url)
-        val modeTabs = tabs.filter { it.isPrivate == tab.isPrivate && it.isGuest == tab.isGuest }
-        tabLabel.text = "Tab ${modeTabs.indexOf(tab) + 1}/${modeTabs.size}"
         if (!geckoWillNavigate) session.loadUri(url)
         persistTabs()
         enforceSessionBudget()
