@@ -5,15 +5,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VaultEntriesCacheTest {
-    @Test fun decryptsOnlyOnceUntilInvalidated() {
-        val cache = VaultEntriesCache<List<String>>()
+    @Test fun decryptsOnlyOnceDuringCacheLifetime() {
+        var now = 0L
+        val cache = VaultEntriesCache<List<String>>(ttlNanos = 100, clock = { now })
         var loads = 0
         val first = cache.getOrLoad { loads++; listOf("login") }
         val second = cache.getOrLoad { loads++; listOf("unexpected") }
         assertEquals(listOf("login"), first)
         assertEquals(first, second)
         assertEquals(1, loads)
-        cache.invalidate()
+        now = 101L
         assertEquals(listOf("updated"), cache.getOrLoad { loads++; listOf("updated") })
         assertEquals(2, loads)
     }
