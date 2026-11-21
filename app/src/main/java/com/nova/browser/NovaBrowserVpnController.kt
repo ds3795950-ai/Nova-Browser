@@ -21,7 +21,7 @@ object NovaBrowserVpnController {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private fun notifyStatus() {
-        mainHandler.post { notifyStatus() }
+        mainHandler.post { statusListener?.invoke() }
     }
 
     fun initialize(context: Context, geckoRuntime: GeckoRuntime) {
