@@ -722,17 +722,28 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<PromptResponse>()
                 runOnUiThread {
                     val fields = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
-                    val username = EditText(this@MainActivity).apply { hint = "Username" }
+                    val initialUsername = prompt.authOptions.username
+                    val username = EditText(this@MainActivity).apply {
+                        hint = "Username"
+                        setText(initialUsername.orEmpty())
+                        visibility = if (initialUsername == null) View.GONE else View.VISIBLE
+                    }
                     val password = EditText(this@MainActivity).apply {
                         hint = "Password"
+                        setText(prompt.authOptions.password.orEmpty())
                         inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
                     }
-                    fields.addView(username)
+                    if (initialUsername != null) fields.addView(username)
                     fields.addView(password)
+                    val authUri = prompt.authOptions.uri
                     AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Sign in")
-                        .setMessage(prompt.message ?: "This website requires a username and password.")
+                        .setMessage(listOfNotNull(prompt.message, authUri).joinToString("\n").ifBlank { "This website requires authentication." })
                         .setView(fields)
-                        .setPositiveButton("Sign in") { _, _ -> result.complete(prompt.confirm(username.text.toString(), password.text.toString())) }
+                        .setPositiveButton("Sign in") { _, _ ->
+                            val response = if (initialUsername == null) prompt.confirm(password.text.toString())
+                                else prompt.confirm(username.text.toString(), password.text.toString())
+                            result.complete(response)
+                        }
                         .setNegativeButton("Cancel") { _, _ -> result.complete(prompt.dismiss()) }
                         .setOnCancelListener { result.complete(prompt.dismiss()) }.show()
                 }
@@ -769,7 +780,7 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<PromptResponse>()
                 runOnUiThread {
                     AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: "Allow pop-up?")
-                        .setMessage("This page wants to open a pop-up window.")
+                        .setMessage("This page wants to open: ${prompt.targetUri ?: "a new window"}")
                         .setPositiveButton("Allow") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
                         .setNegativeButton("Block") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
                         .setOnCancelListener { result.complete(prompt.confirm(AllowOrDeny.DENY)) }.show()
