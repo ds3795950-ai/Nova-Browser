@@ -61,6 +61,24 @@ internal object CloudCrypto {
     }
 }
 
+/** Browser snapshot and encrypted password vault share one revision and one database write. */
+internal object NovaCloudBundle {
+    const val FORMAT = "nova-encrypted-sync-bundle-v1"
+
+    fun pack(snapshot: JSONObject, vault: JSONObject): JSONObject =
+        JSONObject().put("format", FORMAT).put("browser", snapshot).put("vault", vault)
+
+    fun unpack(snapshot: JSONObject?, legacyVault: JSONObject?): Pair<JSONObject?, JSONObject?> {
+        if (snapshot?.optString("format") == FORMAT) {
+            val browser = snapshot.optJSONObject("browser")
+            val vault = snapshot.optJSONObject("vault")
+            require(browser != null && vault != null) { "Encrypted cloud bundle is incomplete" }
+            return Pair(browser, vault)
+        }
+        return Pair(snapshot, legacyVault)
+    }
+}
+
 /** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
 class CloudSyncConflictException(message: String) : IllegalStateException(message)
 
@@ -75,7 +93,6 @@ class NovaCloudSync(context: Context) {
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
     @Volatile private var snapshotVersion: String? = null
-    @Volatile private var vaultVersion: String? = null
 
     fun sendEmailOtp(email: String) {
         val clean = email.trim().lowercase()
@@ -186,54 +203,49 @@ class NovaCloudSync(context: Context) {
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
         val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
-        val vault = fetchRow("nova_encrypted_vault", "payload", userId, token)
-        return Pair(snapshot, vault)
+        if (snapshot?.optString("format") == NovaCloudBundle.FORMAT) {
+            return NovaCloudBundle.unpack(snapshot, null)
+        }
+        // Read legacy backups written before browser data and vault were bundled.
+        val legacyVault = fetchRow("nova_encrypted_vault", "payload", userId, token)
+        return NovaCloudBundle.unpack(snapshot, legacyVault)
     }
 
     fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        upsertRow("nova_sync_state", "snapshot", userId, snapshot, token, snapshotVersion)
-        upsertRow("nova_encrypted_vault", "payload", userId, vault, token, vaultVersion)
+        // A single compare-and-swap row prevents half-updated browser/vault backups.
+        val bundle = NovaCloudBundle.pack(snapshot, vault)
+        upsertRow("nova_sync_state", "snapshot", userId, bundle, token, snapshotVersion)
+        snapshotVersion = null
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
-        if (table == "nova_sync_state") snapshotVersion = null
-        if (table == "nova_encrypted_vault") vaultVersion = null
-        val path = "/rest/v1/$table?user_id=eq.$userId&select=$column,version"
-        val response = request("GET", path, null, token)
-        val array = org.json.JSONArray(response)
-        if (array.length() == 0) return null
-        val row = array.getJSONObject(0)
-        if (table == "nova_sync_state") snapshotVersion = row.optString("version").takeIf { it.isNotBlank() }
-        if (table == "nova_encrypted_vault") vaultVersion = row.optString("version").takeIf { it.isNotBlank() }
+        val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
+        val rows = org.json.JSONArray(result)
+        if (rows.length() == 0) {
+            if (column == "snapshot") snapshotVersion = null
+            return null
+        }
+        val row = rows.getJSONObject(0)
+        if (column == "snapshot") snapshotVersion = row.optString("updated_at").takeIf { it.isNotBlank() }
         return row.optJSONObject(column)
     }
 
+    /** Compare-and-swap prevents two devices syncing the same old revision from overwriting each other. */
     private fun upsertRow(table: String, column: String, userId: String, payload: JSONObject, token: String, expectedVersion: String?) {
-        val nextVersion = java.util.UUID.randomUUID().toString()
-        try {
-            val response = if (expectedVersion == null) {
-                // Insert-only when no row was observed; never overwrite a row created concurrently.
-                val body = JSONObject().put("user_id", userId).put(column, payload).put("version", nextVersion).toString()
-                request("POST", "/rest/v1/$table", body, token, "return=representation")
-            } else {
-                // Update only the version downloaded by this client (optimistic concurrency control).
-                val body = JSONObject().put(column, payload).put("version", nextVersion).toString()
-                request("PATCH", "/rest/v1/$table?user_id=eq.$userId&version=eq.$expectedVersion", body, token, "return=representation")
-            }
-            if (!hasUpdatedRow(response)) {
-                throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
-            }
-            if (table == "nova_sync_state") snapshotVersion = nextVersion
-            if (table == "nova_encrypted_vault") vaultVersion = nextVersion
-        } catch (e: IllegalStateException) {
-            if (e is CloudSyncConflictException) throw e
-            if (e.message?.contains("409") == true || e.message?.contains("conflict", ignoreCase = true) == true) {
-                throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
-            }
-            throw e
+        val body = JSONObject().put("user_id", userId).put(column, payload)
+        val response = if (expectedVersion == null) {
+            request("POST", "/rest/v1/$table?on_conflict=user_id", body.toString(), token,
+                "resolution=ignore-duplicates,return=representation")
+        } else {
+            val encodedVersion = java.net.URLEncoder.encode(expectedVersion, "UTF-8")
+            request("PATCH", "/rest/v1/$table?user_id=eq.$userId&updated_at=eq.$encodedVersion", body.toString(), token,
+                "return=representation")
+        }
+        if (org.json.JSONArray(response).length() == 0) {
+            throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
         }
     }
 
