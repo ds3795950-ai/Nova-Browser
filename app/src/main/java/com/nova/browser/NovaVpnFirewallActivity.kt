@@ -5,7 +5,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
+import android.widget.Switch
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -14,8 +14,8 @@ import androidx.activity.ComponentActivity
 /** Browser-only VPN and firewall controls. No Android VpnService is started here. */
 open class NovaVpnFirewallActivity : ComponentActivity() {
     private lateinit var status: TextView
-    private lateinit var vpnToggle: CheckBox
-    private lateinit var firewallToggle: CheckBox
+    private lateinit var vpnToggle: Switch
+    private lateinit var firewallToggle: Switch
     private lateinit var locationButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,7 +41,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             textSize = 14f
             setPadding(0, 0, 0, dp(14))
         }
-        vpnToggle = CheckBox(this).apply {
+        vpnToggle = Switch(this).apply {
             text = "Enable 1VPN for Nova"
             textSize = 17f
             isChecked = NovaBrowserVpnController.isVpnEnabled()
@@ -64,7 +64,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             textSize = 19f
             setPadding(0, dp(14), 0, dp(4))
         }
-        firewallToggle = CheckBox(this).apply {
+        firewallToggle = Switch(this).apply {
             text = "Enable browser firewall"
             textSize = 17f
             isChecked = NovaBrowserVpnController.isFirewallEnabled()

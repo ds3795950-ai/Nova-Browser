@@ -1,0 +1,23 @@
+<resources>
+    <style name="NovaTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">@color/nova_accent</item>
+        <item name="android:windowBackground">@color/nova_background</item>
+        <item name="android:statusBarColor">@color/nova_background</item>
+        <item name="android:navigationBarColor">@color/nova_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:textColorPrimary">@color/nova_text_primary</item>
+        <item name="android:textColorSecondary">@color/nova_text_secondary</item>
+        <item name="android:alertDialogTheme">@style/NovaAlertDialogTheme</item>
+        <item name="android:windowSplashScreenBackground">@color/nova_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_nova_dragon</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/nova_surface</item>
+    </style>
+    <style name="NovaAlertDialogTheme" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/nova_accent</item>
+        <item name="android:colorBackground">@color/nova_surface_elevated</item>
+        <item name="android:textColorPrimary">@color/nova_text_primary</item>
+        <item name="android:textColorSecondary">@color/nova_text_secondary</item>
+    </style>
+</resources>
