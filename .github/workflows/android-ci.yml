@@ -27,23 +27,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-      - name: Generate Gradle dependency verification metadata
-        run: gradle --write-verification-metadata sha256 :app:testDebugUnitTest :app:assembleDebug :app:lintVitalAnalyzeRelease
-      - name: Commit generated dependency verification metadata
+      - name: Generate dependency lockfile
+        run: |
+          gradle --write-locks :app:dependencies --configuration debugRuntimeClasspath
+          gradle --write-locks :app:dependencies --configuration releaseRuntimeClasspath
+          gradle --write-locks :app:dependencies --configuration debugUnitTestRuntimeClasspath
+      - name: Commit generated dependency lockfile
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add gradle/verification-metadata.xml
+          git add app/gradle.lockfile
           if ! git diff --cached --quiet; then
-            git commit -m "Add Gradle dependency verification metadata"
+            git commit -m "Lock Nova Browser app dependencies"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
-      - name: Upload dependency verification metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-verification-metadata
-          path: gradle/verification-metadata.xml
-          retention-days: 2
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest
       - name: Assemble debug APK

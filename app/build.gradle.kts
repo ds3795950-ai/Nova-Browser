@@ -8,6 +8,10 @@ plugins {
     id("com.android.application")
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 val releaseStorePath = System.getenv("NOVA_RELEASE_KEYSTORE_PATH")
 val releaseStorePassword = System.getenv("NOVA_RELEASE_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("NOVA_RELEASE_KEY_ALIAS")
