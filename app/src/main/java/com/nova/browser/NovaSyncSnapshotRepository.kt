@@ -41,7 +41,7 @@ internal object NovaSyncSnapshotRepository {
             }
         } else JSONArray()
         val workspaces = JSONArray()
-        p.getStringSet("saved_workspaces", emptySet())?.take(MAX_WORKSPACES)?.forEach { raw ->
+        NovaLocalDataStore.readWorkspaces(context).take(MAX_WORKSPACES).forEach { raw ->
             runCatching {
                 val workspace = JSONObject(raw)
                 val name = workspace.optString("name").take(MAX_WORKSPACE_NAME_LENGTH)
@@ -65,11 +65,15 @@ internal object NovaSyncSnapshotRepository {
             .put("desktop_sites", JSONArray(p.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
             .put("bookmark_folders", JSONArray(p.getStringSet("bookmark_folders", emptySet())?.toList() ?: emptyList<String>()))
         val tombstones = JSONObject(NovaLocalDataStore.readBookmarkTombstonesJson(context) ?: "{}")
-        val workspaceTombstones = runCatching { JSONObject(p.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val workspaceTombstones = JSONObject(NovaLocalDataStore.readWorkspaceTombstonesJson(context))
+        val historyClearedAt = p.getLong("history_cleared_at", 0L)
+        require(historyClearedAt in 0 until Long.MAX_VALUE) { "Saved history-clear timestamp is invalid" }
         return JSONObject().put("schema", 3).put("bookmarks", safeBookmarks).put("history", history)
             .put("bookmark_tombstones", tombstones).put("workspace_tombstones", workspaceTombstones)
-            .put("history_cleared_at", p.getLong("history_cleared_at", 0L))
-            .put("workspaces", workspaces).put("settings", settings)
+            .put("history_cleared_at", historyClearedAt)
+            .put("workspaces", workspaces).put("settings", settings).also {
+                require(it.toString().length <= MAX_SNAPSHOT_CHARS) { "Nova sync snapshot exceeds the supported size limit" }
+            }
     }
 
     fun apply(context: Context, snapshot: JSONObject) {
@@ -81,6 +85,8 @@ internal object NovaSyncSnapshotRepository {
         require(bookmarks.length() <= MAX_BOOKMARKS) { "Cloud snapshot has too many bookmarks" }
         require(history.length() <= MAX_HISTORY) { "Cloud snapshot has too much history" }
         require(workspaces.length() <= MAX_WORKSPACES) { "Cloud snapshot has too many workspaces" }
+        val historyClearedAt = snapshot.optLong("history_cleared_at", 0L)
+        require(historyClearedAt in 0 until Long.MAX_VALUE) { "Cloud snapshot has an invalid history-clear timestamp" }
         val safeBookmarks = JSONArray()
         for (i in 0 until bookmarks.length()) {
             val item = bookmarks.optJSONObject(i) ?: continue
@@ -121,13 +127,17 @@ internal object NovaSyncSnapshotRepository {
             val encryptedBookmarkTombstones = NovaLocalDataStore.encrypt(
                 context, "bookmark_tombstones", (snapshot.optJSONObject("bookmark_tombstones") ?: JSONObject()).toString()
             )
+            val encryptedWorkspaces = NovaLocalDataStore.encryptWorkspaces(context, workspaceSet)
+            val encryptedWorkspaceTombstones = NovaLocalDataStore.encryptWorkspaceTombstones(
+                context, (snapshot.optJSONObject("workspace_tombstones") ?: JSONObject()).toString()
+            )
             val editor = p.edit()
                 .putString(NovaLocalDataStore.BOOKMARKS_PREF_KEY, encryptedBookmarks).remove("bookmarks_v2").remove("bookmarks")
                 .putString(NovaLocalDataStore.HISTORY_PREF_KEY, encryptedHistory).remove("history_v2").remove("history")
                 .putString(NovaLocalDataStore.BOOKMARK_TOMBSTONES_PREF_KEY, encryptedBookmarkTombstones).remove("bookmark_tombstones")
-                .putString("workspace_tombstones", (snapshot.optJSONObject("workspace_tombstones") ?: JSONObject()).toString())
-                .putLong("history_cleared_at", snapshot.optLong("history_cleared_at", 0L))
-                .putStringSet("saved_workspaces", workspaceSet)
+                .putString(NovaLocalDataStore.WORKSPACE_TOMBSTONES_PREF_KEY, encryptedWorkspaceTombstones).remove("workspace_tombstones")
+                .putString(NovaLocalDataStore.WORKSPACES_PREF_KEY, encryptedWorkspaces).remove("saved_workspaces")
+                .putLong("history_cleared_at", historyClearedAt)
                 .putString("search_engine", settings.optString("search_engine", "Google"))
                 .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
                 .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))

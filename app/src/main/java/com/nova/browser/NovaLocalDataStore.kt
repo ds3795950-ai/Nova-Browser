@@ -47,11 +47,13 @@ internal object NovaEncryptedBlobCodec {
     }
 }
 
-/** Encrypts normal-profile history and bookmarks at rest; Guest/private data never reaches this store. */
+/** Encrypts normal-profile history, bookmarks, and workspaces at rest; Guest/private data never reaches this store. */
 internal object NovaLocalDataStore {
     const val BOOKMARKS_PREF_KEY = "bookmarks_secure_v1"
     const val HISTORY_PREF_KEY = "history_secure_v1"
     const val BOOKMARK_TOMBSTONES_PREF_KEY = "bookmark_tombstones_secure_v1"
+    const val WORKSPACES_PREF_KEY = "saved_workspaces_secure_v1"
+    const val WORKSPACE_TOMBSTONES_PREF_KEY = "workspace_tombstones_secure_v1"
     const val BOOKMARKS_BACKUP_PREF_KEY = "bookmarks_corrupt_backup_secure_v1"
     const val HISTORY_BACKUP_PREF_KEY = "history_corrupt_backup_secure_v1"
 
@@ -60,6 +62,8 @@ internal object NovaLocalDataStore {
     private const val BOOKMARKS_PURPOSE = "bookmarks"
     private const val HISTORY_PURPOSE = "history"
     private const val BOOKMARK_TOMBSTONES_PURPOSE = "bookmark_tombstones"
+    private const val WORKSPACES_PURPOSE = "workspaces"
+    private const val WORKSPACE_TOMBSTONES_PURPOSE = "workspace_tombstones"
     private const val MAX_HISTORY_ENTRIES = 500
     private const val MAX_HISTORY_URL_LENGTH = 2048
     private val historyExecutor = Executors.newSingleThreadExecutor { task ->
@@ -119,7 +123,9 @@ internal object NovaLocalDataStore {
                     if (!HistoryPolicy.shouldAppendVisit(last?.optString("url"), last?.optLong("visitedAt") ?: 0L, safeUrl, now)) {
                         return@withProfileDataLock
                     }
-                    val visitedAt = maxOf(now, prefs(appContext).getLong("history_cleared_at", 0L) + 1L)
+                    val historyClearedAt = prefs(appContext).getLong("history_cleared_at", 0L)
+                    check(historyClearedAt in 0 until Long.MAX_VALUE) { "Saved history-clear timestamp is invalid" }
+                    val visitedAt = maxOf(now, historyClearedAt + 1L)
                     array.put(JSONObject().put("id", UUID.randomUUID().toString()).put("url", safeUrl)
                         .put("title", title.take(512)).put("visitedAt", visitedAt))
                     while (array.length() > MAX_HISTORY_ENTRIES) array.remove(0)
@@ -173,6 +179,72 @@ internal object NovaLocalDataStore {
             .remove("bookmark_tombstones").commit()) { "Could not persist encrypted bookmark deletion metadata" }
     }
 
+    fun readWorkspaces(context: Context): Set<String> = withProfileDataLock {
+        migrateLegacyBackups(context)
+        val p = prefs(context)
+        p.getString(WORKSPACES_PREF_KEY, null)?.let { encrypted ->
+            val result = NovaWorkspaceStoragePolicy.parse(decrypt(context, WORKSPACES_PURPOSE, encrypted))
+            if (p.contains("saved_workspaces")) check(p.edit().remove("saved_workspaces").commit()) {
+                "Could not remove legacy plaintext saved workspaces"
+            }
+            return@withProfileDataLock result
+        }
+        if (!p.contains("saved_workspaces")) return@withProfileDataLock emptySet()
+        val legacy = p.getStringSet("saved_workspaces", emptySet()).orEmpty().toSet()
+        val encrypted = encryptWorkspaces(context, legacy)
+        check(p.edit().putString(WORKSPACES_PREF_KEY, encrypted).remove("saved_workspaces").commit()) {
+            "Could not migrate saved workspaces to encrypted storage"
+        }
+        legacy
+    }
+
+    fun readWorkspaceTombstonesJson(context: Context): String = withProfileDataLock {
+        migrateLegacyBackups(context)
+        val p = prefs(context)
+        p.getString(WORKSPACE_TOMBSTONES_PREF_KEY, null)?.let { encrypted ->
+            val result = decryptWorkspaceTombstones(context, encrypted)
+            if (p.contains("workspace_tombstones")) check(p.edit().remove("workspace_tombstones").commit()) {
+                "Could not remove legacy plaintext workspace deletion metadata"
+            }
+            return@withProfileDataLock result
+        }
+        if (!p.contains("workspace_tombstones")) return@withProfileDataLock "{}"
+        val legacy = NovaWorkspaceStoragePolicy.validateTombstones(p.getString("workspace_tombstones", "{}") ?: "{}")
+        val encrypted = encryptWorkspaceTombstones(context, legacy)
+        check(p.edit().putString(WORKSPACE_TOMBSTONES_PREF_KEY, encrypted).remove("workspace_tombstones").commit()) {
+            "Could not migrate workspace deletion metadata to encrypted storage"
+        }
+        legacy
+    }
+
+    fun encryptWorkspaces(context: Context, workspaces: Set<String>): String =
+        encrypt(context, WORKSPACES_PURPOSE, NovaWorkspaceStoragePolicy.serialize(workspaces))
+
+    fun encryptWorkspaceTombstones(context: Context, json: String): String =
+        encrypt(context, WORKSPACE_TOMBSTONES_PURPOSE, NovaWorkspaceStoragePolicy.validateTombstones(json))
+
+    private fun decryptWorkspaceTombstones(context: Context, encrypted: String): String =
+        NovaWorkspaceStoragePolicy.validateTombstones(decrypt(context, WORKSPACE_TOMBSTONES_PURPOSE, encrypted))
+
+    fun writeWorkspaceState(context: Context, workspaces: Set<String>, tombstonesJson: String) = withProfileDataLock {
+        migrateLegacyBackups(context)
+        val encryptedWorkspaces = encryptWorkspaces(context, workspaces)
+        val encryptedTombstones = encryptWorkspaceTombstones(context, tombstonesJson)
+        check(prefs(context).edit().putString(WORKSPACES_PREF_KEY, encryptedWorkspaces)
+            .putString(WORKSPACE_TOMBSTONES_PREF_KEY, encryptedTombstones)
+            .remove("saved_workspaces").remove("workspace_tombstones").commit()) {
+            "Could not persist encrypted workspace data"
+        }
+    }
+
+    fun writeWorkspaces(context: Context, workspaces: Set<String>) = withProfileDataLock {
+        writeWorkspaceState(context, workspaces, readWorkspaceTombstonesJson(context))
+    }
+
+    fun writeWorkspaceTombstonesJson(context: Context, json: String) = withProfileDataLock {
+        writeWorkspaceState(context, readWorkspaces(context), json)
+    }
+
     fun clearHistory(context: Context, clearedAt: Long) = withProfileDataLock {
         val editor = prefs(context).edit().putLong("history_cleared_at", clearedAt)
             .remove(HISTORY_PREF_KEY).remove(HISTORY_BACKUP_PREF_KEY)
@@ -217,10 +289,28 @@ internal object NovaLocalDataStore {
     private fun migrateLegacyBackup(context: Context, legacyKey: String, encryptedKey: String, purpose: String) {
         val p = prefs(context)
         val legacy = p.getString(legacyKey, null) ?: return
-        if (p.contains(encryptedKey)) {
-            check(p.edit().remove(legacyKey).commit()) { "Could not remove legacy plaintext recovery data" }
-            return
+        val current = p.getString(encryptedKey, null)
+        if (current != null) {
+            val authenticated = try {
+                // Never discard the recovery copy until the encrypted primary has been authenticated.
+                JSONArray(decrypt(context, purpose, current))
+                true
+            } catch (error: Exception) {
+                // If the Keystore key is missing, keep both copies untouched rather than replacing the key.
+                getExistingKey()
+                JSONArray(legacy)
+                val restored = encrypt(context, purpose, legacy)
+                check(p.edit().putString(encryptedKey, restored).remove(legacyKey).commit()) {
+                    "Could not restore browser data from its protected recovery copy"
+                }
+                return
+            }
+            if (authenticated) {
+                check(p.edit().remove(legacyKey).commit()) { "Could not remove legacy plaintext recovery data" }
+                return
+            }
         }
+        JSONArray(legacy)
         val encrypted = encrypt(context, purpose, legacy)
         check(p.edit().putString(encryptedKey, encrypted).remove(legacyKey).commit()) {
             "Could not encrypt legacy browser-data recovery copy"
@@ -241,7 +331,8 @@ internal object NovaLocalDataStore {
         val p = prefs(context)
         check(!p.contains(BOOKMARKS_PREF_KEY) && !p.contains(HISTORY_PREF_KEY) &&
             !p.contains(BOOKMARKS_BACKUP_PREF_KEY) && !p.contains(HISTORY_BACKUP_PREF_KEY) &&
-            !p.contains(BOOKMARK_TOMBSTONES_PREF_KEY)) {
+            !p.contains(BOOKMARK_TOMBSTONES_PREF_KEY) &&
+            !p.contains(WORKSPACES_PREF_KEY) && !p.contains(WORKSPACE_TOMBSTONES_PREF_KEY)) {
             "Encrypted browser data exists but its Android Keystore key is missing; refusing to overwrite it"
         }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")

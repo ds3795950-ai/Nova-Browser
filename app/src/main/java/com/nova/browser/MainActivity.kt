@@ -148,7 +148,7 @@ class MainActivity : ComponentActivity() {
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
-        runtime = sharedRuntime ?: GeckoRuntime.create(applicationContext).also { sharedRuntime = it }
+        runtime = GeckoRuntime.create(this)
         configureAddonManagerDelegate()
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
@@ -1309,16 +1309,24 @@ class MainActivity : ComponentActivity() {
         val input = EditText(this).apply { hint = "Session name"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Save workspace").setView(input)
             .setPositiveButton("Save") { _, _ ->
-                val name = input.text.toString().trim().ifBlank { "Saved workspace" }
+                val name = input.text.toString().trim().take(NovaWorkspaceStoragePolicy.MAX_NAME_LENGTH).ifBlank { "Saved workspace" }
                 val urls = JSONArray()
-                tabs.filter { !it.isPrivate && !it.isGuest }.forEach { urls.put(JSONObject().put("url", it.lastUrl).put("group", it.group).put("title", it.title)) }
-                val snapshots = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
-                snapshots.removeAll { raw -> runCatching { JSONObject(raw).optString("name") == name }.getOrDefault(false) }
-                val workspaceTombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
-                val createdAt = maxOf(System.currentTimeMillis(), workspaceTombstones.optLong(name) + 1L)
-                snapshots.add(JSONObject().put("name", name).put("createdAt", createdAt).put("tabs", urls).toString())
-                prefs.edit().putStringSet("saved_workspaces", snapshots).apply()
-                toast("Workspace saved")
+                tabs.filter { !it.isPrivate && !it.isGuest }.take(NovaWorkspaceStoragePolicy.MAX_WORKSPACE_TABS)
+                    .filter { it.lastUrl.length <= NovaWorkspaceStoragePolicy.MAX_URL_LENGTH }
+                    .forEach { urls.put(JSONObject().put("url", it.lastUrl)
+                        .put("group", it.group.take(NovaWorkspaceStoragePolicy.MAX_NAME_LENGTH))
+                        .put("title", it.title.take(NovaWorkspaceStoragePolicy.MAX_TITLE_LENGTH))) }
+                runCatching {
+                    NovaLocalDataStore.withProfileDataLock {
+                        val snapshots = NovaLocalDataStore.readWorkspaces(this).toMutableSet()
+                        snapshots.removeAll { raw -> runCatching { JSONObject(raw).optString("name") == name }.getOrDefault(false) }
+                        val workspaceTombstones = JSONObject(NovaLocalDataStore.readWorkspaceTombstonesJson(this))
+                        val createdAt = maxOf(System.currentTimeMillis(), workspaceTombstones.optLong(name) + 1L)
+                        snapshots.add(JSONObject().put("name", name).put("createdAt", createdAt).put("tabs", urls).toString())
+                        NovaLocalDataStore.writeWorkspaceState(this, snapshots, workspaceTombstones.toString())
+                    }
+                }.onSuccess { toast("Workspace saved") }
+                    .onFailure { toast("Could not save workspace securely") }
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -1378,7 +1386,10 @@ class MainActivity : ComponentActivity() {
 
     private fun showSavedWorkspaces() {
         if (denyPrivateOrGuestAccess("Saved workspaces")) return
-        val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
+        val saved = runCatching { NovaLocalDataStore.readWorkspaces(this).toList() }.getOrElse {
+            toast("Could not open saved workspaces securely")
+            return
+        }
         if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
         val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " Â· long-press to delete" }
         val list = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels) }
@@ -1406,7 +1417,7 @@ class MainActivity : ComponentActivity() {
             val data = JSONObject(raw).getJSONArray("tabs")
             for (i in 0 until data.length()) {
                 val item = data.getJSONObject(i)
-                createTab(false, item.optString("url", HOME_URL))
+                createTab(false, item.optString("url").takeIf { it.isNotBlank() } ?: HOME_URL)
                 tabs.last().group = item.optString("group", "Ungrouped")
                 tabs.last().title = item.optString("title", "New tab")
                 tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
@@ -1416,13 +1427,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun deleteWorkspace(raw: String, name: String) {
-        val tombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
-        val createdAt = runCatching { JSONObject(raw).optLong("createdAt") }.getOrDefault(0L)
-        tombstones.put(name, maxOf(System.currentTimeMillis(), createdAt + 1L))
-        val remaining = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
-        remaining.removeAll { candidate -> runCatching { JSONObject(candidate).optString("name") == name }.getOrDefault(false) }
-        prefs.edit().putStringSet("saved_workspaces", remaining).putString("workspace_tombstones", tombstones.toString()).apply()
-        toast("Workspace deleted and queued for cloud sync")
+        runCatching {
+            NovaLocalDataStore.withProfileDataLock {
+                val tombstones = JSONObject(NovaLocalDataStore.readWorkspaceTombstonesJson(this))
+                val createdAt = runCatching { JSONObject(raw).optLong("createdAt") }.getOrDefault(0L)
+                tombstones.put(name, maxOf(System.currentTimeMillis(), createdAt + 1L))
+                val remaining = NovaLocalDataStore.readWorkspaces(this).toMutableSet()
+                remaining.removeAll { candidate -> runCatching { JSONObject(candidate).optString("name") == name }.getOrDefault(false) }
+                NovaLocalDataStore.writeWorkspaceState(this, remaining, tombstones.toString())
+            }
+        }.onSuccess { toast("Workspace deleted and queued for cloud sync") }
+            .onFailure { toast("Could not delete workspace securely") }
     }
 
     private fun closeCurrentTab() = closeTabAt(activeIndex)
@@ -2789,13 +2804,12 @@ class MainActivity : ComponentActivity() {
         tabs.clear()
         if (::runtime.isInitialized) {
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
-            // GeckoRuntime is process-wide; keep it alive across Activity recreation and downloads.
+            runtime.shutdown()
         }
         super.onDestroy()
     }
 
     companion object {
-        @Volatile private var sharedRuntime: GeckoRuntime? = null
         const val ACTION_PAUSE_DOWNLOAD = "com.nova.browser.action.PAUSE_DOWNLOAD"
         const val ACTION_CANCEL_DOWNLOAD = "com.nova.browser.action.CANCEL_DOWNLOAD"
         const val EXTRA_DOWNLOAD_ID = "download_id"
