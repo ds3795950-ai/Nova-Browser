@@ -27,6 +27,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
+      - name: Generate Gradle dependency verification metadata
+        run: gradle --write-verification-metadata sha256 :app:testDebugUnitTest :app:assembleDebug
+      - name: Upload dependency verification metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-verification-metadata
+          path: gradle/verification-metadata.xml
+          retention-days: 2
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest
       - name: Assemble debug APK
