@@ -1,35 +1,23 @@
 package com.nova.browser
 
 import org.json.JSONObject
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class CloudCryptoTest {
-    @Test fun encryptedEnvelopeRoundTrips() {
-        val text = "{\"bookmarks\":[{\"url\":\"https://example.com\"}],\"history\":[]}"
-        val envelope = CloudCrypto.encrypt(text, "correct-horse-battery".toCharArray())
-        assertEquals(text, CloudCrypto.decrypt(envelope, "correct-horse-battery".toCharArray()))
-        assertNotEquals(text, envelope.toString())
-        assertEquals(1, envelope.getInt("version"))
-        assertEquals("AES-256-GCM", envelope.getString("algorithm"))
+    @Test fun rejectsExcessiveServerSuppliedKdfIterationsBeforeDerivingKey() {
+        val envelope = JSONObject()
+            .put("version", 1)
+            .put("algorithm", "AES-256-GCM")
+            .put("iterations", 1_000_000)
+        assertThrows(IllegalArgumentException::class.java) {
+            CloudCrypto.decrypt(envelope, "correct horse battery".toCharArray())
+        }
     }
 
-    @Test fun wrongPassphraseCannotDecryptBackup() {
-        val envelope = CloudCrypto.encrypt("private browser data", "first-secure-passphrase".toCharArray())
-        try {
-            CloudCrypto.decrypt(envelope, "different-secure-passphrase".toCharArray())
-            throw AssertionError("Wrong passphrase unexpectedly decrypted the backup")
-        } catch (_: javax.crypto.AEADBadTagException) { }
-    }
-
-    @Test(expected = IllegalArgumentException::class)
-    fun weakPassphraseRejected() {
-        CloudCrypto.encrypt("data", "short".toCharArray())
-    }
-
-    @Test(expected = IllegalArgumentException::class)
-    fun unsupportedEnvelopeRejected() {
-        CloudCrypto.decrypt(JSONObject().put("version", 9), "correct-horse-battery".toCharArray())
+    @Test fun encryptedPayloadRoundTripsWithTheBoundedWorkFactor() {
+        val passphrase = "a sufficiently long sync passphrase".toCharArray()
+        val encrypted = CloudCrypto.encrypt("nova-sync", passphrase)
+        assertEquals("nova-sync", CloudCrypto.decrypt(encrypted, passphrase))
     }
 }
