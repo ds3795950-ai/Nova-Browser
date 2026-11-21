@@ -39,7 +39,7 @@ jobs:
           git add app/gradle.lockfile
           if ! git diff --cached --quiet; then
             git commit -m "Lock Nova Browser app dependencies"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git push origin "HEAD:refs/heads/fix/critical-url-session-safety"
           fi
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest
