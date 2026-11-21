@@ -5,6 +5,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.AlertDialog
+import android.app.Dialog
 import android.text.Editable
 import android.text.TextWatcher
 import java.text.SimpleDateFormat
@@ -78,6 +79,8 @@ class MainActivity : ComponentActivity() {
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
+    private val extensionActions = mutableMapOf<String, WebExtension.Action>()
+    private var activeExtensionPopup: Dialog? = null
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
@@ -135,6 +138,7 @@ class MainActivity : ComponentActivity() {
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
+        configureAddonManagerDelegate()
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
@@ -1995,23 +1999,31 @@ class MainActivity : ComponentActivity() {
         controller.list().accept({ extensions ->
             runOnUiThread {
                 val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
+                installed.filterNotNull().forEach(::configureExtensionDelegates)
                 val rows = installed.map {
                     val metadata = it?.metaData
                     "${metadata?.name ?: it?.id ?: "Extension"} Â· ${if (metadata?.enabled == true) "Enabled" else "Disabled"}"
                 }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons Â· ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
+                AlertDialog.Builder(this).setTitle("Nova Add-ons Â· ${installed.size}").setMessage("Signed Firefox-compatible extensions are supported. Select an add-on to open its popup, configure it, or manage it.")
                     .setItems(rows) { _, which ->
                         val extension = installed[which]
                         if (extension == null) { toast("This add-on entry is unavailable"); return@setItems }
                         val metadata = extension.metaData
-                        val actions = if (metadata?.enabled == true) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
+                        val actionItems = buildList {
+                            if (extensionActions.containsKey(extension.id)) add("Open popup")
+                            add(if (metadata?.enabled == true) "Disable" else "Enable")
+                            if (!metadata?.optionsPageUrl.isNullOrBlank()) add("Options")
+                            add("Uninstall")
+                        }
                         AlertDialog.Builder(this).setTitle(metadata?.name ?: extension.id)
-                            .setItems(actions) { _, action ->
-                                when (actions[action]) {
+                            .setItems(actionItems.toTypedArray()) { _, action ->
+                                when (actionItems[action]) {
+                                    "Open popup" -> extensionActions[extension.id]?.click()
+                                    "Options" -> metadata?.optionsPageUrl?.let { createExtensionTab(it, geckoWillNavigate = false) }
                                     "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension enabled") }, { toast("Could not enable: ${it?.localizedMessage ?: "Unknown error"}") })
+                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ configureExtensionDelegates(extension); toast("Extension enabled") }, { toast("Could not enable: ${it?.localizedMessage ?: "Unknown error"}") })
                                     "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this extension and its data?")
-                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
+                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ extensionActions.remove(extension.id); toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
                                         .setNegativeButton("Cancel", null).show()
                                 }
                             }.setNegativeButton("Close", null).show()
@@ -2023,6 +2035,109 @@ class MainActivity : ComponentActivity() {
         }, { error -> runOnUiThread { toast("Could not list extensions: ${error?.localizedMessage ?: "Unknown error"}") } })
     }
 
+    private fun configureAddonManagerDelegate() {
+        runtime.getWebExtensionController().setAddonManagerDelegate(object : WebExtensionController.AddonManagerDelegate {
+            override fun onInstalled(extension: WebExtension) {
+                configureExtensionDelegates(extension)
+                toast("Extension installed: ${extension.metaData?.name ?: extension.id}")
+            }
+            override fun onReady(extension: WebExtension) {
+                configureExtensionDelegates(extension)
+            }
+            override fun onEnabled(extension: WebExtension) {
+                configureExtensionDelegates(extension)
+            }
+            override fun onDisabled(extension: WebExtension) {
+                extensionActions.remove(extension.id)
+            }
+            override fun onUninstalled(extension: WebExtension) {
+                extensionActions.remove(extension.id)
+            }
+            override fun onInstallationFailed(extension: WebExtension?, installException: WebExtension.InstallException) {
+                toast("Extension installation failed")
+            }
+        })
+    }
+
+    private fun configureExtensionDelegates(extension: WebExtension) {
+        extension.setActionDelegate(object : WebExtension.ActionDelegate {
+            override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
+                if (action.enabled == true) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
+            }
+            override fun onPageAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
+                if (action.enabled == true) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
+            }
+            override fun onOpenPopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? {
+                if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+                    toast("Extension popups are unavailable in private and Guest browsing")
+                    return null
+                }
+                return showExtensionPopup()
+            }
+            override fun onTogglePopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? {
+                if (activeExtensionPopup?.isShowing == true) {
+                    activeExtensionPopup?.dismiss()
+                    return null
+                }
+                return onOpenPopup(extension, action)
+            }
+        })
+        extension.setTabDelegate(object : WebExtension.TabDelegate {
+            override fun onNewTab(source: WebExtension, createDetails: WebExtension.CreateTabDetails): GeckoResult<GeckoSession>? {
+                if (currentTab()?.isGuest == true) return null
+                val url = createDetails.url ?: HOME_URL
+                val session = createExtensionTab(url, geckoWillNavigate = true) ?: return null
+                return GeckoResult.fromValue(session)
+            }
+            override fun onOpenOptionsPage(source: WebExtension) {
+                val optionsUrl = source.metaData?.optionsPageUrl ?: return
+                createExtensionTab(optionsUrl, geckoWillNavigate = false)
+            }
+        })
+    }
+
+    private fun showExtensionPopup(): GeckoResult<GeckoSession> {
+        activeExtensionPopup?.dismiss()
+        val popupSession = GeckoSession()
+        val popupView = GeckoView(this)
+        val dialog = Dialog(this)
+        popupView.setSession(popupSession)
+        dialog.setContentView(popupView)
+        dialog.setCanceledOnTouchOutside(true)
+        popupSession.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onCloseRequest(session: GeckoSession) { dialog.dismiss() }
+        }
+        dialog.setOnDismissListener {
+            popupView.releaseSession()
+            popupSession.close()
+            if (activeExtensionPopup === dialog) activeExtensionPopup = null
+        }
+        activeExtensionPopup = dialog
+        dialog.show()
+        dialog.window?.setLayout(minOf(dp(420), resources.displayMetrics.widthPixels - dp(32)), dp(520))
+        return GeckoResult.fromValue(popupSession)
+    }
+
+    private fun createExtensionTab(url: String, geckoWillNavigate: Boolean): GeckoSession? {
+        if (currentTab()?.isGuest == true) return null
+        currentTab()?.session?.setActive(false)
+        currentTab()?.session?.setFocused(false)
+        val tab = BrowserTab(null, false, false, lastUrl = url, desktopSite = isDesktopUrl(url))
+        tabs.add(tab)
+        activeIndex = tabs.lastIndex
+        val session = ensureSession(tab)
+        browserView.setSession(session)
+        session.setActive(true)
+        session.setFocused(true)
+        tab.lastAccess = System.nanoTime()
+        addressBar.setText(url)
+        tabLabel.text = "Tab ${tabs.size}"
+        if (!geckoWillNavigate) session.loadUri(url)
+        persistTabs()
+        enforceSessionBudget()
+        return session
+    }
+
     private fun installExtensionPrompt() {
         val input = EditText(this).apply { hint = "https://â¦/extension.xpi"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Install signed extension")
@@ -2031,7 +2146,10 @@ class MainActivity : ComponentActivity() {
                 val url = input.text.toString().trim()
                 if (!url.startsWith("https://") || !url.substringBefore('?').endsWith(".xpi", true)) { toast("Use a direct HTTPS .xpi URL"); return@setPositiveButton }
                 runtime.getWebExtensionController().install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
-                    .accept({ toast("Extension installed: ${it?.metaData?.name ?: it?.id ?: "Extension"}") }, { toast("Extension install failed: ${it?.localizedMessage ?: "Unknown error"}") })
+                    .accept({
+                        it?.let(::configureExtensionDelegates)
+                        toast("Extension installed: ${it?.metaData?.name ?: it?.id ?: "Extension"}")
+                    }, { toast("Extension install failed: ${it?.localizedMessage ?: "Unknown error"}") })
             }.setNegativeButton("Cancel", null).show()
     }
 
