@@ -108,12 +108,27 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             }
             val localSnapshot = NovaSyncSnapshotRepository.build(applicationContext)
             val vault = PasswordVault(applicationContext)
-            val localVault = vault.exportSyncBundle()
+            val localVault = try {
+                vault.exportSyncBundle()
+            } catch (error: javax.crypto.AEADBadTagException) {
+                prefs.edit().putString("cloud_sync_last_error", "The local password vault failed authentication; repair or unlock it before cloud sync").apply()
+                return Result.failure()
+            }
             val remote = cloud.downloadEncrypted()
             val remoteSnapshot = remote.first
-            val merged = if (remoteSnapshot == null) localSnapshot else NovaSyncMerge.merge(localSnapshot,
-                JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
-            val remoteVault = remote.second?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
+            val remoteSnapshotJson = try {
+                remoteSnapshot?.let { JSONObject(CloudCrypto.decrypt(it, passphrase)) }
+            } catch (error: javax.crypto.AEADBadTagException) {
+                prefs.edit().putString("cloud_sync_last_error", "Cloud backup authentication failed; check the sync passphrase").apply()
+                return Result.failure()
+            }
+            val merged = if (remoteSnapshotJson == null) localSnapshot else NovaSyncMerge.merge(localSnapshot, remoteSnapshotJson)
+            val remoteVault = try {
+                remote.second?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
+            } catch (error: javax.crypto.AEADBadTagException) {
+                prefs.edit().putString("cloud_sync_last_error", "Cloud password-vault backup authentication failed; check the sync passphrase").apply()
+                return Result.failure()
+            }
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             cloud.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             NovaSyncSnapshotRepository.apply(applicationContext, merged)
