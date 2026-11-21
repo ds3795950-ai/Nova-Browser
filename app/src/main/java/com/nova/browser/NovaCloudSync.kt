@@ -22,42 +22,56 @@ import javax.crypto.spec.PBEKeySpec
 internal object CloudCrypto {
     private const val ITERATIONS = 310_000
     private const val KEY_BITS = 256
+    private const val MIN_PASSPHRASE_LENGTH = 10
+    private const val MAX_BACKUP_BYTES = 32 * 1024 * 1024
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
     private fun unb64(value: String) = java.util.Base64.getDecoder().decode(value)
 
     fun encrypt(plainText: String, passphrase: CharArray): JSONObject {
-        require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
+        require(passphrase.size >= MIN_PASSPHRASE_LENGTH) { "Choose a sync passphrase with at least 10 characters" }
+        val clearBytes = plainText.toByteArray(Charsets.UTF_8)
+        require(clearBytes.size <= MAX_BACKUP_BYTES) { "Cloud backup is too large to encrypt safely" }
         val random = SecureRandom()
         val salt = ByteArray(16).also(random::nextBytes)
         val iv = ByteArray(12).also(random::nextBytes)
         val spec = PBEKeySpec(passphrase, salt, ITERATIONS, KEY_BITS)
-        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        spec.clearPassword()
+        val keyBytes = try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally { spec.clearPassword() }
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
             JSONObject().put("version", 1).put("algorithm", "AES-256-GCM")
                 .put("kdf", "PBKDF2-HMAC-SHA256").put("iterations", ITERATIONS)
                 .put("salt", b64(salt)).put("iv", b64(iv))
-                .put("ciphertext", b64(cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))))
-        } finally { keyBytes.fill(0) }
+                .put("ciphertext", b64(cipher.doFinal(clearBytes)))
+        } finally {
+            keyBytes.fill(0)
+            clearBytes.fill(0)
+        }
     }
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
+        require(passphrase.size >= MIN_PASSPHRASE_LENGTH) { "Sync passphrase must contain at least 10 characters" }
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
         require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported cloud backup key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
         val salt = unb64(envelope.getString("salt"))
         val iv = unb64(envelope.getString("iv"))
-        require(salt.size == 16 && iv.size == 12) { "Invalid encrypted backup" }
+        val ciphertext = unb64(envelope.getString("ciphertext"))
+        require(salt.size == 16 && iv.size == 12 && ciphertext.size in 16..(MAX_BACKUP_BYTES + 16)) {
+            "Invalid encrypted backup"
+        }
         val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
-        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        spec.clearPassword()
+        val keyBytes = try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally { spec.clearPassword() }
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
-            String(cipher.doFinal(unb64(envelope.getString("ciphertext"))), Charsets.UTF_8)
+            val clearBytes = cipher.doFinal(ciphertext)
+            try { String(clearBytes, Charsets.UTF_8) } finally { clearBytes.fill(0) }
         } finally { keyBytes.fill(0) }
     }
 }
@@ -72,7 +86,10 @@ internal object NovaCloudBundle {
 
     fun unpack(snapshot: JSONObject?, legacyVault: JSONObject?): Pair<JSONObject?, JSONObject?> {
         if (snapshot?.optString("format") == FORMAT) {
-            return Pair(snapshot.optJSONObject("browser"), snapshot.optJSONObject("vault"))
+            val browser = snapshot.optJSONObject("browser")
+            val vault = snapshot.optJSONObject("vault")
+            require(browser != null && vault != null) { "Encrypted cloud bundle is incomplete" }
+            return Pair(browser, vault)
         }
         return Pair(snapshot, legacyVault)
     }
@@ -186,6 +203,8 @@ class NovaCloudSync(context: Context) {
 
     private fun request(method: String, path: String, body: String?, bearer: String? = null, prefer: String? = null): String {
         val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+            // Auth and refresh tokens must never be forwarded to a redirect target.
+            instanceFollowRedirects = false
             requestMethod = method
             connectTimeout = 20_000
             readTimeout = 30_000

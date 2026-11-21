@@ -68,8 +68,27 @@ class CloudCryptoTest {
     }
 
     @Test(expected = IllegalArgumentException::class)
+    fun incompleteAtomicBundleIsRejected() {
+        NovaCloudBundle.unpack(JSONObject().put("format", NovaCloudBundle.FORMAT)
+            .put("browser", JSONObject().put("ciphertext", "browser-only")), null)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
     fun weakPassphraseRejected() {
         CloudCrypto.encrypt("data", "short".toCharArray())
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun weakPassphraseRejectedOnDecryptToo() {
+        val envelope = CloudCrypto.encrypt("data", "correct-horse-battery".toCharArray())
+        CloudCrypto.decrypt(envelope, "short".toCharArray())
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun truncatedCiphertextRejectedBeforeDecryption() {
+        val envelope = CloudCrypto.encrypt("data", "correct-horse-battery".toCharArray())
+        envelope.put("ciphertext", "AA")
+        CloudCrypto.decrypt(envelope, "correct-horse-battery".toCharArray())
     }
 
     @Test(expected = IllegalArgumentException::class)
