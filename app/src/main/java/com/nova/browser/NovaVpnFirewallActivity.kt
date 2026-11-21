@@ -10,7 +10,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 
-/** Browser-only VPN and firewall controls. No Android VpnService is started here. */
+/** Browser-level proxy and GeckoView protection controls. No Android VpnService is started here. */
 open class NovaVpnFirewallActivity : ComponentActivity() {
     private lateinit var status: TextView
     private lateinit var vpnToggle: CheckBox
@@ -19,7 +19,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "VPN & Firewall"
+        title = "Browser Proxy & Shield"
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -27,12 +27,12 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             setPadding(dp(22), dp(24), dp(22), dp(20))
         }
         val heading = TextView(this).apply {
-            text = "Nova VPN & Firewall"
+            text = "Nova Browser Proxy & Shield"
             textSize = 23f
             setPadding(0, 0, 0, dp(12))
         }
         val intro = TextView(this).apply {
-            text = "Both controls affect Nova Browser only. Other Android apps continue using your normal network."
+            text = "The 1VPN proxy and GeckoView protection affect Nova Browser only. Other Android apps continue using your normal network."
             textSize = 14f
             setPadding(0, 0, 0, dp(18))
         }
@@ -41,7 +41,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             setPadding(0, 0, 0, dp(14))
         }
         vpnToggle = CheckBox(this).apply {
-            text = "Enable 1VPN for Nova"
+            text = "Enable 1VPN browser proxy for Nova"
             textSize = 17f
             isChecked = NovaBrowserVpnController.isVpnEnabled()
             setOnCheckedChangeListener { _, enabled ->
@@ -59,12 +59,12 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
             setPadding(dp(4), 0, dp(4), dp(16))
         }
         val firewallHeading = TextView(this).apply {
-            text = "Nova Firewall"
+            text = "Nova Shield"
             textSize = 19f
             setPadding(0, dp(14), 0, dp(4))
         }
         firewallToggle = CheckBox(this).apply {
-            text = "Enable browser firewall"
+            text = "Enable GeckoView tracking protection"
             textSize = 17f
             isChecked = NovaBrowserVpnController.isFirewallEnabled()
             setOnCheckedChangeListener { _, enabled ->
@@ -129,12 +129,12 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
         if (!::status.isInitialized) return
         val enabled = NovaBrowserVpnController.isVpnEnabled()
         val raw = NovaBrowserVpnController.statusText()
-        status.text = when {
-            !enabled -> "VPN: Off"
-            raw.contains("error", ignoreCase = true) || raw.contains("disconnected", ignoreCase = true) || raw.contains("unavailable", ignoreCase = true) -> "VPN: $raw"
-            !NovaBrowserVpnController.isProxySupported() -> "VPN: Waiting for the 1VPN proxy backend. $raw"
-            else -> "VPN: On · ${selectedLocationLabel()} · browser proxy configured. Open an IP-check page to verify the exit IP."
-        }
+        status.text = BrowserProxyStatusPolicy.describe(
+            enabled,
+            NovaBrowserVpnController.isProxySupported(),
+            selectedLocationLabel(),
+            raw
+        )
         if (::locationButton.isInitialized) {
             locationButton.text = "Server: ${selectedLocationLabel()}  ▾"
             locationButton.isEnabled = true

@@ -63,7 +63,10 @@ object NovaBrowserVpnController {
 
                                     override fun onDisconnect(port: WebExtension.Port) {
                                         if (nativePort === port) nativePort = null
-                                        preferences?.edit()?.putString("nova_vpn_status", "Proxy bridge disconnected")?.apply()
+                                        preferences?.edit()
+                                            ?.putBoolean("nova_vpn_proxy_supported", false)
+                                            ?.putString("nova_vpn_status", "Proxy bridge disconnected")
+                                            ?.apply()
                                         statusListener?.invoke()
                                     }
                                 })
@@ -83,7 +86,9 @@ object NovaBrowserVpnController {
     }
 
     fun setVpnEnabled(enabled: Boolean) {
-        preferences?.edit()?.putBoolean("nova_vpn_enabled", enabled)?.apply()
+        preferences?.edit()?.putBoolean("nova_vpn_enabled", enabled)
+            ?.also { if (enabled && nativePort == null) it.putBoolean("nova_vpn_proxy_supported", false) }
+            ?.apply()
         preferences?.edit()?.putString("nova_vpn_status", if (enabled) "Starting 1VPN browser proxy…" else "VPN off")?.apply()
         sendCurrentSettings()
         statusListener?.invoke()
