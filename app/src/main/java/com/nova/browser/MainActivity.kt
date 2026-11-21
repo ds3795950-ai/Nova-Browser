@@ -184,6 +184,9 @@ class MainActivity : ComponentActivity() {
             setTextColor(0xFFFFFFFF.toInt())
             setHintTextColor(0xFFB9AEC8.toInt())
             setSelectAllOnFocus(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_URI or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             imeOptions = EditorInfo.IME_ACTION_GO
             setBackgroundColor(0xFF30243D.toInt())
             setPadding(dp(12), 0, dp(12), 0)
@@ -324,7 +327,10 @@ class MainActivity : ComponentActivity() {
         root.isFocusableInTouchMode = true
         setContentView(root)
         root.requestFocus()
-        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        window.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED or
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
     }
 
     private fun createHomePanel(): LinearLayout {
@@ -414,9 +420,14 @@ class MainActivity : ComponentActivity() {
         currentTab()?.let { tab ->
             tab.lastUrl = HOME_URL
             tab.title = "Nova Home"
+            tab.canGoBack = false
+            tab.canGoForward = false
             tab.needsReload = false
+            // Stop page audio and clear the page while the home panel is visible.
+            tab.session?.loadUri(HOME_URL)
             if (!tab.isPrivate && !tab.isGuest) persistTabs()
         }
+        addressBar.setText("")
         showHomeScreen()
     }
 
@@ -619,8 +630,40 @@ class MainActivity : ComponentActivity() {
                 tab.title = Uri.parse(url).host ?: url.take(48)
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
                 if (currentTab() === tab) {
-                    addressBar.setText(url)
-                    pageStatus.text = when { tab.isGuest -> "Guest Mode Â· temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
+                    if (!addressBar.hasFocus()) {
+                        val host = runCatching { java.net.URI(url).host }.getOrNull()
+                        val styled = android.text.SpannableString(url)
+                        if (!host.isNullOrBlank()) {
+                            val start = url.indexOf(host)
+                            if (start >= 0) styled.setSpan(
+                                android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                                start, start + host.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                        addressBar.setText(styled)
+                    }
+                    pageStatus.text = when {
+                        tab.isGuest -> "Guest Mode Â· temporary data"
+                        tab.isPrivate -> "Private session"
+                        url.startsWith("https://", true) -> "Checking secure connection…"
+                        url.startsWith("http://", true) -> "Not secure · HTTP"
+                        else -> "Browser page"
+                    }
+                }
+            }
+        }
+        session.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onSecurityChange(
+                session: GeckoSession,
+                securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
+            ) {
+                if (currentTab() === tab) {
+                    pageStatus.text = when {
+                        securityInfo.isException -> "Connection warning · certificate exception"
+                        securityInfo.isSecure -> "Secure connection · ${securityInfo.host}"
+                        tab.lastUrl.startsWith("http://", true) -> "Not secure · HTTP"
+                        else -> "Connection security unavailable"
+                    }
                 }
             }
         }
@@ -914,20 +957,22 @@ class MainActivity : ComponentActivity() {
             val saved = JSONArray(raw)
             val savedActiveIndex = prefs.getInt("active_normal_tab", 0)
             for (i in 0 until saved.length()) {
-                val item = saved.getJSONObject(i)
-                val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
-                val tab = BrowserTab(
-                    session = null,
-                    isPrivate = false,
-                    isGuest = false,
-                    lastUrl = url,
-                    group = item.optString("group", "Ungrouped"),
-                    title = item.optString("title", "New tab"),
-                    desktopSite = isDesktopUrl(url),
-                    readerOriginalUrl = item.optString("readerOriginalUrl")
-                        .takeIf { it.startsWith("http://") || it.startsWith("https://") }
-                )
-                tabs.add(tab)
+                runCatching {
+                    val item = saved.getJSONObject(i)
+                    val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
+                    if (!HistoryPolicy.shouldPersist(url) && url != HOME_URL) return@runCatching
+                    tabs.add(BrowserTab(
+                        session = null,
+                        isPrivate = false,
+                        isGuest = false,
+                        lastUrl = url,
+                        group = item.optString("group", "Ungrouped"),
+                        title = item.optString("title", "New tab"),
+                        desktopSite = isDesktopUrl(url),
+                        readerOriginalUrl = item.optString("readerOriginalUrl")
+                            .takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                    ))
+                }
             }
             if (tabs.isNotEmpty()) {
                 activeIndex = savedActiveIndex.coerceIn(tabs.indices)
@@ -936,7 +981,10 @@ class MainActivity : ComponentActivity() {
                 switchTab(activeIndex)
             }
         } catch (_: Exception) {
-            prefs.edit().remove("open_normal_tabs").apply()
+            if (!prefs.contains("open_normal_tabs_corrupt_backup")) {
+                prefs.edit().putString("open_normal_tabs_corrupt_backup", raw).apply()
+            }
+            // Preserve the original serialized tabs for manual recovery.
         }
     }
 
@@ -993,13 +1041,26 @@ class MainActivity : ComponentActivity() {
 
     private fun readBookmarks(): MutableList<BookmarkEntry> {
         val raw = prefs.getString("bookmarks_v2", null)
-        if (raw != null) return runCatching {
-            val array = JSONArray(raw)
-            MutableList(array.length()) { i ->
-                val item = array.getJSONObject(i)
-                BookmarkEntry(item.optString("url"), item.optString("title"), item.optString("folder", "General"), item.optLong("addedAt", 0L))
+        if (raw != null) {
+            val parsed = runCatching {
+                val array = JSONArray(raw)
+                buildList {
+                    for (i in 0 until array.length()) {
+                        runCatching {
+                            val item = array.getJSONObject(i)
+                            val url = item.optString("url")
+                            if (HistoryPolicy.shouldPersist(url)) add(
+                                BookmarkEntry(url, item.optString("title"), item.optString("folder", "General"), item.optLong("addedAt", 0L))
+                            )
+                        }
+                    }
+                }.toMutableList()
             }
-        }.getOrDefault(mutableListOf())
+            if (parsed.isSuccess) return parsed.getOrDefault(mutableListOf())
+            if (!prefs.contains("bookmarks_v2_corrupt_backup")) {
+                prefs.edit().putString("bookmarks_v2_corrupt_backup", raw).apply()
+            }
+        }
         return (prefs.getStringSet("bookmarks", emptySet()) ?: emptySet()).map {
             BookmarkEntry(it, Uri.parse(it).host ?: it, "General", System.currentTimeMillis())
         }.toMutableList()
@@ -1134,10 +1195,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addHistory(url: String) {
-        if (url.isBlank() || url == HOME_URL) return
-        val items = readHistory().filterNot { it.url == url }.toMutableList()
+        val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return
+        val items = readHistory().filterNot { it.url == safeUrl }.toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
-        items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
+        items.add(HistoryEntry(safeUrl, Uri.parse(safeUrl).host ?: safeUrl, visitedAt))
         val array = JSONArray()
         items.takeLast(500).forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
         prefs.edit().putString("history_v2", array.toString()).apply()
@@ -1145,10 +1206,25 @@ class MainActivity : ComponentActivity() {
 
     private fun readHistory(): List<HistoryEntry> {
         val raw = prefs.getString("history_v2", null)
-        if (raw != null) return runCatching {
-            val array = JSONArray(raw)
-            List(array.length()) { i -> val item = array.getJSONObject(i); HistoryEntry(item.optString("url"), item.optString("title"), item.optLong("visitedAt")) }
-        }.getOrDefault(emptyList())
+        if (raw != null) {
+            val parsed = runCatching {
+                val array = JSONArray(raw)
+                buildList {
+                    for (i in 0 until array.length()) {
+                        val entry = runCatching {
+                            val item = array.getJSONObject(i)
+                            val url = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: return@runCatching null
+                            HistoryEntry(url, item.optString("title"), item.optLong("visitedAt"))
+                        }.getOrNull()
+                        if (entry != null) add(entry)
+                    }
+                }
+            }
+            if (parsed.isSuccess) return parsed.getOrDefault(emptyList())
+            if (!prefs.contains("history_v2_corrupt_backup")) {
+                prefs.edit().putString("history_v2_corrupt_backup", raw).apply()
+            }
+        }
         return (prefs.getStringSet("history", emptySet()) ?: emptySet()).map { HistoryEntry(it, Uri.parse(it).host ?: it, 0L) }
     }
 
@@ -1569,7 +1645,10 @@ class MainActivity : ComponentActivity() {
         controller.list().accept({ extensions ->
             runOnUiThread {
                 val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
-                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} Â· ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+                val rows = installed.map {
+                    val metadata = it?.metaData
+                    "${metadata?.name ?: it?.id ?: "Extension"} Â· ${if (metadata?.enabled == true) "Enabled" else "Disabled"}"
+                }.toTypedArray()
                 AlertDialog.Builder(this).setTitle("Nova Add-ons Â· ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
                     .setItems(rows) { _, which ->
                         val extension = installed[which]
@@ -1930,7 +2009,7 @@ class MainActivity : ComponentActivity() {
             val uri = data?.data
             if (resultCode == RESULT_OK && uri != null && payload != null) {
                 runCatching {
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(payload) }
+                    contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(payload) }
                         ?: throw IllegalStateException("Could not open export destination")
                     toast("Browsing history exported")
                 }.onFailure { toast("History export failed: ${it?.localizedMessage ?: "Unknown error"}") }
@@ -1946,7 +2025,7 @@ class MainActivity : ComponentActivity() {
                 if (mode == "export") {
                     val array = JSONArray()
                     readBookmarks().forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(array.toString(2)) }
+                    contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(array.toString(2)) }
                         ?: throw IllegalStateException("Could not open export destination")
                     toast("Bookmarks exported")
                 } else {

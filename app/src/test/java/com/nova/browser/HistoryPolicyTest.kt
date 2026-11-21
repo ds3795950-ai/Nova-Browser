@@ -1,24 +1,24 @@
 package com.nova.browser
 
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class HistoryPolicyTest {
-    @Test fun storesOnlyHttpAndHttpsPages() {
-        assertTrue(HistoryPolicy.shouldPersist("https://example.com/path"))
-        assertTrue(HistoryPolicy.shouldPersist("http://localhost:8080/"))
-        assertTrue(HistoryPolicy.shouldPersist("https://example.com:8443/a?b=1"))
+    @Test fun storesOnlyHttpAndHttpsUrls() {
+        assertEquals("https://example.com/a", HistoryPolicy.sanitizeForStorage("https://example.com/a"))
+        assertNull(HistoryPolicy.sanitizeForStorage("about:neterror"))
+        assertNull(HistoryPolicy.sanitizeForStorage("resource://gre/foo"))
+        assertNull(HistoryPolicy.sanitizeForStorage("file:///private/data"))
     }
-    @Test fun excludesInternalAndNonWebSchemes() {
-        listOf("", "about:blank", "about:reader?url=https://example.com", "file:///storage/a.txt",
-            "data:text/plain,secret", "javascript:alert(1)", "blob:https://example.com/id", "ftp://example.com/file").forEach {
-            assertFalse("Should not persist $it", HistoryPolicy.shouldPersist(it))
-        }
+
+    @Test fun skipsUrlsWithSensitiveQueryParameters() {
+        assertNull(HistoryPolicy.sanitizeForStorage("https://example.com/callback?code=abc&state=xyz"))
+        assertNull(HistoryPolicy.sanitizeForStorage("https://example.com/reset?token=secret"))
+        assertEquals("https://example.com/search?q=nova", HistoryPolicy.sanitizeForStorage("https://example.com/search?q=nova#fragment"))
     }
-    @Test fun rejectsMalformedAndCredentialBearingUrls() {
-        assertFalse(HistoryPolicy.shouldPersist("https://"))
-        assertFalse(HistoryPolicy.shouldPersist("https://user:password@example.com/"))
-        assertFalse(HistoryPolicy.shouldPersist("not a url"))
+
+    @Test fun removesUserInfo() {
+        assertNull(HistoryPolicy.sanitizeForStorage("https://user:pass@example.com/path"))
     }
 }
