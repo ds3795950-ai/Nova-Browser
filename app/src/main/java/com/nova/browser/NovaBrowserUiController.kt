@@ -33,6 +33,7 @@ internal data class NovaBrowserUiActions(
     val translatePage: () -> Unit,
     val sharePage: () -> Unit,
     val showSettings: () -> Unit,
+    val showQuickSettings: () -> Unit,
     val showShieldSettings: () -> Unit,
     val showAiAssistant: () -> Unit,
     val showExtensions: () -> Unit,
@@ -132,6 +133,8 @@ internal class NovaBrowserUiController(
         goButton.minWidth = dp(48)
         goButton.minimumWidth = dp(48)
         addressRow.addView(goButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        val quickSettingsButton = actionButton("⋮", "Quick settings") { actions.showQuickSettings() }.apply { textSize = 22f; minWidth = dp(44); minimumWidth = dp(44) }
+        addressRow.addView(quickSettingsButton, LinearLayout.LayoutParams(dp(44), dp(48)))
         top.addView(addressRow)
 
         val controls = LinearLayout(context).apply {
