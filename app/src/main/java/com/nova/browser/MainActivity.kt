@@ -97,27 +97,20 @@ class MainActivity : ComponentActivity() {
     private lateinit var searchEngineButton: Button
     private val tabs = mutableListOf<BrowserTab>()
     private var activeIndex = 0
+    private val sessionBudgetController by lazy {
+        NovaSessionBudgetController(
+            tabs = tabs,
+            currentTab = { currentTab() },
+            splitTabId = { splitTabId },
+            memoryClassMb = { getSystemService(android.app.ActivityManager::class.java).memoryClass },
+            updateStatus = { pageStatus.text = it }
+        )
+    }
     private var searchEngine = "Google"
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
     private val browserData by lazy { NovaBrowserDataRepository(applicationContext) }
 
-    private data class BrowserTab(
-        var session: GeckoSession?,
-        val isPrivate: Boolean,
-        val isGuest: Boolean = false,
-        val id: String = UUID.randomUUID().toString(),
-        var lastUrl: String = HOME_URL,
-        var group: String = "Ungrouped",
-        var title: String = "New tab",
-        var canGoBack: Boolean = false,
-        var canGoForward: Boolean = false,
-        var lastAccess: Long = 0L,
-        var needsReload: Boolean = false,
-        var desktopSite: Boolean = false,
-        var readerOriginalUrl: String? = null,
-        var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
-        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList()
-    )
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -986,54 +979,9 @@ class MainActivity : ComponentActivity() {
         return session
     }
 
-    private fun enforceSessionBudget() {
-        val currentId = currentTab()?.id
-        val visibleIds = setOfNotNull(currentId, splitTabId)
-        val memoryClassMb = getSystemService(android.app.ActivityManager::class.java).memoryClass
-        val limit = SessionBudgetPolicy.maxRetainedSessions(memoryClassMb)
-        val candidates = tabs.filter { it.session != null }.map {
-            SessionBudgetPolicy.Candidate(it.id, it.lastAccess, it.isPrivate, it.isGuest)
-        }
-        SessionBudgetPolicy.evictionCandidates(candidates, limit, visibleIds).forEach { id ->
-            tabs.firstOrNull { it.id == id }?.let { tab ->
-                tab.session?.let { session ->
-                    session.setActive(false)
-                    session.setFocused(false)
-                    session.close()
-                }
-                tab.session = null
-                tab.needsReload = true
-            }
-        }
-        tabs.forEach { tab ->
-            val visible = SessionBudgetPolicy.shouldRemainActive(tab.id, currentId, splitTabId)
-            tab.session?.let { session ->
-                session.setActive(visible)
-                session.setFocused(visible && tab.id == currentId)
-            }
-        }
-        val activeTab = currentTab()
-        pageStatus.text = when {
-            activeTab?.isGuest == true -> "Guest Mode · temporary data"
-            activeTab?.isPrivate == true -> "Private session"
-            else -> "Memory saver · $limit retained normal sessions; background pages reload when reopened"
-        }
-    }
+    private fun enforceSessionBudget() = sessionBudgetController.enforce()
 
-    private fun evictBackgroundNormalSessions() {
-        val visibleIds = setOfNotNull(currentTab()?.id, splitTabId)
-        tabs.filter { it.id !in visibleIds && !it.isPrivate && !it.isGuest }.forEach { tab ->
-            tab.session?.let { session ->
-                session.setActive(false)
-                session.setFocused(false)
-                session.close()
-            }
-            if (tab.session != null) tab.needsReload = true
-            tab.session = null
-        }
-        // Enforce the hard cap for inactive private/Guest sessions if normal-page eviction is not enough.
-        enforceSessionBudget()
-    }
+    private fun evictBackgroundNormalSessions() = sessionBudgetController.evictBackgroundNormalSessions()
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
@@ -2741,7 +2689,7 @@ class MainActivity : ComponentActivity() {
         private const val MAX_BOOKMARK_IMPORT_COUNT = 10_000
         private const val MAX_URL_LENGTH_FOR_IMPORT = 2048
         private const val PRIVATE_CONTEXT_IDS_KEY = "private_context_ids"
-        private const val HOME_URL = "about:blank"
+        private const val HOME_URL = NOVA_HOME_URL
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
     }
 }
