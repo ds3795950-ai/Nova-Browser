@@ -2155,47 +2155,51 @@ class MainActivity : ComponentActivity() {
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
         val items = NovaSettingsCatalog.ownerItems(shortcutState)
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
-            when (NovaSettingsCatalog.actionFor(which)) {
-                NovaSettingsCatalog.Action.CHOOSE_SEARCH_ENGINE -> chooseSearchEngine()
-                NovaSettingsCatalog.Action.TOGGLE_HOME_SHORTCUTS -> {
-                    val show = !prefs.getBoolean("show_home_shortcuts", true)
-                    prefs.edit().putBoolean("show_home_shortcuts", show).apply()
-                    homeShortcuts.visibility = if (show) View.VISIBLE else View.GONE
-                    toast(if (show) "Home shortcuts shown" else "Home shortcuts hidden")
-                }
-                NovaSettingsCatalog.Action.CLEAR_HISTORY -> clearBrowsingHistory()
-                NovaSettingsCatalog.Action.CLOSE_PRIVATE_GUEST_TABS -> {
-                    val activeId = currentTab()?.id
-                    tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
-                        val removed = tabs.removeAt(index)
-
-                        detectedPageLanguages.remove(removed.id)
-                        if (removed.id == splitTabId) exitSplitScreen()
-                        removed.session?.close()
-                        clearPrivateContext(removed)
-                    }
-                    cleanupGuestContextIfIdle()
-                    if (tabs.isEmpty()) createTab(false, HOME_URL) else {
-                        activeIndex = tabs.indexOfFirst { it.id == activeId }.takeIf { it >= 0 } ?: tabs.lastIndex
-                        switchTab(activeIndex)
-                    }
-                    toast("Private and Guest tabs closed")
-                }
-                NovaSettingsCatalog.Action.EXIT_GUEST_MODE -> closeGuestTabs()
-                NovaSettingsCatalog.Action.EXIT_READER_MODE -> exitReaderMode()
-                NovaSettingsCatalog.Action.SHIELD -> showShieldSettings()
-                NovaSettingsCatalog.Action.AI_ASSISTANTS -> showAiAssistant()
-                NovaSettingsCatalog.Action.EXTENSIONS -> showExtensions()
-                NovaSettingsCatalog.Action.PASSWORD_MANAGER -> showPasswordVault()
-                NovaSettingsCatalog.Action.SITE_PERMISSIONS -> showSiteControls()
-                NovaSettingsCatalog.Action.ACCESSIBILITY -> showAccessibilitySettings()
-                NovaSettingsCatalog.Action.EXPORT_HISTORY -> exportHistory()
-                NovaSettingsCatalog.Action.ABOUT -> AlertDialog.Builder(this).setMessage("Nova Browser Â· GeckoView engine")
-                    .setPositiveButton("OK", null).show()
-                NovaSettingsCatalog.Action.CLOUD_ACCOUNT -> showCloudAccount()
-                NovaSettingsCatalog.Action.PROTECTED_DNS -> showProtectedDnsSettings()
-                NovaSettingsCatalog.Action.VPN_PROXY -> startActivity(Intent(this, NovaVpnFirewallActivity::class.java))
-            }
+            NovaSettingsController.dispatch(
+                NovaSettingsCatalog.actionFor(which),
+                mapOf(
+                    NovaSettingsCatalog.Action.CHOOSE_SEARCH_ENGINE to { chooseSearchEngine() },
+                    NovaSettingsCatalog.Action.TOGGLE_HOME_SHORTCUTS to {
+                        val show = !prefs.getBoolean("show_home_shortcuts", true)
+                        prefs.edit().putBoolean("show_home_shortcuts", show).apply()
+                        homeShortcuts.visibility = if (show) View.VISIBLE else View.GONE
+                        toast(if (show) "Home shortcuts shown" else "Home shortcuts hidden")
+                    },
+                    NovaSettingsCatalog.Action.CLEAR_HISTORY to { clearBrowsingHistory() },
+                    NovaSettingsCatalog.Action.CLOSE_PRIVATE_GUEST_TABS to {
+                        val activeId = currentTab()?.id
+                        tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
+                            val removed = tabController.removeAt(index) ?: return@forEach
+                            detectedPageLanguages.remove(removed.id)
+                            if (removed.id == splitTabId) exitSplitScreen()
+                            removed.session?.close()
+                            clearPrivateContext(removed)
+                        }
+                        cleanupGuestContextIfIdle()
+                        if (tabs.isEmpty()) createTab(false, HOME_URL) else {
+                            activeIndex = tabs.indexOfFirst { it.id == activeId }.takeIf { it >= 0 } ?: tabs.lastIndex
+                            switchTab(activeIndex)
+                        }
+                        toast("Private and Guest tabs closed")
+                    },
+                    NovaSettingsCatalog.Action.EXIT_GUEST_MODE to { closeGuestTabs() },
+                    NovaSettingsCatalog.Action.EXIT_READER_MODE to { exitReaderMode() },
+                    NovaSettingsCatalog.Action.SHIELD to { showShieldSettings() },
+                    NovaSettingsCatalog.Action.AI_ASSISTANTS to { showAiAssistant() },
+                    NovaSettingsCatalog.Action.EXTENSIONS to { showExtensions() },
+                    NovaSettingsCatalog.Action.PASSWORD_MANAGER to { showPasswordVault() },
+                    NovaSettingsCatalog.Action.SITE_PERMISSIONS to { showSiteControls() },
+                    NovaSettingsCatalog.Action.ACCESSIBILITY to { showAccessibilitySettings() },
+                    NovaSettingsCatalog.Action.EXPORT_HISTORY to { exportHistory() },
+                    NovaSettingsCatalog.Action.ABOUT to {
+                        AlertDialog.Builder(this).setMessage("Nova Browser · GeckoView engine")
+                            .setPositiveButton("OK", null).show()
+                    },
+                    NovaSettingsCatalog.Action.CLOUD_ACCOUNT to { showCloudAccount() },
+                    NovaSettingsCatalog.Action.PROTECTED_DNS to { showProtectedDnsSettings() },
+                    NovaSettingsCatalog.Action.VPN_PROXY to { startActivity(Intent(this, NovaVpnFirewallActivity::class.java)) }
+                )
+            )
         }.show()
     }
 
