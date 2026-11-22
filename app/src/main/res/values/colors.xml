@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="nova_icon_background">#21152B</color>
-    <color name="nova_accent">#7C4DFF</color>
+    <color name="nova_background">#100D15</color>
+    <color name="nova_surface">#171020</color>
+    <color name="nova_surface_elevated">#241B30</color>
+    <color name="nova_accent">#7650A8</color>
+    <color name="nova_private_accent">#9A5CC4</color>
+    <color name="nova_guest_accent">#147D78</color>
+    <color name="nova_on_accent">#FFFFFFFF</color>
+    <color name="nova_text_primary">#FFF7FF</color>
+    <color name="nova_text_secondary">#C8BBD5</color>
+    <color name="nova_outline">#6D4C83</color>
+    <color name="nova_icon_background">#100D15</color>
 </resources>
