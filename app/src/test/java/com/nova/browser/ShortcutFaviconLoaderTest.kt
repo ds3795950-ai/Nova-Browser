@@ -14,4 +14,10 @@ class ShortcutFaviconLoaderTest {
         assertNull(ShortcutFaviconLoader.faviconUrl("file:///etc/passwd"))
         assertNull(ShortcutFaviconLoader.faviconUrl("about:blank"))
     }
+    @Test fun preservesNonDefaultHttpsPortAndRejectsCredentialUrls() {
+        assertEquals("https://example.com:8443/favicon.ico", ShortcutFaviconLoader.faviconUrl("https://example.com:8443/app"))
+        assertNull(ShortcutFaviconLoader.faviconUrl("https://user:pass@example.com/app"))
+        assertNull(ShortcutFaviconLoader.faviconUrl("https://example.com:99999/app"))
+    }
+
 }

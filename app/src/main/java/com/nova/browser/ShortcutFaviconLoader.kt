@@ -11,6 +11,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
@@ -23,9 +24,14 @@ internal object ShortcutFaviconLoader {
 
     internal fun faviconUrl(pageUrl: String): String? {
         val uri = runCatching { URI(pageUrl) }.getOrNull() ?: return null
-        val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
-        if (uri.scheme !in setOf("http", "https")) return null
-        return "https://$host/favicon.ico"
+        val host = uri.host?.takeIf { it.isNotBlank() }?.lowercase(Locale.ROOT) ?: return null
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
+        if (scheme !in setOf("http", "https") || uri.rawUserInfo != null) return null
+        val port = uri.port
+        if (port != -1 && port !in 1..65535) return null
+        // Preserve non-default HTTPS ports so the favicon request stays on the same origin.
+        val portSuffix = if (scheme == "https" && port != -1 && port != 443) ":$port" else ""
+        return "https://$host$portSuffix/favicon.ico"
     }
 
     fun load(context: Context, pageUrl: String, callback: (Bitmap?) -> Unit) {
