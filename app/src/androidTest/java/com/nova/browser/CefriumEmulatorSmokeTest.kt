@@ -36,7 +36,7 @@ class CefriumEmulatorSmokeTest {
                     EngineSelectionRequest(profile = BrowserProfileKind.GUEST, cefriumAvailable = true)
                 )
                 assertEquals(BrowserEngineType.CEFRIUM, normal.engine)
-                assertEquals(BrowserEngineType.CEFRIUM, private.engine)
+                assertEquals(BrowserEngineType.GECKOVIEW, private.engine)
                 assertEquals(BrowserEngineType.GECKOVIEW, guest.engine)
             }
         }
