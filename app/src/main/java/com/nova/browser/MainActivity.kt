@@ -2848,21 +2848,67 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showHistory() {
-        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) { toast(getString(R.string.history_unavailable_private)); return }
-        val items = readHistory().sortedByDescending { it.visitedAt }.toMutableList()
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
-        val search = EditText(this).apply { hint = getString(R.string.search_history); isSingleLine = true }
+        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+            toast(getString(R.string.history_unavailable_private))
+            return
+        }
+        val items = readHistory().sortedByDescending { it.visitedAt }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val searchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val search = EditText(this).apply {
+            hint = getString(R.string.search_history)
+            isSingleLine = true
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        val clearSearch = Button(this).apply {
+            text = "Clear"
+            contentDescription = "Clear history search"
+            isAllCaps = false
+            visibility = View.GONE
+        }
+        searchRow.addView(search, LinearLayout.LayoutParams(0, -2, 1f))
+        searchRow.addView(clearSearch, LinearLayout.LayoutParams(-2, -2))
         val adapter = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, mutableListOf())
-        val listView = ListView(this).apply { this.adapter = adapter; minimumHeight = dp(240) }
-        content.addView(search); content.addView(listView, LinearLayout.LayoutParams(-1, 0, 1f))
-        val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.history_count, items.size)).setView(content)
+        val listView = ListView(this).apply {
+            this.adapter = adapter
+            minimumHeight = dp(240)
+        }
+        val emptyView = TextView(this).apply {
+            text = "No matching history"
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(24), dp(16), dp(24))
+            visibility = View.GONE
+        }
+        val listContainer = FrameLayout(this).apply {
+            addView(listView, FrameLayout.LayoutParams(-1, -1))
+            addView(emptyView, FrameLayout.LayoutParams(-1, -1))
+        }
+        content.addView(searchRow)
+        content.addView(listContainer, LinearLayout.LayoutParams(-1, 0, 1f))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.history_count, items.size))
+            .setView(content)
             .setNeutralButton(getString(R.string.clear_history), null)
-            .setNegativeButton(getString(R.string.close), null).create()
-        var filteredItems = items.toList()
+            .setNegativeButton(getString(R.string.close), null)
+            .create()
+        var filteredItems = items
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-        fun render(query: String) {
-            filteredItems = items.filter { it.url.contains(query, true) || it.title.contains(query, true) }
+        fun render(rawQuery: String) {
+            val query = rawQuery.trim()
+            filteredItems = if (query.isBlank()) items else items.filter { entry ->
+                entry.url.contains(query, ignoreCase = true) ||
+                    entry.title.contains(query, ignoreCase = true) ||
+                    (Uri.parse(entry.url).host ?: "").contains(query, ignoreCase = true)
+            }
             adapter.clear()
             adapter.addAll(filteredItems.map { entry ->
                 val day = if (entry.visitedAt > 0) dateFormat.format(Date(entry.visitedAt)) else getString(R.string.earlier_history)
@@ -2870,9 +2916,14 @@ class MainActivity : ComponentActivity() {
                 "$day · $time · ${entry.title}\n${entry.url}"
             })
             adapter.notifyDataSetChanged()
-            dialog.setTitle(getString(R.string.history_count, items.size))
+            emptyView.visibility = if (filteredItems.isEmpty()) View.VISIBLE else View.GONE
+            listView.visibility = if (filteredItems.isEmpty()) View.GONE else View.VISIBLE
+            clearSearch.visibility = if (query.isBlank()) View.GONE else View.VISIBLE
+            dialog.setTitle("History · ${filteredItems.size} / ${items.size}")
         }
-        listView.setOnItemClickListener { _, _, position, _ -> filteredItems.getOrNull(position)?.let { dialog.dismiss(); navigate(it.url) } }
+        listView.setOnItemClickListener { _, _, position, _ ->
+            filteredItems.getOrNull(position)?.let { dialog.dismiss(); navigate(it.url) }
+        }
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
         var pending: Runnable? = null
         search.addTextChangedListener(object : TextWatcher {
@@ -2880,16 +2931,22 @@ class MainActivity : ComponentActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 pending?.let(handler::removeCallbacks)
                 val query = s?.toString().orEmpty()
-                pending = Runnable { render(query) }.also { handler.postDelayed(it, 250) }
+                pending = Runnable { render(query) }.also { handler.postDelayed(it, 120) }
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        clearSearch.setOnClickListener { search.text.clear(); search.requestFocus() }
         render("")
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 clearBrowsingHistory {
-                    items.clear(); filteredItems = emptyList(); adapter.clear(); adapter.notifyDataSetChanged()
-                    dialog.setTitle(getString(R.string.history_count, 0))
+                    search.text.clear()
+                    filteredItems = emptyList()
+                    adapter.clear()
+                    adapter.notifyDataSetChanged()
+                    emptyView.visibility = View.VISIBLE
+                    listView.visibility = View.GONE
+                    dialog.setTitle("History · 0 / 0")
                 }
             }
         }
