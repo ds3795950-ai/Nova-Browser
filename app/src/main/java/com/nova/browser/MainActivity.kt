@@ -211,229 +211,66 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun buildBrowserUi() {
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(4))
-            setBackgroundColor(0xFF171020.toInt())
-        }
-        val addressRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        addressBar = EditText(this).apply {
-            hint = "Search or enter address"
-            isSingleLine = true
-            textSize = 15f
-            setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0xFFB9AEC8.toInt())
-            setSelectAllOnFocus(true)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                android.text.InputType.TYPE_TEXT_VARIATION_URI or
-                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            imeOptions = EditorInfo.IME_ACTION_GO
-            setBackgroundColor(0xFF30243D.toInt())
-            setPadding(dp(12), 0, dp(12), 0)
-            contentDescription = "Nova address bar"
-            setOnEditorActionListener { _, actionId, event ->
-                val enterKey = event?.let {
-                    it.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
-                        it.action == android.view.KeyEvent.ACTION_DOWN
-                } == true
-                if (actionId == EditorInfo.IME_ACTION_GO ||
-                    actionId == EditorInfo.IME_ACTION_SEARCH || enterKey
-                ) {
-                    submitAddressBar()
-                    true
-                } else false
-            }
-        }
-        val homeButton = actionButton("â") { goHome() }.apply {
-            contentDescription = "Home"
-            textSize = 18f
-            minWidth = 40
-            minimumWidth = 40
-        }
-        homeButton.minimumWidth = dp(48)
-        homeButton.minimumHeight = dp(48)
-        addressRow.addView(homeButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-        addressRow.addView(addressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
-        searchEngineButton = actionButton("$searchEngine â¾") { chooseSearchEngine() }
-        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
-        searchEngineButton.minWidth = dp(64)
-        searchEngineButton.minimumWidth = dp(64)
-        addressRow.addView(searchEngineButton, LinearLayout.LayoutParams(dp(72), dp(48)))
-        val goButton = actionButton("Go") { submitAddressBar() }
-        goButton.minWidth = dp(48)
-        goButton.minimumWidth = dp(48)
-        addressRow.addView(goButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-        top.addView(addressRow)
-
-        val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        controls.addView(actionButton("â", "Back") { goBack() })
-        controls.addView(actionButton("â", "Forward") { goForward() })
-        controls.addView(actionButton("â»", "Reload") { reloadPage() })
-        controls.addView(actionButton("ï¼") {
-            if (currentTab()?.isGuest == true) createGuestTab() else createTab(false, HOME_URL)
-        })
-        controls.addView(actionButton("Tabs") { showTabs() })
-        controls.addView(actionButton("Split") { chooseSplitTab() })
-        controls.addView(actionButton("Private") {
-            if (currentTab()?.isGuest == true) {
-                pageStatus.text = "Guest Mode Â· temporary data"
-                toast("Private tabs are unavailable in Guest Mode")
-            } else createTab(true, HOME_URL)
-        })
-        controls.addView(actionButton("Guest") { createGuestTab() })
-        top.addView(toolbarScroll(controls), LinearLayout.LayoutParams(-1, dp(48)))
-
-        val tools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        tools.addView(actionButton("â") { toggleBookmark() })
-        tools.addView(actionButton("Bookmarks") { showBookmarks() })
-        tools.addView(actionButton("History") { showHistory() })
-        tools.addView(actionButton("Downloads") { showDownloads() })
-        tools.addView(actionButton("Desktop") { toggleDesktopSite() })
-        tools.addView(actionButton("Reader") { openReaderMode() })
-        tools.addView(actionButton("Translate") { translatePage() })
-        tools.addView(actionButton("Share") { sharePage() })
-        tools.addView(actionButton("Settings") { showSettings() })
-        top.addView(toolbarScroll(tools), LinearLayout.LayoutParams(-1, dp(48)))
-        val advancedTools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        advancedTools.addView(actionButton("Shield") { showShieldSettings() })
-        advancedTools.addView(actionButton("AI") { showAiAssistant() })
-        advancedTools.addView(actionButton("Add-ons") { showExtensions() })
-        advancedTools.addView(actionButton("Passwords") { showPasswordVault() })
-        advancedTools.addView(actionButton("Site") { showSiteControls() })
-        top.addView(toolbarScroll(advancedTools), LinearLayout.LayoutParams(-1, dp(48)))
-
-        tabLabel = TextView(this).apply {
-            text = "Nova Browser"
-            textSize = 12f
-            setTextColor(0xFFD8CBE8.toInt())
-            setPadding(dp(4), dp(5), dp(4), dp(5))
-        }
-        pageStatus = TextView(this).apply {
-            text = "Ready"
-            contentDescription = "Nova session status"
-            textSize = 11f
-            setTextColor(0xFFB9AEC8.toInt())
-            setPadding(dp(4), 0, dp(4), dp(4))
-        }
-        top.addView(tabLabel)
-        top.addView(pageStatus)
-
-        browserView = GeckoView(this)
-        secondaryBrowserView = GeckoView(this)
-        secondaryAddressBar = EditText(this).apply {
-            hint = "Second pane address"
-            isSingleLine = true
-            textSize = 12f
-            setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0xFFB9AEC8.toInt())
-            setBackgroundColor(0xFF30243D.toInt())
-            setPadding(dp(12), 0, dp(12), 0)
-        }
-        val secondaryControls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(actionButton("Back", "Secondary pane back") { tabs.firstOrNull { it.id == splitTabId }?.let { if (it.canGoBack) it.session?.goBack() } })
-            addView(actionButton("Forward", "Secondary pane forward") { tabs.firstOrNull { it.id == splitTabId }?.let { if (it.canGoForward) it.session?.goForward() } })
-            addView(actionButton("Reload", "Reload secondary pane") { tabs.firstOrNull { it.id == splitTabId }?.session?.reload() })
-            addView(secondaryAddressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
-            addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
-            addView(actionButton("Close split") { exitSplitScreen() })
-        }
-        secondaryPane = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(secondaryControls, LinearLayout.LayoutParams(-1, -2))
-            addView(secondaryBrowserView, LinearLayout.LayoutParams(-1, 0, 1f))
-            visibility = View.GONE
-        }
-        browserPane = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(browserView, LinearLayout.LayoutParams(-1, 0, 1f))
-            addView(secondaryPane, LinearLayout.LayoutParams(-1, 0, 1f))
-        }
-        homePanel = createHomePanel()
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF100D15.toInt())
-            addView(top, LinearLayout.LayoutParams(-1, -2))
-            addView(homePanel, LinearLayout.LayoutParams(-1, 0, 1f))
-            addView(browserPane, LinearLayout.LayoutParams(-1, 0, 1f))
-            browserPane.visibility = View.GONE
-        }
-        root.isFocusableInTouchMode = true
+        val ui = NovaBrowserUiController(
+            context = this,
+            dp = { dp(it) },
+            makeButton = { label, description, action -> actionButton(label, description, action) },
+            searchEngine = { searchEngine },
+            actions = NovaBrowserUiActions(
+                goHome = { goHome() },
+                submitAddressBar = { submitAddressBar() },
+                chooseSearchEngine = { chooseSearchEngine() },
+                goBack = { goBack() },
+                goForward = { goForward() },
+                reloadPage = { reloadPage() },
+                newTab = { if (currentTab()?.isGuest == true) createGuestTab() else createTab(false, HOME_URL) },
+                showTabs = { showTabs() },
+                chooseSplitTab = { chooseSplitTab() },
+                newPrivateTab = {
+                    if (currentTab()?.isGuest == true) {
+                        pageStatus.text = "Guest Mode · temporary data"
+                        toast("Private tabs are unavailable in Guest Mode")
+                    } else createTab(true, HOME_URL)
+                },
+                newGuestTab = { createGuestTab() },
+                toggleBookmark = { toggleBookmark() },
+                showBookmarks = { showBookmarks() },
+                showHistory = { showHistory() },
+                showDownloads = { showDownloads() },
+                toggleDesktopSite = { toggleDesktopSite() },
+                openReaderMode = { openReaderMode() },
+                translatePage = { translatePage() },
+                sharePage = { sharePage() },
+                showSettings = { showSettings() },
+                showShieldSettings = { showShieldSettings() },
+                showAiAssistant = { showAiAssistant() },
+                showExtensions = { showExtensions() },
+                showPasswordVault = { showPasswordVault() },
+                showSiteControls = { showSiteControls() },
+                secondaryTab = { tabs.firstOrNull { it.id == splitTabId } },
+                navigateSecondary = { navigateSecondary(it) },
+                exitSplitScreen = { exitSplitScreen() },
+                navigate = { navigate(it) }
+            )
+        ).build()
+        root = ui.root
+        addressBar = ui.addressBar
+        searchEngineButton = ui.searchEngineButton
+        tabLabel = ui.tabLabel
+        pageStatus = ui.pageStatus
+        browserView = ui.browserView
+        secondaryBrowserView = ui.secondaryBrowserView
+        secondaryAddressBar = ui.secondaryAddressBar
+        secondaryPane = ui.secondaryPane
+        browserPane = ui.browserPane
+        homePanel = ui.homePanel
+        homeShortcuts = ui.homeShortcuts
         setContentView(root)
         root.requestFocus()
         window.setSoftInputMode(
             android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED or
                 android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
-    }
-
-    private fun createHomePanel(): LinearLayout {
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(28), dp(20), dp(20))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
-            )
-        }
-        val dragon = TextView(this).apply {
-            text = "ð"
-            textSize = 58f
-            gravity = Gravity.CENTER
-            contentDescription = "Nova dragon emblem"
-            setPadding(0, 0, 0, dp(8))
-        }
-        val title = TextView(this).apply {
-            text = "NOVA"
-            textSize = 32f
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.18f
-            setTextColor(0xFFF1E9FA.toInt())
-            gravity = Gravity.CENTER
-        }
-        val subtitle = TextView(this).apply {
-            text = "Your browser. Your space."
-            textSize = 13f
-            setTextColor(0xFFB9AEC8.toInt())
-            gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(24))
-        }
-        val shortcutTitle = TextView(this).apply {
-            text = "QUICK ACCESS"
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.12f
-            setTextColor(0xFFD8CBE8.toInt())
-            gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        homeShortcuts = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        homeShortcuts.addView(actionButton("Google") { navigate("https://www.google.com") })
-        homeShortcuts.addView(actionButton("YouTube") { navigate("https://m.youtube.com") })
-        homeShortcuts.addView(actionButton("Wikipedia") { navigate("https://www.wikipedia.org") })
-        homeShortcuts.addView(actionButton("GitHub") { navigate("https://github.com") })
-        panel.addView(dragon)
-        panel.addView(title)
-        panel.addView(subtitle)
-        panel.addView(shortcutTitle)
-        panel.addView(homeShortcuts)
-        return panel
     }
 
     private fun showHomeScreen() {
@@ -490,13 +327,6 @@ class MainActivity : ComponentActivity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density + 0.5f).toInt()
-
-    private fun toolbarScroll(row: LinearLayout) =
-        android.widget.HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            isFillViewport = false
-            addView(row, android.view.ViewGroup.LayoutParams(-2, dp(48)))
-        }
 
     private fun actionButton(label: String, description: String = label, action: () -> Unit) = Button(this).apply {
         text = label
