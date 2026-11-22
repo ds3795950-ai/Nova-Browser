@@ -98,16 +98,25 @@ jobs:
           if [ "$CURL_STATUS" -ne 0 ] || [ "$UPLOAD_HTTP" != "200" ]; then
             echo "BrowserStack upload failed: HTTP ${UPLOAD_HTTP:-unknown}, curl exit ${CURL_STATUS}"
             cat browserstack-upload.json
+            if grep -q 'BROWSERSTACK_TESTING_TIME_LIMIT_EXHAUSTED' browserstack-upload.json; then
+              echo "::warning::BrowserStack trial testing time is exhausted. Device tests were not run; restore BrowserStack quota to re-enable them."
+              echo "app_url=" >> "$GITHUB_OUTPUT"
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             exit 1
           fi
           APP_URL="$(jq -r '.app_url // empty' browserstack-upload.json)"
           if [ -z "$APP_URL" ]; then cat browserstack-upload.json; exit 1; fi
           echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
 
       - name: Install Appium test dependency
+        if: steps.upload.outputs.app_url != ''
         run: npm install --no-save webdriverio@9
 
       - name: Run home screen and search bar tests
+        if: steps.upload.outputs.app_url != ''
         env:
           BROWSERSTACK_APP_URL: ${{ steps.upload.outputs.app_url }}
           BROWSERSTACK_DEVICE_NAME: ${{ inputs.device_name }}
