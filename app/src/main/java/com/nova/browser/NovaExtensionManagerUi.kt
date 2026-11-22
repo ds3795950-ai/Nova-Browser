@@ -66,7 +66,11 @@ internal class NovaExtensionManagerUi(
         RecommendedAddon("Decentraleyes", "decentraleyes"),
         RecommendedAddon("NoScript Security Suite", "noscript"),
         RecommendedAddon("Privacy Badger", "privacy-badger17"),
-        RecommendedAddon("YouTube High Definition", "youtube-high-definition")
+        RecommendedAddon("YouTube High Definition", "youtube-high-definition"),
+        RecommendedAddon("Read Aloud", "read-aloud"),
+        RecommendedAddon("Web Archives", "view-page-archive"),
+        RecommendedAddon("Tomato Clock", "tomato-clock"),
+        RecommendedAddon("Search by Image", "search_by_image")
     )
     private fun addonKey(name: String?): String = name.orEmpty().lowercase().filter { it.isLetterOrDigit() }
 
