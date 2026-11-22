@@ -12,6 +12,7 @@ class GuestModePolicyTest {
     @Test fun privateAndGuestTabsNeverPersistOwnerBrowsingRecords() {
         assertFalse(GuestModePolicy.mayPersistBrowsingData(isPrivate = true, isGuest = false))
         assertFalse(GuestModePolicy.mayPersistBrowsingData(isPrivate = false, isGuest = true))
+        assertFalse(GuestModePolicy.mayPersistBrowsingData(isPrivate = true, isGuest = true))
     }
 
     @Test fun guestCannotReadOwnerBrowsingRecords() {
@@ -27,5 +28,20 @@ class GuestModePolicyTest {
     @Test fun guestRequiresAnEphemeralEngineContext() {
         assertTrue(GuestModePolicy.requiresEphemeralStorage(isGuest = true))
         assertFalse(GuestModePolicy.requiresEphemeralStorage(isGuest = false))
+    }
+
+    @Test fun fullModeMatrixOnlyAllowsNormalModeToPersistOwnerData() {
+        for (isPrivate in listOf(false, true)) {
+            for (isGuest in listOf(false, true)) {
+                assertEqualsExpected(
+                    expected = !isPrivate && !isGuest,
+                    actual = GuestModePolicy.mayPersistBrowsingData(isPrivate, isGuest)
+                )
+            }
+        }
+    }
+
+    private fun assertEqualsExpected(expected: Boolean, actual: Boolean) {
+        if (expected) assertTrue(actual) else assertFalse(actual)
     }
 }

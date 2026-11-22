@@ -2,9 +2,9 @@ name: Android Emulator Smoke
 
 on:
   push:
-    branches: [main, feature/phase-1-dual-engine-foundation, fix/phase-1-engine-compatibility]
+    branches: [main, feature/phase-1-dual-engine-foundation, fix/phase-1-engine-compatibility, feature/phase-2-privacy-isolation]
   pull_request:
-    branches: [main]
+    branches: [main, fix/phase-1-engine-compatibility]
   workflow_dispatch:
 
 permissions:

@@ -18,10 +18,18 @@ object BrowserEngineProfilePolicy {
         BrowserProfileKind.NORMAL, BrowserProfileKind.PRIVATE, BrowserProfileKind.GUEST -> false
     }
 
+    /**
+     * Normal and Private sessions use GeckoView's default context (Private is separately
+     * isolated by usePrivateMode). Guest sessions must always carry their own explicit
+     * context ID. Returning null for a Guest session would silently route it into the
+     * default browsing context and weaken the Guest data boundary.
+     */
     fun geckoContextId(profile: BrowserProfileKind, guestContextId: String): String? = when (profile) {
         BrowserProfileKind.NORMAL -> null
         BrowserProfileKind.PRIVATE -> null
-        BrowserProfileKind.GUEST -> guestContextId.takeIf { it.isNotBlank() }
+        BrowserProfileKind.GUEST -> guestContextId.also {
+            require(it.isNotBlank()) { "Guest sessions require an explicit ephemeral Gecko context ID" }
+        }
     }
 
     fun isEphemeral(profile: BrowserProfileKind): Boolean = profile != BrowserProfileKind.NORMAL
