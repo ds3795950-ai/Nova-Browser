@@ -1305,7 +1305,13 @@ class MainActivity : ComponentActivity() {
     private fun ensureBrowserEngine(tab: BrowserTab): com.nova.browser.engine.BrowserEngine {
         enforceCefriumCompatibility(tab)
         return when (tab.engineType) {
-            BrowserEngineType.CEFRIUM -> ensureCefriumEngine(tab)
+            BrowserEngineType.CEFRIUM -> try {
+                ensureCefriumEngine(tab)
+            } catch (failure: Exception) {
+                // ABI/runtime initialization can fail on a device even when the page is Cefrium-compatible.
+                // Reopen only the URL in GeckoView; never copy Cefrium cookies or profile data.
+                fallbackTabToGecko(tab, failure)
+            }
             BrowserEngineType.GECKOVIEW -> {
                 ensureSession(tab)
                 tab.browserEngine as? GeckoViewBrowserEngine
@@ -1363,10 +1369,19 @@ class MainActivity : ComponentActivity() {
         tab.session = null
     }
 
+    private fun enginePaneLayoutParams(pane: LinearLayout): LinearLayout.LayoutParams =
+        if (pane.orientation == LinearLayout.HORIZONTAL) {
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        } else {
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+
     private fun showPrimaryEngineView(engineView: View) {
         activePrimaryEngineView?.let { old -> if (old !== engineView && old.parent === browserPane) browserPane.removeView(old) }
         (engineView.parent as? ViewGroup)?.let { parent -> if (parent !== browserPane) parent.removeView(engineView) }
-        if (engineView.parent !== browserPane) browserPane.addView(engineView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val params = enginePaneLayoutParams(browserPane)
+        if (engineView.parent !== browserPane) browserPane.addView(engineView, params)
+        else engineView.layoutParams = params
         activePrimaryEngineView = engineView
         browserView.visibility = if (engineView === browserView) View.VISIBLE else View.GONE
     }
@@ -1374,7 +1389,9 @@ class MainActivity : ComponentActivity() {
     private fun showSecondaryEngineView(engineView: View) {
         activeSecondaryEngineView?.let { old -> if (old !== engineView && old.parent === secondaryPane) secondaryPane.removeView(old) }
         (engineView.parent as? ViewGroup)?.let { parent -> if (parent !== secondaryPane) parent.removeView(engineView) }
-        if (engineView.parent !== secondaryPane) secondaryPane.addView(engineView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val params = enginePaneLayoutParams(secondaryPane)
+        if (engineView.parent !== secondaryPane) secondaryPane.addView(engineView, params)
+        else engineView.layoutParams = params
         activeSecondaryEngineView = engineView
         secondaryBrowserView.visibility = if (engineView === secondaryBrowserView) View.VISIBLE else View.GONE
     }
