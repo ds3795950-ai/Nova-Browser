@@ -25,4 +25,20 @@ class BrowserEngineProfilePolicyIsolationTest {
         assertTrue(BrowserEngineProfilePolicy.isEphemeral(BrowserProfileKind.PRIVATE))
         assertTrue(BrowserEngineProfilePolicy.isEphemeral(BrowserProfileKind.GUEST))
     }
+
+    @Test fun guestCannotSilentlyFallBackToDefaultGeckoContext() {
+        for (missingId in listOf("", " ", "\n")) {
+            val failure = runCatching {
+                BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.GUEST, missingId)
+            }.exceptionOrNull()
+            assertTrue("A blank Guest context ID must be rejected", failure is IllegalArgumentException)
+        }
+    }
+
+    @Test fun normalProfileIsTheOnlyPersistentProfile() {
+        BrowserProfileKind.values().forEach { profile ->
+            assertEquals(profile != BrowserProfileKind.NORMAL, BrowserEngineProfilePolicy.isEphemeral(profile))
+            assertEquals(profile == BrowserProfileKind.NORMAL, BrowserEngineProfilePolicy.cefriumPersistentProfile(profile) != null)
+        }
+    }
 }
