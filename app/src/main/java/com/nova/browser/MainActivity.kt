@@ -304,10 +304,12 @@ class MainActivity : ComponentActivity() {
                     onReady = {
                         guestTorStartPending = false
                         if (isFinishing || isDestroyed) return@start
-                        tabs.filter { it.isGuest }.forEach { tab ->
-                            runCatching { ensureSession(tab) }.onFailure {
+                        for (tab in tabs.filter { it.isGuest }) {
+                            val restored = runCatching { ensureSession(tab) }
+                            if (restored.isFailure) {
                                 closeGuestTabs()
-                                toast("Guest Mode could not be restored safely: ${it.localizedMessage ?: "browser initialization failed"}")
+                                toast("Guest Mode could not be restored safely: ${restored.exceptionOrNull()?.localizedMessage ?: "browser initialization failed"}")
+                                break
                             }
                         }
                         if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
