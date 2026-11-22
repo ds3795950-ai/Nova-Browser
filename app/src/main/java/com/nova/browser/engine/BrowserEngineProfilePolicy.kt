@@ -4,6 +4,12 @@ package com.nova.browser.engine
 object BrowserEngineProfilePolicy {
     const val NORMAL_CEFRIUM_PROFILE = "nova-normal-v1"
 
+    fun kindFor(isPrivate: Boolean, isGuest: Boolean): BrowserProfileKind = when {
+        isGuest -> BrowserProfileKind.GUEST
+        isPrivate -> BrowserProfileKind.PRIVATE
+        else -> BrowserProfileKind.NORMAL
+    }
+
     fun cefriumPersistentProfile(profile: BrowserProfileKind): String? =
         if (profile == BrowserProfileKind.NORMAL) NORMAL_CEFRIUM_PROFILE else null
 
@@ -15,7 +21,9 @@ object BrowserEngineProfilePolicy {
     fun geckoContextId(profile: BrowserProfileKind, guestContextId: String): String? = when (profile) {
         BrowserProfileKind.NORMAL -> null
         BrowserProfileKind.PRIVATE -> null
-        BrowserProfileKind.GUEST -> guestContextId.takeIf { it.isNotBlank() }
+        BrowserProfileKind.GUEST -> guestContextId.also {
+            require(it.isNotBlank()) { "Guest sessions require an explicit ephemeral Gecko context ID" }
+        }
     }
 
     fun isEphemeral(profile: BrowserProfileKind): Boolean = profile != BrowserProfileKind.NORMAL

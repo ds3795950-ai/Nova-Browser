@@ -64,6 +64,23 @@ internal object CloudCrypto {
 /** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
 class CloudSyncConflictException(message: String) : IllegalStateException(message)
 
+internal object NovaCloudBundle {
+    const val FORMAT = "nova-encrypted-sync-bundle-v1"
+
+    fun pack(snapshot: JSONObject, vault: JSONObject): JSONObject =
+        JSONObject().put("format", FORMAT).put("browser", snapshot).put("vault", vault)
+
+    fun unpack(snapshot: JSONObject?, legacyVault: JSONObject?): Pair<JSONObject?, JSONObject?> {
+        if (snapshot?.optString("format") == FORMAT) {
+            val browser = snapshot.optJSONObject("browser")
+            val vault = snapshot.optJSONObject("vault")
+            require(browser != null && vault != null) { "Encrypted cloud bundle is incomplete" }
+            return Pair(browser, vault)
+        }
+        return Pair(snapshot, legacyVault)
+    }
+}
+
 class NovaCloudSync(context: Context) {
     companion object {
         private const val BASE_URL = BuildConfig.SUPABASE_URL
