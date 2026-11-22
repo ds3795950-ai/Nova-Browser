@@ -48,8 +48,37 @@ internal class NovaAiSecureStore(context:Context) {
     fun hasKey(provider:NovaAiProvider)=runCatching{!getKey(provider).isNullOrBlank()}.getOrDefault(false)
     fun model(provider:NovaAiProvider)=p.getString("model_${provider.name}",provider.defaultModel)?:provider.defaultModel
     fun setModel(provider:NovaAiProvider,value:String){require(value.isNotBlank()&&value.length<160);p.edit().putString("model_${provider.name}",value).apply()}
-    fun history():List<NovaAiMessage> = runCatching { val a=JSONArray(decrypt(p.getString("history","")!!));(0 until a.length()).map{val o=a.getJSONObject(it);NovaAiMessage(o.getString("role"),o.getString("text"),o.optLong("time"))}.takeLast(100) }.getOrDefault(emptyList())
-    fun append(m:NovaAiMessage){val a=JSONArray();(history()+m).takeLast(100).forEach{a.put(JSONObject().put("role",it.role).put("text",it.text).put("time",it.time))};check(p.edit().putString("history",encrypt(a.toString())).commit())}
+    private fun readMessageArray(a:JSONArray):MutableList<NovaAiMessage> =
+        (0 until a.length()).mapNotNull { i -> runCatching { val o=a.getJSONObject(i); NovaAiMessage(o.getString("role"),o.getString("text"),o.optLong("time")) }.getOrNull() }.toMutableList()
+    private fun sessions():MutableList<MutableList<NovaAiMessage>> = runCatching {
+        val raw=decrypt(p.getString("history","")!!)
+        if(raw.trimStart().startsWith("{")) {
+            val all=JSONObject(raw).optJSONArray("sessions") ?: JSONArray()
+            (0 until all.length()).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
+        } else mutableListOf(readMessageArray(JSONArray(raw)))
+    }.getOrDefault(mutableListOf())
+    private fun saveSessions(all:List<List<NovaAiMessage>>) {
+        val root=JSONObject(); val array=JSONArray()
+        all.takeLast(20).forEach { session ->
+            val entries=JSONArray()
+            session.takeLast(100).forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)) }
+            array.put(entries)
+        }
+        root.put("sessions",array)
+        check(p.edit().putString("history",encrypt(root.toString())).commit())
+    }
+    fun history():List<NovaAiMessage> = sessions().flatten().takeLast(100)
+    fun currentHistory():List<NovaAiMessage> = sessions().lastOrNull()?.takeLast(100) ?: emptyList()
+    fun startNewConversation() {
+        val all=sessions()
+        if(all.isEmpty() || all.last().isNotEmpty()) { all.add(mutableListOf()); saveSessions(all) }
+    }
+    fun append(m:NovaAiMessage) {
+        val all=sessions()
+        if(all.isEmpty()) all.add(mutableListOf())
+        all.last().add(m)
+        saveSessions(all)
+    }
     fun clear(){p.edit().remove("history").commit()}
 }
 
@@ -302,7 +331,7 @@ internal class NovaAiAssistantUi(
         }
 
         if (persistHistory) {
-            messages += store.history()
+            messages += store.currentHistory()
             if (messages.isNotEmpty()) messages.forEach(::render)
         }
         if (messages.isEmpty()) showWelcome()
@@ -352,6 +381,7 @@ internal class NovaAiAssistantUi(
 
     private fun newChat() {
         messages.clear()
+        if (persistHistory) runCatching { store.startNewConversation() }
         attachedPageText = null
         contextChip.visibility = View.GONE
         feed.removeAllViews()
