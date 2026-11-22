@@ -57,7 +57,10 @@ class CefriumBrowserEngine(
     desktopMode: Boolean = false,
     existingBrowser: CefriumBrowser? = null,
     initialNovaAddons: List<NovaScriptAddon> = emptyList(),
-    private val javaScriptEnabledForUrl: (String) -> Boolean = { true }
+    private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
+    private val autoplayAllowedForUrl: (String) -> Boolean = { false },
+    private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
+    private val soundAllowedForUrl: (String) -> Boolean = { true }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = setOf(
@@ -100,6 +103,9 @@ class CefriumBrowserEngine(
                 val url = request.url
                 if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
                     browser.setJavaScriptEnabled(javaScriptEnabledForUrl(url))
+                    browser.setMediaPlaybackRequiresUserGesture(!autoplayAllowedForUrl(url))
+                    browser.setAdBlockEnabled(adBlockingEnabledForUrl(url))
+                    browser.setAudioMuted(!soundAllowedForUrl(url))
                 }
                 val scheme = Uri.parse(url).scheme?.lowercase()
                 return when (scheme) {
@@ -207,6 +213,18 @@ class CefriumBrowserEngine(
     fun setJavaScriptEnabled(enabled: Boolean) {
         checkOpen()
         browser.setJavaScriptEnabled(enabled)
+    }
+    fun setAutoplayAllowed(allowed: Boolean) {
+        checkOpen()
+        browser.setMediaPlaybackRequiresUserGesture(!allowed)
+    }
+    fun setAdBlockingEnabled(enabled: Boolean) {
+        checkOpen()
+        browser.setAdBlockEnabled(enabled)
+    }
+    fun setAudioMuted(muted: Boolean) {
+        checkOpen()
+        browser.setAudioMuted(muted)
     }
 
     fun setNovaScriptAddons(addons: List<NovaScriptAddon>) {

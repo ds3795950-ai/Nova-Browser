@@ -995,7 +995,10 @@ class MainActivity : ComponentActivity() {
                 setPageStatus(if (totalMatches > 0) getString(R.string.find_result_count, activeMatch, totalMatches) else getString(R.string.find_no_matches), 2)
             } },
             onFullscreenChanged = { fullScreen -> runOnUiThread { setBrowserFullscreen(fullScreen, tab) } },
-            onPopupRequested = { popup, popupUrl, userGesture -> handleCefriumPopup(popup, popupUrl, userGesture) },
+            onPopupRequested = { popup, popupUrl, userGesture ->
+                if (!siteSettingAllowed(BrowserEngineType.CEFRIUM, popupUrl, "popups", false)) { popup.close(); false }
+                else handleCefriumPopup(popup, popupUrl, userGesture)
+            },
             onPopupClosed = { popup -> handleCefriumPopupClosed(popup) },
             onExternalNavigation = { url, hasUserGesture -> openExternalUrlFromCefrium(url, hasUserGesture) },
             onHttpAuthRequest = { host, realm, isProxy, respond -> showCefriumHttpAuthPrompt(host, realm, isProxy, respond) },
@@ -1005,6 +1008,9 @@ class MainActivity : ComponentActivity() {
             desktopMode = tab.desktopSite,
             existingBrowser = existingBrowser,
             javaScriptEnabledForUrl = { url -> isJavaScriptAllowed(BrowserEngineType.CEFRIUM, url) },
+            autoplayAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "autoplay", false) },
+            adBlockingEnabledForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "ads", true) },
+            soundAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "sound", true) },
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread {
                     if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(origin, permissions.toSet(), respond)
@@ -1848,6 +1854,7 @@ class MainActivity : ComponentActivity() {
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession> {
                 val source = tabs.firstOrNull { it.session === session } ?: return GeckoResult.fromValue(null)
+                if (!siteSettingAllowed(BrowserEngineType.GECKOVIEW, uri, "popups", false)) return GeckoResult.fromValue(null)
                 val newSettings = GeckoSessionSettings.Builder()
                     .usePrivateMode(source.isPrivate || source.isGuest)
                     .contextId(if (source.isGuest) guestContextId else null)
@@ -3721,20 +3728,56 @@ class MainActivity : ComponentActivity() {
         applyJavaScriptSetting(tab, tab.lastUrl, reload = true)
         toast("JavaScript ${if (nextEnabled) "allowed" else "blocked"} for ${Uri.parse(tab.lastUrl).host} · reload started")
     }
+    private fun siteSettingKey(engine: BrowserEngineType, url: String, setting: String): String? {
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val host = uri.host?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        val origin = "$scheme://$host${if (uri.port > 0) ":${uri.port}" else ""}"
+        return "site_" + setting + "_" + engine.name.lowercase() + "_" + Uri.encode(origin)
+    }
+    private fun siteSettingAllowed(engine: BrowserEngineType, url: String, setting: String, default: Boolean): Boolean {
+        val key = siteSettingKey(engine, url, setting) ?: return default
+        return prefs.getBoolean(key, default)
+    }
+    private fun toggleSiteSetting(tab: BrowserTab, setting: String, default: Boolean) {
+        val key = siteSettingKey(tab.engineType, tab.lastUrl, setting) ?: return toast("Open an HTTP or HTTPS site first")
+        val enabled = !siteSettingAllowed(tab.engineType, tab.lastUrl, setting, default)
+        prefs.edit().putBoolean(key, enabled).apply()
+        val engine = tab.browserEngine as? CefriumBrowserEngine
+        when (setting) {
+            "autoplay" -> engine?.setAutoplayAllowed(enabled)
+            "ads" -> engine?.setAdBlockingEnabled(enabled)
+            "sound" -> engine?.setAudioMuted(!enabled)
+        }
+        tab.browserEngine?.reload()
+        toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
+    }
+
     private fun showSiteControls() {
         if (denyGuestAccess("Site controls")) return
         val tab = currentTab() ?: return
         val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
         if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
         val jsLabel = "JavaScript · " + if (isJavaScriptAllowed(tab.engineType, tab.lastUrl)) "Allowed" else "Blocked"
+        val popupLabel = "Pop-ups and redirects · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "popups", false)) "Allowed" else "Blocked"
+        val autoplayLabel = "Autoplay · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "autoplay", false)) "Allowed" else "Blocked"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             val uri = Uri.parse(tab.lastUrl)
             val origin = "${uri.scheme ?: "https"}://${uri.host ?: host}${if (uri.port > 0) ":${uri.port}" else ""}"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setItems(arrayOf(jsLabel, "Clear this site's cookies and storage", "Open in GeckoView for detailed permissions")) { _, which ->
+                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Open in GeckoView for detailed permissions")) { _, which ->
                     if (which == 0) {
                         toggleJavaScriptForCurrentSite(tab)
                     } else if (which == 1) {
+                        toggleSiteSetting(tab, "popups", false)
+                    } else if (which == 2) {
+                        toggleSiteSetting(tab, "autoplay", false)
+                    } else if (which == 3) {
+                        toggleSiteSetting(tab, "ads", true)
+                    } else if (which == 4) {
+                        toggleSiteSetting(tab, "sound", true)
+                    } else if (which == 5) {
                         AlertDialog.Builder(this).setMessage("Clear cookies, cache, local storage and service workers for $host? Other sites are not affected.")
                             .setPositiveButton("Clear site data") { _, _ ->
                                 runCatching {
@@ -3744,7 +3787,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
                             }.setNegativeButton("Cancel", null).show()
-                    } else if (which == 2) switchCurrentTabToGecko("Detailed site permission controls require GeckoView")
+                    } else if (which == 6) switchCurrentTabToGecko("Detailed site permission controls require GeckoView")
                 }.setNegativeButton("Close", null).show()
             return
         }
