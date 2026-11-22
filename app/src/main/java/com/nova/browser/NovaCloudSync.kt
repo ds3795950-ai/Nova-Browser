@@ -103,17 +103,25 @@ class NovaCloudSync(context: Context) {
     @Volatile private var snapshotVersion: String? = null
     @Volatile private var vaultVersion: String? = null
 
+    @Synchronized
     fun sendEmailOtp(email: String) {
-        val clean = email.trim().lowercase()
+        val clean = email.trim().lowercase(java.util.Locale.ROOT)
         require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) { "Enter a valid email address" }
+        val authPrefs = appContext.getSharedPreferences("nova_cloud_auth", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastSent = authPrefs.getLong("email_otp_last_sent_at", 0L)
+        val waitSeconds = NovaEmailOtpPolicy.remainingCooldownSeconds(lastSent, now)
+        check(waitSeconds == 0L) { "Please wait $waitSeconds seconds before requesting another sign-in code" }
         request("POST", "/auth/v1/otp", JSONObject().put("email", clean).put("create_user", true).toString())
+        authPrefs.edit().putLong("email_otp_last_sent_at", now).apply()
     }
 
     fun verifyEmailOtp(email: String, code: String) {
-        val cleanCode = code.trim()
-        require(cleanCode.matches(Regex("[0-9]{6}"))) { "Enter the numeric code from your email" }
+        val cleanEmail = email.trim().lowercase(java.util.Locale.ROOT)
+        require(cleanEmail.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) { "Enter a valid email address" }
+        val cleanCode = NovaEmailOtpPolicy.normalizeCode(code)
         val result = request("POST", "/auth/v1/verify", JSONObject().put("type", "email")
-            .put("email", email.trim().lowercase()).put("token", cleanCode).toString())
+            .put("email", cleanEmail).put("token", cleanCode).toString())
         val session = JSONObject(result)
         require(session.has("access_token") && session.has("refresh_token")) { "Supabase did not return a valid session" }
         session.put("expires_at", System.currentTimeMillis() / 1000 + session.optLong("expires_in", 3600))
@@ -236,8 +244,7 @@ class NovaCloudSync(context: Context) {
                     output.toString()
                 }.orEmpty()
                 if (status !in 200..299) {
-                    val message = runCatching { JSONObject(response).optString("msg").ifBlank { JSONObject(response).optString("message") } }.getOrNull()
-                    throw IllegalStateException(message?.take(180)?.ifBlank { "Cloud request failed ($status)" } ?: "Cloud request failed ($status)")
+                    throw IllegalStateException(NovaEmailOtpPolicy.errorMessage(response, status))
                 }
                 return response
             } finally { connection.disconnect() }

@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.app.AlertDialog
 import android.app.Dialog
 import android.text.Editable
+import android.text.InputFilter
 import android.text.TextWatcher
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -2248,10 +2249,10 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Nova Cloud")) return
         val email = cloudSync.signedInEmail()
         if (email.isNullOrBlank()) {
-            val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; isSingleLine = true }
+            val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; filters = arrayOf(InputFilter.LengthFilter(254)); isSingleLine = true }
             AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
                 .setView(input).setPositiveButton("Send code") { _, _ ->
-                    val address = input.text.toString().trim()
+                    val address = input.text.toString().trim().lowercase(Locale.ROOT)
                     toast("Requesting sign-in codeâ¦")
                     Thread {
                         runCatching { cloudSync.sendEmailOtp(address) }
@@ -2287,7 +2288,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showCloudOtp(email: String) {
-        val input = EditText(this).apply { hint = "6-digit email code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; isSingleLine = true }
+        val input = EditText(this).apply { hint = "6-digit email code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; filters = arrayOf(InputFilter.LengthFilter(6)); isSingleLine = true }
         AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the six-digit code sent to $email")
             .setView(input).setPositiveButton("Verify") { _, _ ->
                 val code = input.text.toString().trim()
