@@ -10,5 +10,13 @@ internal class NovaExtensionController {
     }
     fun remove(extensionId: String) { actions.remove(extensionId) }
     fun clear() { actions.clear() }
+
+    fun menuItems(extensionId: String, enabled: Boolean, hasOptionsPage: Boolean): List<String> =
+        buildList {
+            if (actions.containsKey(extensionId)) add("Open popup")
+            add(if (enabled) "Disable" else "Enable")
+            if (hasOptionsPage) add("Options")
+            add("Uninstall")
+        }
     fun canOpenPersistentManager(isGuest: Boolean): Boolean = !isGuest
 }

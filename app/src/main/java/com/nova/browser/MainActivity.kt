@@ -1915,12 +1915,11 @@ class MainActivity : ComponentActivity() {
                         val extension = installed[which]
                         if (extension == null) { toast("This add-on entry is unavailable"); return@setItems }
                         val metadata = extension.metaData
-                        val actionItems = buildList {
-                            if (extensionActions.containsKey(extension.id)) add("Open popup")
-                            add(if (metadata?.enabled == true) "Disable" else "Enable")
-                            if (!metadata?.optionsPageUrl.isNullOrBlank()) add("Options")
-                            add("Uninstall")
-                        }
+                                        val actionItems = extensionController.menuItems(
+                            extensionId = extension.id,
+                            enabled = metadata?.enabled == true,
+                            hasOptionsPage = !metadata?.optionsPageUrl.isNullOrBlank()
+                        )
                         AlertDialog.Builder(this).setTitle(metadata?.name ?: extension.id)
                             .setItems(actionItems.toTypedArray()) { _, action ->
                                 when (actionItems[action]) {
@@ -1929,7 +1928,7 @@ class MainActivity : ComponentActivity() {
                                     "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it?.localizedMessage ?: "Unknown error"}") })
                                     "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ configureExtensionDelegates(extension); toast("Extension enabled") }, { toast("Could not enable: ${it?.localizedMessage ?: "Unknown error"}") })
                                     "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this extension and its data?")
-                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ extensionActions.remove(extension.id); toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
+                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ extensionController.remove(extension.id); toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
                                         .setNegativeButton("Cancel", null).show()
                                 }
                             }.setNegativeButton("Close", null).show()
@@ -1954,10 +1953,10 @@ class MainActivity : ComponentActivity() {
                 configureExtensionDelegates(extension)
             }
             override fun onDisabled(extension: WebExtension) {
-                extensionActions.remove(extension.id)
+                extensionController.remove(extension.id)
             }
             override fun onUninstalled(extension: WebExtension) {
-                extensionActions.remove(extension.id)
+                extensionController.remove(extension.id)
             }
             override fun onInstallationFailed(extension: WebExtension?, installException: WebExtension.InstallException) {
                 toast("Extension installation failed")
@@ -1968,10 +1967,10 @@ class MainActivity : ComponentActivity() {
     private fun configureExtensionDelegates(extension: WebExtension) {
         extension.setActionDelegate(object : WebExtension.ActionDelegate {
             override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
-                if (action.enabled != false) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
+                if (action.enabled != false) extensionController.register(extension.id, action) else extensionController.remove(extension.id)
             }
             override fun onPageAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
-                if (action.enabled == true) extensionActions[extension.id] = action else extensionActions.remove(extension.id)
+                if (action.enabled == true) extensionController.register(extension.id, action) else extensionController.remove(extension.id)
             }
             override fun onOpenPopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? {
                 if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
@@ -2199,16 +2198,16 @@ class MainActivity : ComponentActivity() {
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
         val items = NovaSettingsCatalog.ownerItems(shortcutState)
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
-            when (which) {
-                0 -> chooseSearchEngine()
-                1 -> {
+            when (NovaSettingsCatalog.actionFor(which)) {
+                NovaSettingsCatalog.Action.CHOOSE_SEARCH_ENGINE -> chooseSearchEngine()
+                NovaSettingsCatalog.Action.TOGGLE_HOME_SHORTCUTS -> {
                     val show = !prefs.getBoolean("show_home_shortcuts", true)
                     prefs.edit().putBoolean("show_home_shortcuts", show).apply()
                     homeShortcuts.visibility = if (show) View.VISIBLE else View.GONE
                     toast(if (show) "Home shortcuts shown" else "Home shortcuts hidden")
                 }
-                2 -> clearBrowsingHistory()
-                3 -> {
+                NovaSettingsCatalog.Action.CLEAR_HISTORY -> clearBrowsingHistory()
+                NovaSettingsCatalog.Action.CLOSE_PRIVATE_GUEST_TABS -> {
                     val activeId = currentTab()?.id
                     tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
                         val removed = tabs.removeAt(index)
@@ -2225,20 +2224,20 @@ class MainActivity : ComponentActivity() {
                     }
                     toast("Private and Guest tabs closed")
                 }
-                4 -> closeGuestTabs()
-                5 -> exitReaderMode()
-                6 -> showShieldSettings()
-                7 -> showAiAssistant()
-                8 -> showExtensions()
-                9 -> showPasswordVault()
-                10 -> showSiteControls()
-                11 -> showAccessibilitySettings()
-                12 -> exportHistory()
-                13 -> AlertDialog.Builder(this).setMessage("Nova Browser Â· GeckoView engine")
+                NovaSettingsCatalog.Action.EXIT_GUEST_MODE -> closeGuestTabs()
+                NovaSettingsCatalog.Action.EXIT_READER_MODE -> exitReaderMode()
+                NovaSettingsCatalog.Action.SHIELD -> showShieldSettings()
+                NovaSettingsCatalog.Action.AI_ASSISTANTS -> showAiAssistant()
+                NovaSettingsCatalog.Action.EXTENSIONS -> showExtensions()
+                NovaSettingsCatalog.Action.PASSWORD_MANAGER -> showPasswordVault()
+                NovaSettingsCatalog.Action.SITE_PERMISSIONS -> showSiteControls()
+                NovaSettingsCatalog.Action.ACCESSIBILITY -> showAccessibilitySettings()
+                NovaSettingsCatalog.Action.EXPORT_HISTORY -> exportHistory()
+                NovaSettingsCatalog.Action.ABOUT -> AlertDialog.Builder(this).setMessage("Nova Browser Â· GeckoView engine")
                     .setPositiveButton("OK", null).show()
-                14 -> showCloudAccount()
-                15 -> showProtectedDnsSettings()
-                16 -> startActivity(Intent(this, NovaVpnFirewallActivity::class.java))
+                NovaSettingsCatalog.Action.CLOUD_ACCOUNT -> showCloudAccount()
+                NovaSettingsCatalog.Action.PROTECTED_DNS -> showProtectedDnsSettings()
+                NovaSettingsCatalog.Action.VPN_PROXY -> startActivity(Intent(this, NovaVpnFirewallActivity::class.java))
             }
         }.show()
     }
