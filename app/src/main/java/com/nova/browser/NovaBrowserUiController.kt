@@ -233,11 +233,42 @@ internal class NovaBrowserUiController(
         val homeShortcuts = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(8))
         }
-        homeShortcuts.addView(actionButton("Google") { actions.navigate("https://www.google.com") })
-        homeShortcuts.addView(actionButton("YouTube") { actions.navigate("https://m.youtube.com") })
-        homeShortcuts.addView(actionButton("Wikipedia") { actions.navigate("https://www.wikipedia.org") })
-        homeShortcuts.addView(actionButton("GitHub") { actions.navigate("https://github.com") })
+        fun addHomeShortcut(label: String, symbol: String, url: String) {
+            val item = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(4), dp(8), dp(4), dp(8))
+                setOnClickListener { actions.navigate(url) }
+            }
+            val icon = TextView(context).apply {
+                text = symbol
+                textSize = 20f
+                gravity = Gravity.CENTER
+                setTextColor(0xFFF1E9FA.toInt())
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(0xFF30243D.toInt())
+                }
+            }
+            item.addView(icon, LinearLayout.LayoutParams(dp(48), dp(48)))
+            item.addView(TextView(context).apply {
+                text = label
+                textSize = 11f
+                gravity = Gravity.CENTER
+                setTextColor(0xFFE5DCEC.toInt())
+                maxLines = 1
+                setPadding(0, dp(6), 0, 0)
+            })
+            homeShortcuts.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        addHomeShortcut("Google", "G", "https://www.google.com")
+        addHomeShortcut("YouTube", "▶", "https://m.youtube.com")
+        addHomeShortcut("Wikipedia", "W", "https://www.wikipedia.org")
+        addHomeShortcut("GitHub", "⌘", "https://github.com")
         val homePanel = createHomePanel(homeShortcuts)
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -255,51 +286,140 @@ internal class NovaBrowserUiController(
     }
 
     private fun createHomePanel(homeShortcuts: LinearLayout): LinearLayout {
-        val panel = LinearLayout(context).apply {
+        val density = context.resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        val content = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(28), dp(20), dp(20))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
-            )
+            setPadding(dp(22), dp(34), dp(22), dp(24))
         }
-        val dragon = TextView(context).apply {
-            text = "🐉"
-            textSize = 58f
+        val brand = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            contentDescription = "Nova dragon emblem"
-            setPadding(0, 0, 0, dp(8))
+            setPadding(0, dp(12), 0, dp(24))
         }
-        val title = TextView(context).apply {
+        brand.addView(TextView(context).apply {
+            text = "🐉"
+            textSize = 46f
+            gravity = Gravity.CENTER
+        })
+        brand.addView(TextView(context).apply {
             text = "NOVA"
-            textSize = 32f
+            textSize = 30f
             typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.18f
+            letterSpacing = 0.16f
             setTextColor(0xFFF1E9FA.toInt())
             gravity = Gravity.CENTER
-        }
-        val subtitle = TextView(context).apply {
+        })
+        brand.addView(TextView(context).apply {
             text = "Your browser. Your space."
-            textSize = 13f
+            textSize = 12f
             setTextColor(0xFFB9AEC8.toInt())
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(24))
+            setPadding(0, dp(4), 0, 0)
+        })
+        content.addView(brand)
+
+        val search = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(0xFF30243D.toInt())
+                cornerRadius = dp(30).toFloat()
+                setStroke(dp(1), 0xFF59466B.toInt())
+            }
+            setPadding(dp(16), 0, dp(14), 0)
+            isFocusable = true
+            isFocusableInTouchMode = true
         }
-        val shortcutTitle = TextView(context).apply {
-            text = "QUICK ACCESS"
+        search.addView(TextView(context).apply {
+            text = "⌕"
+            textSize = 25f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFB9AEC8.toInt())
+        }, LinearLayout.LayoutParams(dp(30), dp(52)))
+        val searchInput = EditText(context).apply {
+            hint = "Search or type a web address"
+            textSize = 14f
+            singleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setTextColor(0xFFFFFFFF.toInt())
+            setHintTextColor(0xFFB9AEC8.toInt())
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setPadding(dp(6), 0, dp(6), 0)
+            setOnEditorActionListener { _, actionId, event ->
+                val enter = event?.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
+                    event.action == android.view.KeyEvent.ACTION_DOWN
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || enter) {
+                    val query = text.toString().trim()
+                    if (query.isNotEmpty()) actions.navigate(query)
+                    true
+                } else false
+            }
+        }
+        search.addView(searchInput, LinearLayout.LayoutParams(0, dp(52), 1f))
+        content.addView(search, LinearLayout.LayoutParams(-1, -2))
+
+        val shortcutsTitle = TextView(context).apply {
+            text = "SHORTCUTS"
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.12f
-            setTextColor(0xFFD8CBE8.toInt())
-            gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, dp(8))
+            letterSpacing = 0.1f
+            setTextColor(0xFFB9AEC8.toInt())
+            setPadding(dp(4), dp(30), dp(4), dp(4))
         }
-        panel.addView(dragon)
-        panel.addView(title)
-        panel.addView(subtitle)
-        panel.addView(shortcutTitle)
-        panel.addView(homeShortcuts)
-        return panel
-    }
-}
+        content.addView(shortcutsTitle, LinearLayout.LayoutParams(-1, -2))
+        content.addView(homeShortcuts, LinearLayout.LayoutParams(-1, -2))
+
+        val discoverHeader = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(22), dp(4), dp(10))
+        }
+        discoverHeader.addView(TextView(context).apply {
+            text = "Discover"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFFF1E9FA.toInt())
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        discoverHeader.addView(TextView(context).apply {
+            text = "Explore the web"
+            textSize = 11f
+            setTextColor(0xFFB9AEC8.toInt())
+        })
+        content.addView(discoverHeader)
+        val discoverCard = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(0xFF21182B.toInt())
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), 0xFF40304F.toInt())
+            }
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        discoverCard.addView(TextView(context).apply {
+            text = "Make the web yours"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFFF1E9FA.toInt())
+        })
+        discoverCard.addView(TextView(context).apply {
+            text = "Your Discover feed can be added here. For now, use search or your shortcuts to explore."
+            textSize = 12f
+            setTextColor(0xFFB9AEC8.toInt())
+            setPadding(0, dp(6), 0, 0)
+        })
+        content.addView(discoverCard, LinearLayout.LayoutParams(-1, -2))
+
+        val scroll = android.widget.ScrollView(context).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            addView(content, android.widget.ScrollView.LayoutParams(-1, -2))
+        }
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF100D15.toInt())
+            addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+    }}
