@@ -4714,20 +4714,34 @@ private fun showQuickSettings() {
             }.show()
     }
 
+    private fun siteOriginForUrl(url: String): String? {
+        val uri = Uri.parse(url)
+        val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
+        val host = uri.host?.lowercase() ?: return null
+        return "$scheme://$host${if (uri.port > 0) ":${uri.port}" else ""}"
+    }
+
     private fun showSiteControls() {
         if (denyGuestAccess("Site controls")) return
         val tab = currentTab() ?: return
-        val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
-        if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
-        val jsLabel = "JavaScript · " + if (isJavaScriptAllowed(tab.engineType, tab.lastUrl)) "Allowed" else "Blocked"
-        val popupLabel = "Pop-ups and redirects · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "popups", false)) "Allowed" else "Blocked"
-        val autoplayLabel = "Autoplay · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "autoplay", false)) "Allowed" else "Blocked"
-        val soundLabel = "Sound · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "sound", true)) "Allowed" else "Muted"
+        val siteUrlAtOpen = tab.lastUrl
+        val originAtOpen = siteOriginForUrl(siteUrlAtOpen)
+        val host = runCatching { Uri.parse(siteUrlAtOpen).host }.getOrNull()
+        if (host.isNullOrBlank() || originAtOpen == null) { toast("Open a website to manage its permissions"); return }
+        fun ensureOriginUnchanged(): Boolean {
+            if (siteOriginForUrl(tab.lastUrl) == originAtOpen) return true
+            toast("This tab navigated to another site. Reopen Site controls.")
+            return false
+        }
+        val jsLabel = "JavaScript · " + if (isJavaScriptAllowed(tab.engineType, siteUrlAtOpen)) "Allowed" else "Blocked"
+        val popupLabel = "Pop-ups and redirects · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "popups", false)) "Allowed" else "Blocked"
+        val autoplayLabel = "Autoplay · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "autoplay", false)) "Allowed" else "Blocked"
+        val soundLabel = "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
-            val uri = Uri.parse(tab.lastUrl)
-            val origin = "${uri.scheme ?: "https"}://${uri.host ?: host}${if (uri.port > 0) ":${uri.port}" else ""}"
+            val origin = originAtOpen
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
+                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
+                    if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {
                         toggleJavaScriptForCurrentSite(tab)
                     } else if (which == 1) {
@@ -4741,6 +4755,7 @@ private fun showQuickSettings() {
                     } else if (which == 5) {
                         AlertDialog.Builder(this).setMessage("Clear cookies, cache, local storage and service workers for $host? Other sites are not affected.")
                             .setPositiveButton("Clear site data") { _, _ ->
+                                if (!ensureOriginUnchanged()) return@setPositiveButton
                                 runCatching {
                                     CefriumProfile.get(enginePreferences.cefriumProfileName()).clearSiteData(origin) {
                                         tabs.forEach { tab -> runCatching { tab.browserEngine?.clearCache() } }
@@ -4762,6 +4777,7 @@ private fun showQuickSettings() {
         val options = controls + rows + "Camera and microphone permissions" + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
         AlertDialog.Builder(this).setTitle("Site controls · $host")
             .setItems(options) { _, which ->
+                if (!ensureOriginUnchanged()) return@setItems
                 when {
                     which == 0 -> toggleJavaScriptForCurrentSite(tab)
                     which == 1 -> toggleSiteSetting(tab, "popups", false)
@@ -4776,6 +4792,7 @@ private fun showQuickSettings() {
                         }
                         AlertDialog.Builder(this).setTitle(sitePermissionLabel(perm.permission))
                             .setSingleChoiceItems(arrayOf("Ask every time", "Block", "Allow"), current) { dialog, selected ->
+                                if (!ensureOriginUnchanged()) { dialog.dismiss(); return@setSingleChoiceItems }
                                 val next = when (selected) {
                                     1 -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
                                     2 -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
@@ -4788,10 +4805,11 @@ private fun showQuickSettings() {
                             .setNegativeButton(getString(R.string.close), null)
                             .show()
                     }
-                    which == controls.size + perms.size -> showGeckoMediaPermissionSettings(tab.lastUrl)
+                    which == controls.size + perms.size -> showGeckoMediaPermissionSettings(originAtOpen)
                     which == controls.size + perms.size + 1 -> showShieldSettings()
                     else -> AlertDialog.Builder(this).setMessage("Clear cookies, caches, and site storage for $host? Other sites are not affected.")
                         .setPositiveButton("Clear site data") { _, _ ->
+                            if (!ensureOriginUnchanged()) return@setPositiveButton
                             runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)
                                 .accept({ runOnUiThread { toast("Site data cleared for $host") } }, { error -> runOnUiThread { toast("Could not clear site data: ${error?.localizedMessage ?: "Unknown error"}") } })
                         }.setNegativeButton("Cancel", null).show()
