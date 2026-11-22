@@ -54,6 +54,34 @@ class NovaDownloadManager(
 
     init { loadRecords() }
 
+    /** Records a file already published by an engine into the public Downloads collection. */
+    @Synchronized fun registerCompleted(
+        url: String,
+        fileName: String,
+        mimeType: String,
+        savedUri: String,
+        bytes: Long
+    ) {
+        val parsedUrl = runCatching { URL(url) }.getOrNull()
+        require(parsedUrl?.protocol == "http" || parsedUrl?.protocol == "https") {
+            "Only completed HTTP(S) downloads can be added to Nova history"
+        }
+        val uri = Uri.parse(savedUri)
+        require(uri.scheme == "content") { "Completed download must be published through Android storage" }
+        val safeName = sanitize(fileName).ifBlank { "nova-download.bin" }
+        val size = bytes.coerceAtLeast(0L)
+        put(Item(
+            id = UUID.randomUUID().toString(),
+            url = url.take(8192),
+            fileName = safeName,
+            mimeType = mimeType.take(128).ifBlank { "application/octet-stream" },
+            downloaded = size,
+            total = size,
+            state = "COMPLETE",
+            savedUri = uri.toString()
+        ))
+    }
+
     @Synchronized fun items(): List<Item> = records.values.toList().reversed()
 
     @Synchronized private fun put(item: Item) {

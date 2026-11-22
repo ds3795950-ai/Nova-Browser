@@ -1020,9 +1020,10 @@ class MainActivity : ComponentActivity() {
         )
         tab.browserEngine = engine
         tab.cefriumNavigationState = null // The live browser now owns the restored state.
-        if (!restoredNavigationState.isNullOrEmpty()) {
+        if (engine.didRestoreInitialNavigationState) {
             tab.needsReload = false
-        } else if (tab.needsReload && tab.lastUrl != HOME_URL) {
+        } else if ((restoredNavigationState != null || tab.needsReload) && tab.lastUrl != HOME_URL) {
+            // A corrupt/old snapshot must never leave a restored tab blank.
             engine.loadUrl(tab.lastUrl)
             tab.needsReload = false
         }
@@ -1254,6 +1255,31 @@ class MainActivity : ComponentActivity() {
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
         tab.engineFallbackReason = reason
+    }
+
+    /** Returns the engine selected for this tab, creating its runtime lazily. */
+    private fun ensureBrowserEngine(tab: BrowserTab): BrowserEngine {
+        enforceCefriumCompatibility(tab)
+        return when (tab.engineType) {
+            BrowserEngineType.CEFRIUM -> ensureCefriumEngine(tab)
+            BrowserEngineType.GECKOVIEW -> {
+                ensureSession(tab)
+                tab.browserEngine as? GeckoViewBrowserEngine
+                    ?: error("Nova could not create the GeckoView engine for this tab")
+            }
+        }
+    }
+
+    /** Recreates only the page URL in GeckoView; Cefrium cookies/storage are never copied. */
+    private fun fallbackTabToGecko(tab: BrowserTab, failure: Throwable): GeckoViewBrowserEngine {
+        closeTabRuntime(tab)
+        tab.engineType = BrowserEngineType.GECKOVIEW
+        tab.cefriumNavigationState = null
+        tab.needsReload = tab.lastUrl != HOME_URL
+        tab.engineFallbackReason = "Cefrium could not continue this tab. Nova reopened its URL in GeckoView; site data was not transferred."
+        ensureSession(tab)
+        return tab.browserEngine as? GeckoViewBrowserEngine
+            ?: error("Nova could not fall back to GeckoView")
     }
 
     private fun activateTab(tab: BrowserTab) {
@@ -3778,7 +3804,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val origin = runCatching { Uri.decode(encoded) }.getOrNull().orEmpty()
                 val uri = runCatching { Uri.parse(origin) }.getOrNull()
-                if (uri?.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
+                if (uri != null && uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
                     entries.add(SiteRuleEntry(engine, origin))
                 }
             }
@@ -3854,7 +3880,7 @@ class MainActivity : ComponentActivity() {
         val entries = storedSiteRuleEntries().toMutableSet()
         runtime.storageController.getAllPermissions().accept({ permissions ->
             runOnUiThread {
-                permissions.filter { !it.privateMode && it.contextId.isNullOrBlank() }.forEach { permission ->
+                permissions.orEmpty().filter { !it.privateMode && it.contextId.isNullOrBlank() }.forEach { permission ->
                     val uri = runCatching { Uri.parse(permission.uri) }.getOrNull() ?: return@forEach
                     val scheme = uri.scheme?.lowercase()
                     val host = uri.host?.lowercase()
@@ -3888,7 +3914,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showGeckoSitePermissions(entry: SiteRuleEntry) {
         runtime.storageController.getAllPermissions().accept({ permissions ->
-            val matching = permissions.filter { permission ->
+            val matching = permissions.orEmpty().filter { permission ->
                 if (permission.privateMode || !permission.contextId.isNullOrBlank()) return@filter false
                 runCatching {
                     val uri = Uri.parse(permission.uri)

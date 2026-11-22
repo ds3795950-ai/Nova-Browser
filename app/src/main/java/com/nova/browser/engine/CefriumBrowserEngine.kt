@@ -14,7 +14,6 @@ import android.widget.Toast
 import android.webkit.ValueCallback
 import org.json.JSONObject
 import org.json.JSONTokener
-import org.json.JSONTokener
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumExperimental
 import com.cefrium.CefriumDownloadClient
@@ -56,6 +55,7 @@ class CefriumBrowserEngine(
     private val onPermissionRequestCanceled: () -> Unit = {},
     desktopMode: Boolean = false,
     existingBrowser: CefriumBrowser? = null,
+    initialNavigationState: ByteArray? = null,
     initialNovaAddons: List<NovaScriptAddon> = emptyList(),
     private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
@@ -88,16 +88,33 @@ class CefriumBrowserEngine(
     )
     private var closed = false
     private val novaAddonScriptHandlers = mutableMapOf<String, CefriumBrowser.ScriptHandler>()
+    var didRestoreInitialNavigationState: Boolean = false
+        private set
 
     override val state: BrowserEngineState
         get() = currentState
 
     init {
+        // Restore the encrypted per-tab navigation stack before any new navigation.
+        if (initialNavigationState != null && initialNavigationState.isNotEmpty()) {
+            didRestoreInitialNavigationState = runCatching {
+                browser.restoreNavigationState(initialNavigationState)
+                true
+            }.getOrDefault(false)
+            if (didRestoreInitialNavigationState) {
+                currentState = currentState.copy(
+                    url = browser.getUrl(),
+                    title = browser.getTitle(),
+                    canGoBack = browser.canGoBack(),
+                    canGoForward = browser.canGoForward(),
+                    progress = browser.getProgress().coerceIn(0, 100)
+                )
+            }
+        }
         // Use the typed 0.21 clients rather than deprecated one-listener-per-event APIs.
         browser.setPageVisible(false)
         browser.setFocus(false)
         browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl()))
-        browserPaused = true
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
@@ -164,7 +181,14 @@ class CefriumBrowserEngine(
                 this@CefriumBrowserEngine.onContextMenu.invoke(menu)
             override fun onBeforeUnloadDialog(browser: CefriumBrowser, message: String, isReload: Boolean, callback: CefriumBrowser.JsDialogCallback): Boolean {
                 this@CefriumBrowserEngine.onBeforeUnloadDialog.invoke(message, isReload) { leave ->
-                    callback.confirm(leave, "")
+                    // Cefrium 0.21 exposes a Java callback carrying success + prompt text.
+                    // Resolve that signature without binding the adapter to a method name.
+                    val resolver = callback.javaClass.methods.firstOrNull { method ->
+                        method.parameterCount == 2 &&
+                            (method.parameterTypes[0] == Boolean::class.javaPrimitiveType || method.parameterTypes[0] == Boolean::class.java) &&
+                            method.parameterTypes[1] == String::class.java
+                    }
+                    if (resolver != null) runCatching { resolver.invoke(callback, leave, "") }
                 }
                 return true
             }

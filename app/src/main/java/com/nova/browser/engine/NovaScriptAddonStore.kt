@@ -15,7 +15,7 @@ class NovaScriptAddonStore(context:android.content.Context) {
         if(!index.isFile) return emptyList()
         return runCatching {
             val rows=JSONArray(index.readText(Charsets.UTF_8))
-            buildList {
+            buildList<NovaScriptAddon> {
                 for(i in 0 until rows.length()) {
                     val row=rows.optJSONObject(i)?:continue
                     val id=row.optString("id")
