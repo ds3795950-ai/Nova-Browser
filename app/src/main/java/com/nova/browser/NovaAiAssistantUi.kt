@@ -170,13 +170,14 @@ internal class NovaAiAssistantUi(
     private var busy = false
     private var dialog: AlertDialog? = null
 
-    private val bg = 0xFF111016.toInt()
-    private val panel = 0xFF1B1922.toInt()
-    private val raised = 0xFF25222E.toInt()
-    private val line = 0xFF393443.toInt()
-    private val accent = 0xFFB99AFF.toInt()
-    private val primary = 0xFFF4F0FA.toInt()
-    private val muted = 0xFFAAA3B5.toInt()
+    private val palette = NovaThemeManager.palette(context)
+    private val bg = palette.background
+    private val panel = palette.surface
+    private val raised = palette.raised
+    private val line = palette.stroke
+    private val accent = palette.accent
+    private val primary = palette.text
+    private val muted = palette.muted
 
     private fun rounded(color: Int, radius: Int = 16, stroke: Int = 0): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
@@ -277,7 +278,7 @@ internal class NovaAiAssistantUi(
             setPadding(dp(8), dp(3), dp(8), dp(7))
         }
         composer.addView(contextChip)
-        usageWarning = label("", 11f, 0xFFFFC66D.toInt()).apply {
+        usageWarning = label("", 11f, palette.warning).apply {
             visibility = View.GONE
             setPadding(dp(7), dp(5), dp(7), dp(7))
         }
@@ -541,7 +542,7 @@ internal class NovaAiAssistantUi(
         val block = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = rounded(if (isAssistant) panel else 0xFF292334.toInt(), 15)
+            background = rounded(if (isAssistant) panel else palette.userBubble, 15)
         }
         block.addView(label(if (isAssistant) "NOVA" else "YOU", 10f,
             if (isAssistant) accent else muted, true))

@@ -18,6 +18,7 @@ open class NovaVpnFirewallActivity : ComponentActivity() {
     private lateinit var locationButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        NovaThemeManager.applyBeforeCreate(this)
         super.onCreate(savedInstanceState)
         title = "VPN & Firewall"
 

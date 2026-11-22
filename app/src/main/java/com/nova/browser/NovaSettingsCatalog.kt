@@ -5,7 +5,8 @@ internal object NovaSettingsCatalog {
     enum class Action {
         CHOOSE_SEARCH_ENGINE, TOGGLE_HOME_SHORTCUTS, CLEAR_HISTORY, CLOSE_PRIVATE_GUEST_TABS,
         EXIT_GUEST_MODE, EXIT_READER_MODE, SHIELD, AI_ASSISTANTS, EXTENSIONS, PASSWORD_MANAGER,
-        SITE_PERMISSIONS, ACCESSIBILITY, EXPORT_HISTORY, ABOUT, CLOUD_ACCOUNT, PROTECTED_DNS, VPN_PROXY
+        SITE_PERMISSIONS, ACCESSIBILITY, EXPORT_HISTORY, ABOUT, CLOUD_ACCOUNT, PROTECTED_DNS, VPN_PROXY,
+        APPEARANCE
     }
 
     fun actionFor(index: Int): Action? = Action.entries.getOrNull(index)
@@ -15,7 +16,8 @@ internal object NovaSettingsCatalog {
         "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode",
         "Exit Reader view", "Nova Shield", "AI Assistant", "Extensions", "Password manager",
         "Site permissions", "Accessibility", "Export history", "About Nova",
-        "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "Browser proxy & Shield · 1VPN"
+        "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "Browser proxy & Shield · 1VPN",
+        "Appearance · Light / Dark / System"
     )
     fun guestItems(): Array<String> = arrayOf("Tor routing · Orbot", "Exit Guest Mode", "Close")
 }

@@ -120,6 +120,7 @@ class MainActivity : ComponentActivity() {
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        NovaThemeManager.applyBeforeCreate(this)
         super.onCreate(savedInstanceState)
         bookmarkTransferMode = savedInstanceState?.getString("bookmark_transfer_mode")
         pendingHistoryExport = savedInstanceState?.getString("pending_history_export")
@@ -1017,7 +1018,7 @@ class MainActivity : ComponentActivity() {
                     val tab = tabs[index]
                     val card = LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL; setPadding(12, 12, 12, 12)
-                        background = GradientDrawable().apply { setColor(0xFF241B30.toInt()); cornerRadius = 18f; setStroke(1, 0xFF6D4C83.toInt()) }
+                        background = GradientDrawable().apply { setColor(NovaThemeManager.palette(this@MainActivity).surface); cornerRadius = 18f; setStroke(1, NovaThemeManager.palette(this@MainActivity).stroke) }
                     }
                     val headingText = TextView(this).apply { text = tab.title.ifBlank { "New tab" }; textSize = 14f; setTextColor(themeTextColor(android.R.attr.textColorPrimary)); maxLines = 2 }
                     val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(themeTextColor(android.R.attr.textColorSecondary)); maxLines = 2; setPadding(0, 5, 0, 5) }
@@ -2226,6 +2227,7 @@ class MainActivity : ComponentActivity() {
 
         val density = resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
+        val palette = NovaThemeManager.palette(this)
         val grid = GridLayout(this).apply {
             columnCount = 2
             useDefaultMargins = false
@@ -2237,15 +2239,15 @@ class MainActivity : ComponentActivity() {
                 text = label
                 textSize = 14f
                 gravity = Gravity.CENTER
-                setTextColor(Color.BLACK)
+                setTextColor(palette.text)
                 setPadding(dp(8), dp(16), dp(8), dp(16))
                 minHeight = dp(64)
                 isClickable = true
                 isFocusable = true
                 background = GradientDrawable().apply {
-                    setColor(Color.rgb(242, 245, 249))
+                    setColor(palette.raised)
                     cornerRadius = dp(12).toFloat()
-                    setStroke(dp(1), Color.rgb(220, 225, 232))
+                    setStroke(dp(1), palette.stroke)
                 }
                 setOnClickListener {
                     quickSettingsDialog.dismiss()
@@ -2328,12 +2330,30 @@ class MainActivity : ComponentActivity() {
                     },
                     NovaSettingsCatalog.Action.CLOUD_ACCOUNT to { showCloudAccount() },
                     NovaSettingsCatalog.Action.PROTECTED_DNS to { showProtectedDnsSettings() },
-                    NovaSettingsCatalog.Action.VPN_PROXY to { startActivity(Intent(this, NovaVpnFirewallActivity::class.java)) }
+                    NovaSettingsCatalog.Action.VPN_PROXY to { startActivity(Intent(this, NovaVpnFirewallActivity::class.java)) },
+                    NovaSettingsCatalog.Action.APPEARANCE to { showAppearanceSettings() }
                 )
             )
         }.show()
     }
 
+
+
+    private fun showAppearanceSettings() {
+        val modes = NovaThemeMode.values()
+        val labels = arrayOf("System default", "Light", "Dark")
+        val selected = modes.indexOf(NovaThemeManager.currentMode(this)).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Appearance")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                val mode = modes[which]
+                NovaThemeManager.setMode(this, mode)
+                dialog.dismiss()
+                recreate()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
     private fun showCloudAccount() {
         if (denyGuestAccess("Nova Cloud")) return

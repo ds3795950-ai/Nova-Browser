@@ -69,6 +69,7 @@ internal class NovaBrowserUiController(
     private val actions: NovaBrowserUiActions
 ) {
     fun build(): NovaBrowserUiViews {
+        val palette = NovaThemeManager.palette(context)
         fun actionButton(label: String, description: String = label, action: () -> Unit) =
             makeButton(label, description, action)
         fun toolbarScroll(row: LinearLayout) =
@@ -81,7 +82,7 @@ internal class NovaBrowserUiController(
         val top = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(4))
-            setBackgroundColor(0xFF171020.toInt())
+            setBackgroundColor(palette.toolbar)
         }
         val addressRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -91,14 +92,14 @@ internal class NovaBrowserUiController(
             hint = "Search or enter address"
             isSingleLine = true
             textSize = 15f
-            setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.text)
+            setHintTextColor(palette.muted)
             setSelectAllOnFocus(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or
                 android.text.InputType.TYPE_TEXT_VARIATION_URI or
                 android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             imeOptions = EditorInfo.IME_ACTION_GO
-            setBackgroundColor(0xFF30243D.toInt())
+            setBackgroundColor(palette.input)
             setPadding(dp(12), 0, dp(12), 0)
             contentDescription = "Nova address bar"
             setOnEditorActionListener { _, actionId, event ->
@@ -180,14 +181,14 @@ internal class NovaBrowserUiController(
         val tabLabel = TextView(context).apply {
             text = "Nova Browser"
             textSize = 12f
-            setTextColor(0xFFD8CBE8.toInt())
+            setTextColor(palette.secondary)
             setPadding(dp(4), dp(5), dp(4), dp(5))
         }
         val pageStatus = TextView(context).apply {
             text = "Ready"
             contentDescription = "Nova session status"
             textSize = 11f
-            setTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.muted)
             setPadding(dp(4), 0, dp(4), dp(4))
         }
         top.addView(tabLabel)
@@ -199,9 +200,9 @@ internal class NovaBrowserUiController(
             hint = "Second pane address"
             isSingleLine = true
             textSize = 12f
-            setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0xFFB9AEC8.toInt())
-            setBackgroundColor(0xFF30243D.toInt())
+            setTextColor(palette.text)
+            setHintTextColor(palette.muted)
+            setBackgroundColor(palette.input)
             setPadding(dp(12), 0, dp(12), 0)
         }
         val secondaryControls = LinearLayout(context).apply {
@@ -248,10 +249,10 @@ internal class NovaBrowserUiController(
                 text = symbol
                 textSize = 20f
                 gravity = Gravity.CENTER
-                setTextColor(0xFFF1E9FA.toInt())
+                setTextColor(palette.text)
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(0xFF30243D.toInt())
+                    setColor(palette.input)
                 }
             }
             item.addView(icon, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -259,7 +260,7 @@ internal class NovaBrowserUiController(
                 text = label
                 textSize = 11f
                 gravity = Gravity.CENTER
-                setTextColor(0xFFE5DCEC.toInt())
+                setTextColor(palette.secondary)
                 maxLines = 1
                 setPadding(0, dp(6), 0, 0)
             })
@@ -272,7 +273,7 @@ internal class NovaBrowserUiController(
         val homePanel = createHomePanel(homeShortcuts)
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF100D15.toInt())
+            setBackgroundColor(palette.background)
             addView(top, LinearLayout.LayoutParams(-1, -2))
             addView(homePanel, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(browserPane, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -308,13 +309,13 @@ internal class NovaBrowserUiController(
             textSize = 30f
             typeface = Typeface.DEFAULT_BOLD
             letterSpacing = 0.16f
-            setTextColor(0xFFF1E9FA.toInt())
+            setTextColor(palette.text)
             gravity = Gravity.CENTER
         })
         brand.addView(TextView(context).apply {
             text = "Your browser. Your space."
             textSize = 12f
-            setTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.muted)
             gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, 0)
         })
@@ -324,9 +325,9 @@ internal class NovaBrowserUiController(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
-                setColor(0xFF30243D.toInt())
+                setColor(palette.input)
                 cornerRadius = dp(30).toFloat()
-                setStroke(dp(1), 0xFF59466B.toInt())
+                setStroke(dp(1), palette.stroke)
             }
             setPadding(dp(16), 0, dp(14), 0)
             isFocusable = true
@@ -336,7 +337,7 @@ internal class NovaBrowserUiController(
             text = "⌕"
             textSize = 25f
             gravity = Gravity.CENTER
-            setTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.muted)
         }, LinearLayout.LayoutParams(dp(30), dp(52)))
         val searchInput = EditText(context).apply {
             hint = "Search or type a web address"
@@ -344,8 +345,8 @@ internal class NovaBrowserUiController(
             singleLine = true
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.text)
+            setHintTextColor(palette.muted)
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setPadding(dp(6), 0, dp(6), 0)
             setOnEditorActionListener { _, actionId, event ->
@@ -366,7 +367,7 @@ internal class NovaBrowserUiController(
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             letterSpacing = 0.1f
-            setTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.muted)
             setPadding(dp(4), dp(30), dp(4), dp(4))
         }
         content.addView(shortcutsTitle, LinearLayout.LayoutParams(-1, -2))
@@ -381,20 +382,20 @@ internal class NovaBrowserUiController(
             text = "Discover"
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(0xFFF1E9FA.toInt())
+            setTextColor(palette.text)
         }, LinearLayout.LayoutParams(0, -2, 1f))
         discoverHeader.addView(TextView(context).apply {
             text = "Explore the web"
             textSize = 11f
-            setTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.muted)
         })
         content.addView(discoverHeader)
         val discoverCard = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(0xFF21182B.toInt())
+                setColor(palette.homeCard)
                 cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), 0xFF40304F.toInt())
+                setStroke(dp(1), palette.stroke)
             }
             setPadding(dp(16), dp(14), dp(16), dp(14))
         }
@@ -402,12 +403,12 @@ internal class NovaBrowserUiController(
             text = "Make the web yours"
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(0xFFF1E9FA.toInt())
+            setTextColor(palette.text)
         })
         discoverCard.addView(TextView(context).apply {
             text = "Your Discover feed can be added here. For now, use search or your shortcuts to explore."
             textSize = 12f
-            setTextColor(0xFFB9AEC8.toInt())
+            setTextColor(palette.muted)
             setPadding(0, dp(6), 0, 0)
         })
         content.addView(discoverCard, LinearLayout.LayoutParams(-1, -2))
@@ -419,7 +420,7 @@ internal class NovaBrowserUiController(
         }
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF100D15.toInt())
+            setBackgroundColor(palette.background)
             addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         }
     }
