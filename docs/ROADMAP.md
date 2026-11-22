@@ -1,6 +1,6 @@
 # Nova Browser roadmap and verification status
 
-Last reconciled: 2026-11-21. This file describes the feature branch, not the default `main` branch.
+Last reconciled: 2026-11-22. This file describes the feature branch, not the default `main` branch.
 
 Status key:
 - **IMPLEMENTED + CI VERIFIED** — source is committed and the relevant GitHub Actions checks passed.
@@ -12,11 +12,11 @@ Status key:
 
 - Default branch: `main`.
 - Active implementation branch: `feature/phase-1-dual-engine-foundation`.
-- Latest inspected implementation commit: `6f943870d881228eadb01d603a3e9e2836c10943` (Private Mode engine-switch guard and roadmap correction); the latest CI runs for this commit are pending at the time of this update.
+- Latest source-verification commit: `314c1077730728aed5a741fef390f4bff805d48f` (Cefrium permission-origin fail-closed policy, Private/Guest smoke-test correction and documentation alignment). A follow-up documentation commit is `7ed38716bc2ba71694f4b10c2013d56924709ef4`.
 - Pull request #1 is open and remains a draft. It has not been merged into `main`.
-- Android CI and Android Lint passed on commit `df04644f69492d3b1fcff83f1b9acd74d8914940`. Newer runs for the 2026-11-21 privacy and sync hardening commits are pending; do not treat the earlier green checks as validation of the latest code.
+- Android CI and Android Lint passed on source commit `314c1077730728aed5a741fef390f4bff805d48f`; Android 16 emulator smoke is still in progress. The URL/session-safety branch Android CI passed on `20753b646c1cf0462607136c9cabd81f608b6e79`; its Android 15 Appium UI run remains in progress.
 - The Android Emulator Smoke workflow failed during emulator setup/ADB configuration after the emulator reported boot completion. The failure was an ADB broken-pipe/exit-224 error before the instrumentation test command ran; it is not evidence of an app test assertion failure. The workflow is being adjusted and must pass on a fresh run.
-- BrowserStack workflows are present, but no BrowserStack run is claimed as completed.
+- BrowserStack workflows were executed; AAB builds and credential parsing passed, but App Automate upload returned HTTP 403 `BROWSERSTACK_TESTING_TIME_LIMIT_EXHAUSTED`. Updated workflows report this as a warning and skip device steps. No BrowserStack device result is claimed.
 
 ## Phase 1 — dual-engine foundation
 
@@ -38,7 +38,7 @@ Status key:
 - Private and Guest tabs are both locked to GeckoView. Private uses a private session; Guest additionally uses a dedicated temporary context. Regression tests now enforce both selections regardless of Normal-mode preferences.
 - Cefrium supports normal-tab navigation/lifecycle, split-pane rendering, permission prompts and completed-download publication.
 - Protected DNS, desktop-site mode and Reader Mode have Cefrium paths; Nova Shield and saved-login autofill remain GeckoView-dependent.
-- `MainActivity.BrowserTab` still retains Gecko-specific session state. The common interface is not yet the sole tab owner.
+- `MainActivity.BrowserTab` now owns the engine-neutral `BrowserEngine?` and does not retain a `GeckoSession`; Gecko-specific delegate installation and a narrow Gecko-session accessor remain in `MainActivity`.
 - Remaining: complete engine-neutral tab ownership, feature-capability routing, crash/lifecycle recovery tests, and device compatibility/performance acceptance. Do not bypass privacy or feature guards to increase Cefrium coverage.
 
 ## Phase 3 — shared data and cross-engine migration
@@ -110,3 +110,14 @@ The codebase includes address/search and provider selection, tabs, normal sessio
 - Never place Supabase service-role credentials, SMTP credentials or BrowserStack access keys in source code or logs.
 - Never silently replace an unreadable local vault or encrypted cloud backup.
 - Never claim Guest Mode is Tor or anonymous without a separately implemented and audited Tor transport.
+
+
+## Verification and integration snapshot (2026-11-22)
+
+- Dual-engine Android CI: JVM tests, debug APK, unsigned release APK and artifact upload passed on `314c107`; Android Lint passed. Android 16 emulator smoke had not completed at the time of this snapshot.
+- UI-polish branch: the code head `319005842` passed unit tests and debug/release builds. Its later workflow/documentation updates are being rechecked. The 50-item changelog records three intentional privacy/platform choices (local shortcut initials, local-only suggestions, native form dialogs), fold/hinge posture handling as not implemented, and TalkBack/contrast/200% font-scale behavior as requiring real-device accessibility verification.
+- The UI-polish and dual-engine branches cannot be merged automatically: GitHub rejected the direct merge due to overlapping `MainActivity.kt`, manifest, downloads, sync and VPN changes. No integration merge was made.
+- Release signing is blocked because no `NOVA_RELEASE_KEYSTORE_BASE64`, `NOVA_RELEASE_STORE_PASSWORD`, `NOVA_RELEASE_KEY_ALIAS` or `NOVA_RELEASE_KEY_PASSWORD` repository secrets are configured.
+- Production OTP is blocked on the project owner's Magic Link template and custom SMTP configuration.
+- Guest-only Tor remains unimplemented and is not represented as available.
+- `main` remains unchanged; all implementation branches and pull requests remain separate and unmerged.
