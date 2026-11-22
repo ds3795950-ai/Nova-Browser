@@ -4438,6 +4438,34 @@ private fun showQuickSettings() {
             }.setNegativeButton(getString(R.string.close), null).show()
     }
 
+    private fun resetClosedGeckoAutoplayPermissions() {
+        if (!::runtime.isInitialized) return
+        val openOrigins = tabs.asSequence()
+            .filter { it.engineType == BrowserEngineType.GECKOVIEW && !it.isPrivate && !it.isGuest }
+            .mapNotNull { siteOriginForUrl(it.lastUrl) }
+            .toSet()
+        runtime.storageController.getAllPermissions().accept({ permissions ->
+            permissions.orEmpty().asSequence()
+                .filter { !it.privateMode && it.contextId.isNullOrBlank() }
+                .filter {
+                    it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE ||
+                        it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE
+                }
+                .forEach { permission ->
+                    val origin = siteOriginForUrl(permission.uri) ?: return@forEach
+                    val siteOverrideKey = "site_autoplay_geckoview_${Uri.encode(origin)}"
+                    if (origin !in openOrigins && !prefs.contains(siteOverrideKey)) {
+                        runtime.storageController.setPermission(
+                            permission,
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_PROMPT
+                        )
+                    }
+                }
+        }, { error ->
+            runOnUiThread { toast("Could not refresh saved autoplay permissions") }
+        })
+    }
+
     private fun showDefaultSiteSettings(engine: BrowserEngineType) {
         val definitions = listOf(Triple("javascript", "JavaScript", true)) +
             if (engine == BrowserEngineType.CEFRIUM) listOf(
@@ -4498,6 +4526,9 @@ private fun showQuickSettings() {
                         }
                     }
                     if (active.lastUrl.startsWith("http", true)) active.browserEngine?.reload()
+                }
+                if (engine == BrowserEngineType.GECKOVIEW && key == "autoplay") {
+                    resetClosedGeckoAutoplayPermissions()
                 }
                 toast("$engineLabel default · $name ${if (next) "allowed" else "blocked"}")
                 showDefaultSiteSettings(engine)
