@@ -2220,19 +2220,7 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Nova Cloud")) return
         val email = cloudSync.signedInEmail()
         if (email.isNullOrBlank()) {
-            val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; filters = arrayOf(InputFilter.LengthFilter(254)); isSingleLine = true }
-            AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
-                .setView(input).setPositiveButton("Send code") { _, _ ->
-                    val address = NovaCloudAuthController.normalizeEmail(input.text.toString())
-                    if (!NovaCloudAuthController.isValidEmail(address)) { toast("Enter a valid email address"); return@setPositiveButton }
-                    toast("Requesting sign-in codeâ¦")
-                    NovaCloudAuthController.runAsync({ cloudSync.sendEmailOtp(address) }) { result ->
-                        runOnUiThread {
-                            result.onSuccess { showCloudOtp(address) }
-                                .onFailure { toast("Could not send code: ${it.message ?: "Network error"}") }
-                        }
-                    }
-                }.setNegativeButton("Cancel", null).show()
+            NovaCloudAuthUi(this, cloudSync, ::toast, ::showCloudAccount).showSignIn()
             return
         }
         val enabled = prefs.getBoolean("cloud_sync_enabled", false)
@@ -2262,64 +2250,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }.setNegativeButton("Close", null).show()
-    }
-
-    private fun showCloudOtp(email: String) {
-        val input = EditText(this).apply {
-            hint = "6-digit email code"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            filters = arrayOf(InputFilter.LengthFilter(6))
-            isSingleLine = true
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Verify email")
-            .setMessage("Enter the six-digit code sent to $email")
-            .setView(input)
-            .setPositiveButton("Verify", null)
-            .setNeutralButton("Resend code", null)
-            .setNegativeButton("Cancel", null)
-            .create()
-        dialog.setOnShowListener {
-            val verifyButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            verifyButton.setOnClickListener {
-                val code = input.text.toString().trim()
-                if (!NovaCloudAuthController.isValidOtp(code)) {
-                    input.error = "Enter all six digits"
-                    return@setOnClickListener
-                }
-                verifyButton.isEnabled = false
-                toast("Verifying code…")
-                NovaCloudAuthController.runAsync({ cloudSync.verifyEmailOtp(email, code) }) { result ->
-                    runOnUiThread {
-                        verifyButton.isEnabled = true
-                        result.onSuccess {
-                            dialog.dismiss()
-                            toast("Signed in to Nova Cloud")
-                            showCloudAccount()
-                        }.onFailure {
-                            toast("Sign-in failed: ${it.message ?: "Check the code and try again"}")
-                        }
-                    }
-                }
-            }
-            val resendButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
-            resendButton.setOnClickListener {
-                resendButton.isEnabled = false
-                NovaCloudAuthController.runAsync({ cloudSync.sendEmailOtp(email) }) { result ->
-                    runOnUiThread {
-                        resendButton.isEnabled = true
-                        result.onSuccess {
-                            dialog.dismiss()
-                            showCloudOtp(email)
-                            toast("A new code was requested")
-                        }.onFailure {
-                            toast("Could not resend: ${it.message ?: "Try again shortly"}")
-                        }
-                    }
-                }
-            }
-        }
-        dialog.show()
     }
 
     private fun showSyncPassphrase() {
