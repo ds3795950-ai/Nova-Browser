@@ -249,6 +249,7 @@ class MainActivity : ComponentActivity() {
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         applyGeckoCookieBehavior()
+        applyGeckoImageBehavior()
         val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
         val savedFontScale = prefs.getInt("font_scale_index", 1).coerceIn(fontScaleFactors.indices)
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
@@ -1654,6 +1655,32 @@ class MainActivity : ComponentActivity() {
         runtime.settings.contentBlocking.setCookieBehavior(behavior)
     }
 
+    private fun showDefaultGeckoImageSettings() {
+        val values = intArrayOf(1, 3, 2) // Gecko: allow all, block third-party, block all.
+        val labels = arrayOf("Load all images", "Block third-party images", "Block all images")
+        val currentValue = prefs.getInt("site_default_geckoview_images", 1)
+        val selected = values.indexOf(currentValue).takeIf { it >= 0 } ?: 0
+        AlertDialog.Builder(this).setTitle("GeckoView images")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                prefs.edit().putInt("site_default_geckoview_images", values[which]).apply()
+                applyGeckoImageBehavior()
+                dialog.dismiss()
+                toast("Image loading · ${labels[which]}")
+            }
+            .setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
+    private fun applyGeckoImageBehavior() {
+        if (!::runtime.isInitialized) return
+        val value = prefs.getInt("site_default_geckoview_images", 1).takeIf { it in setOf(1, 2, 3) } ?: 1
+        org.mozilla.geckoview.GeckoPreferenceController.setGeckoPref(
+            "permissions.default.image",
+            value,
+            org.mozilla.geckoview.GeckoPreferenceController.PREF_BRANCH_USER
+        ).accept { }
+    }
+
     private fun showGeckoSitePermissionHub(origin: String) {
         AlertDialog.Builder(this).setTitle("Permissions · ${Uri.parse(origin).host ?: origin}")
             .setItems(arrayOf("Content permissions", "Camera and microphone")) { _, which ->
@@ -1999,12 +2026,12 @@ class MainActivity : ComponentActivity() {
                 val origin = tab?.lastUrl.orEmpty()
                 val allowSiteOverride = tab != null && !tab.isPrivate && !tab.isGuest
                 val blockedBySite = permissions.orEmpty().any { permission ->
-                    val token = when (permission) {
-                        Manifest.permission.CAMERA -> "camera"
-                        Manifest.permission.RECORD_AUDIO -> "microphone"
-                        Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION -> "location"
-                        Manifest.permission.POST_NOTIFICATIONS -> "notifications"
-                        Manifest.permission.ACCESS_LOCAL_NETWORK -> "local_network_access"
+                    val token = when {
+                        permission == Manifest.permission.CAMERA -> "camera"
+                        permission == Manifest.permission.RECORD_AUDIO -> "microphone"
+                        permission == Manifest.permission.ACCESS_FINE_LOCATION || permission == Manifest.permission.ACCESS_COARSE_LOCATION -> "location"
+                        Build.VERSION.SDK_INT >= 33 && permission == Manifest.permission.POST_NOTIFICATIONS -> "notifications"
+                        Build.VERSION.SDK_INT >= 37 && permission == Manifest.permission.ACCESS_LOCAL_NETWORK -> "local_network_access"
                         else -> null
                     }
                     token != null && geckoPermissionDecision(origin, token, allowSiteOverride) == "BLOCK"
@@ -4138,6 +4165,13 @@ class MainActivity : ComponentActivity() {
                 val encoded = when {
                     key.startsWith("javascript_enabled_$engineToken") ->
                         key.removePrefix("javascript_enabled_$engineToken")
+                    key.startsWith("site_permission_$engineToken") -> {
+                        val permissionAndOrigin = key.removePrefix("site_permission_$engineToken")
+                        val separator = permissionAndOrigin.indexOf('_')
+                        if (separator < 1) return@engineLoop
+                        permissionAndOrigin.substring(separator + 1)
+                    }
+                    key.startsWith("site_$engineToken") -> key.removePrefix("site_$engineToken")
                     key.startsWith("site_") -> {
                         val marker = "_$engineToken"
                         val markerIndex = key.indexOf(marker)
@@ -4329,7 +4363,7 @@ private fun showQuickSettings() {
         val permissionDefaults = if (engine == BrowserEngineType.CEFRIUM)
             arrayOf("Location, camera, microphone, notifications, clipboard and NFC permissions")
         else arrayOf("Location, camera, microphone, notifications and device permissions")
-        val cookieDefaults = if (engine == BrowserEngineType.GECKOVIEW) arrayOf("Cookies and site data") else emptyArray()
+        val cookieDefaults = if (engine == BrowserEngineType.GECKOVIEW) arrayOf("Cookies and site data", "Images") else emptyArray()
         val labels = definitions.map { (key, name, fallback) ->
             val enabled = prefs.getBoolean("site_default_${engine.name.lowercase()}_$key", fallback)
             "$name · ${if (enabled) "Allowed" else "Blocked"}"
@@ -4343,6 +4377,10 @@ private fun showQuickSettings() {
                 }
                 if (engine == BrowserEngineType.GECKOVIEW && which == definitions.size + permissionDefaults.size) {
                     showDefaultGeckoCookieSettings()
+                    return@setItems
+                }
+                if (engine == BrowserEngineType.GECKOVIEW && which == definitions.size + permissionDefaults.size + 1) {
+                    showDefaultGeckoImageSettings()
                     return@setItems
                 }
                 val (key, name, fallback) = definitions[which]
@@ -5385,6 +5423,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         searchEngine = prefs.getString("search_engine", searchEngine) ?: searchEngine
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
         applyGeckoCookieBehavior()
+        applyGeckoImageBehavior()
         val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
         val savedFontScale = prefs.getInt("font_scale_index", 1).coerceIn(fontScaleFactors.indices)
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
