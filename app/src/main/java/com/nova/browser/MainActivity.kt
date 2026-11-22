@@ -1766,15 +1766,13 @@ class MainActivity : ComponentActivity() {
                     .setItems(languages.map { it.first }.toTypedArray()) { _, toIndex ->
                         val target = languages[toIndex].second
                         if (source == target) { toast("Choose two different languages"); return@setItems }
-                        val translation = geckoSession(tab)?.sessionTranslation
-                        if (translation == null) { toast("GeckoView translation is unavailable for this session"); return@setItems }
+                        val geckoEngine = tab.browserEngine as? GeckoViewBrowserEngine
+                        if (geckoEngine == null) { toast("GeckoView translation is unavailable for this session"); return@setItems }
                         toast("Preparing translation models…")
-                        translation.translate(source, target,
-                            TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
-                        ).accept(
-                            { runOnUiThread { toast("Translation started · $source → $target") } },
-                            { error -> runOnUiThread { toast("Translation unavailable: ${error?.localizedMessage ?: "language model not supported"}") } }
-                        )
+                        geckoEngine.translate(source, target) { started, message ->
+                            runOnUiThread { if (started) toast("Translation started · $source → $target")
+                                else toast("Translation unavailable: ${message ?: "language model not supported"}") }
+                        }
                     }.setNegativeButton("Cancel", null).show()
             }.setNegativeButton("Cancel", null).show()
     }
@@ -1937,12 +1935,14 @@ class MainActivity : ComponentActivity() {
                             toast("Per-site Shield controls require GeckoView")
                             return@setItems
                         }
-                        val permission = (activeEngine as? GeckoViewBrowserEngine)?.trackingPermission
+                        val geckoEngine = activeEngine as? GeckoViewBrowserEngine
+                        if (geckoEngine == null) { toast("Open a website first; site tracking controls are not available on this page"); return@setItems }
+                        val permission = geckoEngine.trackingPermission
                         if (permission == null) { toast("Open a website first; site tracking controls are not available on this page"); return@setItems }
                         val allow = permission.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
-                        runtime.storageController.setPermission(permission, if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                        if (!geckoEngine.setTrackingProtectionAllowed(runtime, allow)) { toast("Per-site tracking controls are unavailable on this page"); return@setItems }
                         toast(if (allow) "Trackers allowed for $host · reload the page" else "Tracking protection restored for $host · reload the page")
-                        geckoSession(tab)?.reload()
+                        geckoEngine.reload()
                     }
                     4 -> {
                         val activeEngine = tab?.browserEngine
@@ -1950,13 +1950,16 @@ class MainActivity : ComponentActivity() {
                             toast("Protection logs require GeckoView")
                             return@setItems
                         }
-                        val session = tab?.let(::geckoSession)
-                        if (session == null) { toast("Open a page first"); return@setItems }
-                        runtime.getContentBlockingController().getLog(session).accept({ entries ->
-                            runOnUiThread { AlertDialog.Builder(this).setTitle("Nova Shield · $host")
-                                .setMessage("${entries?.size ?: 0} content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
-                                .setPositiveButton("OK", null).show() }
-                        }, { error -> runOnUiThread { toast("Protection log unavailable: ${error?.localizedMessage ?: "Unknown error"}") } })
+                        val geckoEngine = tab?.browserEngine as? GeckoViewBrowserEngine
+                        if (geckoEngine == null) { toast("Open a page first"); return@setItems }
+                        geckoEngine.getContentBlockingLog(runtime) { entryCount, errorMessage ->
+                            runOnUiThread {
+                                if (entryCount == null) toast("Protection log unavailable: ${errorMessage ?: "Unknown error"}")
+                                else AlertDialog.Builder(this).setTitle("Nova Shield · $host")
+                                    .setMessage("$entryCount content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
+                                    .setPositiveButton("OK", null).show()
+                            }
+                        }
                     }
                 }
             }.setNegativeButton("Close", null).show()
