@@ -46,7 +46,7 @@ jobs:
           heap-size: 512
           # Hosted runners may not expose KVM. Force the emulator's software CPU
           # translator and avoid snapshot restore so Android 16 can boot reliably.
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -accel off
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           emulator-boot-timeout: 1800
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
