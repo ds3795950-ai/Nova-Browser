@@ -3,6 +3,11 @@ package com.nova.browser
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Typeface
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
@@ -186,13 +191,76 @@ internal class NovaAiAssistantUi(
 
     private fun isPremiumModel(id: String) = id in NovaAiModelCatalog.premium(provider)
     private fun isModelLocked(id: String) = isPremiumModel(id) && id !in availableModelIds
-    private fun modelLabel(id: String) = if (isModelLocked(id)) "🔒 $id · Provider access required" else id
+
+    /** Monochrome lock: black body/white keyhole in light mode, inverted in dark mode. */
+    private inner class ModelLockDrawable : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val dark = NovaThemeManager.isDark(context)
+        private val bodyColor = if (dark) Color.WHITE else Color.BLACK
+        private val holeColor = if (dark) Color.BLACK else Color.WHITE
+
+        override fun draw(canvas: Canvas) {
+            val b = bounds
+            val w = b.width().toFloat()
+            val h = b.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            val side = minOf(w, h)
+            val left = b.left + (w - side) / 2f
+            val top = b.top + (h - side) / 2f
+            val scale = side / 24f
+
+            paint.color = bodyColor
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 3f * scale
+            paint.strokeCap = Paint.Cap.ROUND
+            canvas.drawArc(RectF(left + 6f * scale, top + 2f * scale,
+                left + 18f * scale, top + 17f * scale), 180f, 180f, false, paint)
+
+            paint.style = Paint.Style.FILL
+            canvas.drawRoundRect(RectF(left + 3f * scale, top + 11f * scale,
+                left + 21f * scale, top + 23f * scale), 2.5f * scale, 2.5f * scale, paint)
+
+            paint.color = holeColor
+            canvas.drawCircle(left + 12f * scale, top + 15.5f * scale, 2f * scale, paint)
+            canvas.drawRoundRect(RectF(left + 11f * scale, top + 16f * scale,
+                left + 13f * scale, top + 20f * scale), 1f * scale, 1f * scale, paint)
+        }
+
+        override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) { paint.colorFilter = colorFilter }
+        @Deprecated("Deprecated in Android")
+        override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+    }
+
+    private fun modelRow(id: String, dropdown: Boolean): TextView = TextView(context).apply {
+        text = id
+        textSize = 13f
+        setTextColor(primary)
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(if (dropdown) 14 else 8), dp(8), dp(12), dp(8))
+        if (isModelLocked(id)) {
+            val lock = ModelLockDrawable()
+            lock.setBounds(0, 0, dp(18), dp(18))
+            setCompoundDrawables(lock, null, null, null)
+            compoundDrawablePadding = dp(9)
+        } else {
+            setCompoundDrawables(null, null, null, null)
+        }
+    }
+
+    private fun createModelAdapter(): ArrayAdapter<String> =
+        object : ArrayAdapter<String>(context, 0, mutableListOf()) {
+            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View =
+                modelRow(getItem(position).orEmpty(), false)
+            override fun getDropDownView(position: Int, convertView: View?, parent: android.view.ViewGroup): View =
+                modelRow(getItem(position).orEmpty(), true)
+        }
     private fun updateModelChoices(preferred: String = model) {
         val choices = (listOf(preferred) + availableModelIds.sorted() + NovaAiModelCatalog.premium(provider))
             .filter { it.isNotBlank() }.distinct()
         displayedModelIds = choices
         modelAdapter.clear()
-        modelAdapter.addAll(choices.map(::modelLabel))
+        modelAdapter.addAll(choices)
         modelAdapter.notifyDataSetChanged()
         val index = choices.indexOf(preferred).coerceAtLeast(0)
         changingModelSelection = true
@@ -290,7 +358,7 @@ internal class NovaAiAssistantUi(
         root.addView(providerRow)
 
         models = Spinner(context)
-        modelAdapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(modelLabel(model)))
+        modelAdapter = createModelAdapter()
         models.adapter = modelAdapter
         updateModelChoices(model)
 
