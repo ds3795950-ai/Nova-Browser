@@ -1,3 +1,116 @@
+package com.nova.browser
+
+import android.app.AlertDialog
+import android.content.Context
+import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.text.InputType
+import android.view.Gravity
+import android.view.View
+import android.widget.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
+import java.security.KeyStore
+import java.util.concurrent.Executors
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+internal enum class NovaAiProvider(val label: String, val defaultModel: String) {
+    CHATGPT("ChatGPT", "gpt-4o-mini"), CLAUDE("Claude", "claude-3-5-haiku-latest"),
+    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-2.0-flash")
+}
+internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
+
+/** API credentials and chat history are encrypted at rest using an Android Keystore AES key. */
+internal class NovaAiSecureStore(context:Context) {
+    private val p=context.getSharedPreferences("nova_ai_secure",Context.MODE_PRIVATE)
+    private val alias="com.nova.browser.ai.v1"
+    private fun key():SecretKey {
+        val ks=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
+        (ks.getKey(alias,null) as? SecretKey)?.let{return it}
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore").apply {
+            init(KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+        }.generateKey()
+    }
+    private fun encrypt(s:String):String { val c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,key());return android.util.Base64.encodeToString(c.iv+c.doFinal(s.toByteArray()),android.util.Base64.NO_WRAP) }
+    private fun decrypt(s:String):String { val b=android.util.Base64.decode(s,android.util.Base64.NO_WRAP);require(b.size>28);val c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,key(),GCMParameterSpec(128,b.copyOfRange(0,12)));return String(c.doFinal(b.copyOfRange(12,b.size))) }
+    fun setKey(provider:NovaAiProvider,value:String){if(value.isBlank())p.edit().remove("key_${provider.name}").commit() else check(p.edit().putString("key_${provider.name}",encrypt(value.trim())).commit())}
+    fun getKey(provider:NovaAiProvider)=p.getString("key_${provider.name}",null)?.let(::decrypt)
+    fun hasKey(provider:NovaAiProvider)=runCatching{!getKey(provider).isNullOrBlank()}.getOrDefault(false)
+    fun model(provider:NovaAiProvider)=p.getString("model_${provider.name}",provider.defaultModel)?:provider.defaultModel
+    fun setModel(provider:NovaAiProvider,value:String){require(value.isNotBlank()&&value.length<160);p.edit().putString("model_${provider.name}",value).apply()}
+    fun history():List<NovaAiMessage> = runCatching { val a=JSONArray(decrypt(p.getString("history","")!!));(0 until a.length()).map{val o=a.getJSONObject(it);NovaAiMessage(o.getString("role"),o.getString("text"),o.optLong("time"))}.takeLast(100) }.getOrDefault(emptyList())
+    fun append(m:NovaAiMessage){val a=JSONArray();(history()+m).takeLast(100).forEach{a.put(JSONObject().put("role",it.role).put("text",it.text).put("time",it.time))};check(p.edit().putString("history",encrypt(a.toString())).commit())}
+    fun clear(){p.edit().remove("history").commit()}
+}
+
+internal object NovaAiApi {
+    private val pool=Executors.newFixedThreadPool(2)
+    private val main=Handler(Looper.getMainLooper())
+    private fun enc(s:String)=java.net.URLEncoder.encode(s,"UTF-8")
+    private fun call(method:String,url:String,headers:Map<String,String>,body:JSONObject?=null):JSONObject {
+        val c=URL(url).openConnection() as HttpURLConnection
+        try {
+            c.requestMethod=method;c.connectTimeout=20000;c.readTimeout=60000
+            headers.forEach{(k,v)->c.setRequestProperty(k,v)}
+            c.setRequestProperty("Accept","application/json")
+            if(body!=null){c.doOutput=true;c.setRequestProperty("Content-Type","application/json");c.outputStream.use{it.write(body.toString().toByteArray(StandardCharsets.UTF_8))}}
+            val code=c.responseCode;val raw=(if(code in 200..299)c.inputStream else c.errorStream)?.bufferedReader()?.use{it.readText()}.orEmpty()
+            val j=runCatching{JSONObject(raw)}.getOrElse{JSONObject()}
+            if(code !in 200..299) error("Provider API error ($code): ${j.optJSONObject("error")?.optString("message")?:j.optString("message").ifBlank{"Request failed"}}")
+            return j
+        } finally {c.disconnect()}
+    }
+    fun models(p:NovaAiProvider,key:String,done:(Result<List<String>>)->Unit){pool.execute{
+        val r=runCatching {
+            val (url,h)=when(p){
+                NovaAiProvider.CHATGPT->"https://api.openai.com/v1/models" to mapOf("Authorization" to "Bearer $key")
+                NovaAiProvider.GROK->"https://api.x.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
+                NovaAiProvider.CLAUDE->"https://api.anthropic.com/v1/models?limit=100" to mapOf("x-api-key" to key,"anthropic-version" to "2023-06-01")
+                NovaAiProvider.GEMINI->"https://generativelanguage.googleapis.com/v1beta/models?key=${enc(key)}" to emptyMap()
+            }
+            val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.CLAUDE||p==NovaAiProvider.GEMINI)"models" else "data")
+            (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
+                val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
+                id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
+            }.distinct().sorted().ifEmpty{listOf(p.defaultModel)}
+        };main.post{done(r)}
+    }}
+    fun send(p:NovaAiProvider,key:String,model:String,history:List<NovaAiMessage>,done:(Result<String>)->Unit){pool.execute{
+        val r=runCatching {
+            val recent=history.takeLast(20)
+            when(p){
+                NovaAiProvider.CHATGPT,NovaAiProvider.GROK->{
+                    val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",it.role).put("content",it.text))}
+                    val url=if(p==NovaAiProvider.GROK)"https://api.x.ai/v1/chat/completions" else "https://api.openai.com/v1/chat/completions"
+                    call("POST",url,mapOf("Authorization" to "Bearer $key"),JSONObject().put("model",model).put("messages",a))
+                        .optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty().ifBlank{error("Empty AI response")}
+                }
+                NovaAiProvider.CLAUDE->{
+                    val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",it.role).put("content",it.text))}
+                    call("POST","https://api.anthropic.com/v1/messages",mapOf("x-api-key" to key,"anthropic-version" to "2023-06-01"),
+                        JSONObject().put("model",model).put("max_tokens",2048).put("messages",a))
+                        .optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty().ifBlank{error("Empty AI response")}
+                }
+                NovaAiProvider.GEMINI->{
+                    val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",if(it.role=="assistant")"model" else "user").put("parts",JSONArray().put(JSONObject().put("text",it.text))))}
+                    call("POST","https://generativelanguage.googleapis.com/v1beta/models/${enc(model)}:generateContent?key=${enc(key)}",emptyMap(),JSONObject().put("contents",a))
+                        .optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty().ifBlank{error("Empty AI response")}
+                }
+            }
+        };main.post{done(r)}
+    }}
+}
+
 internal class NovaAiAssistantUi(
     private val context: Context,
     private val store: NovaAiSecureStore,
