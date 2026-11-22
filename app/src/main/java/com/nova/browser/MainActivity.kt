@@ -1901,43 +1901,16 @@ class MainActivity : ComponentActivity() {
 
     private fun showExtensions() {
         if (denyGuestAccess("Extensions")) return
-        val controller = runtime.getWebExtensionController()
-        controller.list().accept({ extensions ->
-            runOnUiThread {
-                val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
-                installed.filterNotNull().forEach(::configureExtensionDelegates)
-                val rows = installed.map {
-                    val metadata = it?.metaData
-                    "${metadata?.name ?: it?.id ?: "Extension"} Â· ${if (metadata?.enabled == true) "Enabled" else "Disabled"}"
-                }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons Â· ${installed.size}").setMessage("Signed Firefox-compatible extensions are supported. Select an add-on to open its popup, configure it, or manage it.")
-                    .setItems(rows) { _, which ->
-                        val extension = installed[which]
-                        if (extension == null) { toast("This add-on entry is unavailable"); return@setItems }
-                        val metadata = extension.metaData
-                                        val actionItems = extensionController.menuItems(
-                            extensionId = extension.id,
-                            enabled = metadata?.enabled == true,
-                            hasOptionsPage = !metadata?.optionsPageUrl.isNullOrBlank()
-                        )
-                        AlertDialog.Builder(this).setTitle(metadata?.name ?: extension.id)
-                            .setItems(actionItems.toTypedArray()) { _, action ->
-                                when (actionItems[action]) {
-                                    "Open popup" -> extensionActions[extension.id]?.click()
-                                    "Options" -> metadata?.optionsPageUrl?.let { createExtensionTab(it, geckoWillNavigate = false) }
-                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ configureExtensionDelegates(extension); toast("Extension enabled") }, { toast("Could not enable: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this extension and its data?")
-                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ extensionController.remove(extension.id); toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
-                                        .setNegativeButton("Cancel", null).show()
-                                }
-                            }.setNegativeButton("Close", null).show()
-                    }
-                    .setPositiveButton("Install signed XPI URL") { _, _ -> installExtensionPrompt() }
-                    .setNeutralButton("Browse add-ons") { _, _ -> createTab(false, "https://addons.mozilla.org/android/") }
-                    .setNegativeButton("Close", null).show()
-            }
-        }, { error -> runOnUiThread { toast("Could not list extensions: ${error?.localizedMessage ?: "Unknown error"}") } })
+        NovaExtensionManagerUi(
+            activity = this,
+            geckoController = runtime.getWebExtensionController(),
+            extensionController = extensionController,
+            configureDelegates = ::configureExtensionDelegates,
+            installExtensionPrompt = ::installExtensionPrompt,
+            createExtensionTab = { url -> createExtensionTab(url, geckoWillNavigate = false) },
+            openAddonsSite = { createTab(false, "https://addons.mozilla.org/android/") },
+            showMessage = ::toast
+        ).show()
     }
 
     private fun configureAddonManagerDelegate() {
