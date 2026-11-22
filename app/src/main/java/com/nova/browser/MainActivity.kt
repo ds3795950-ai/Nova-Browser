@@ -35,6 +35,7 @@ import com.cefrium.CefriumSecureDnsMode
 import com.nova.browser.engine.BrowserEngineMode
 import com.nova.browser.engine.BrowserEngineType
 import com.nova.browser.engine.BrowserEngineProfilePolicy
+import com.nova.browser.engine.CefriumRuntimeAvailability
 import com.nova.browser.engine.BrowserEnginePreferenceStore
 import com.nova.browser.engine.BrowserEngine
 import com.nova.browser.engine.BrowserEngineCapability
