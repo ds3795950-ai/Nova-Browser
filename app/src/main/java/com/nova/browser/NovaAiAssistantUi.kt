@@ -31,7 +31,8 @@ import javax.crypto.spec.GCMParameterSpec
 internal enum class NovaAiProvider(val label: String, val defaultModel: String) {
     CHATGPT("ChatGPT", "gpt-4o-mini"), CLAUDE("Claude", "claude-3-5-haiku-latest"),
     GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-2.0-flash"),
-    KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat")
+    KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat"),
+    OPENROUTER("OpenRouter · Free", "nvidia/nemotron-3-ultra-550b-a55b:free")
 }
 internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
 
@@ -39,7 +40,16 @@ internal data class NovaAiMessage(val role:String,val text:String,val time:Long=
  * the account's model list. API model-list visibility is used as an availability
  * signal; Nova does not claim to verify a consumer-app subscription. */
 private object NovaAiModelCatalog {
+    val openRouterFree = listOf(
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "baidu/ernie-5.5-flash-preview:free",
+        "nvidia/nemotron-3.5-super-vl:free",
+        "inclusionai/ling-3.2-flash:free",
+        "liquid/lfm-3-1.7b:free",
+        "recursive/flint-v1.0:free"
+    )
     fun premium(provider: NovaAiProvider): List<String> = when (provider) {
+        NovaAiProvider.OPENROUTER -> emptyList()
         NovaAiProvider.CHATGPT -> listOf("gpt-5-pro", "o3-pro")
         NovaAiProvider.CLAUDE -> listOf("claude-opus-4-1", "claude-opus-4-5")
         NovaAiProvider.GROK -> listOf("grok-4", "grok-4-heavy")
@@ -137,27 +147,34 @@ internal object NovaAiApi {
                 NovaAiProvider.GEMINI->"https://generativelanguage.googleapis.com/v1beta/models?key=${enc(key)}" to emptyMap()
                 NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
                 NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/models" to mapOf("Authorization" to "Bearer $key")
+                NovaAiProvider.OPENROUTER->"https://openrouter.ai/api/v1/models" to mapOf("Authorization" to "Bearer $key")
             }
             val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.CLAUDE||p==NovaAiProvider.GEMINI)"models" else "data")
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
                 val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
-                id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
-            }.distinct().sorted().ifEmpty{listOf(p.defaultModel)}
+                val isFreeOpenRouter = if (p == NovaAiProvider.OPENROUTER) {
+                    val pricing = o.optJSONObject("pricing")
+                    pricing != null && pricing.optString("prompt") in setOf("0", "0.0", "0.000000") &&
+                        pricing.optString("completion") in setOf("0", "0.0", "0.000000") && id in NovaAiModelCatalog.openRouterFree
+                } else true
+                id.takeIf{it.isNotBlank() && isFreeOpenRouter && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
+            }.distinct().sorted().let { if (p == NovaAiProvider.OPENROUTER) it else it.ifEmpty { listOf(p.defaultModel) } }
         };main.post{done(r)}
     }}
     fun send(p:NovaAiProvider,key:String,model:String,history:List<NovaAiMessage>,done:(Result<String>)->Unit){pool.execute{
         val r=runCatching {
             val recent=history.takeLast(20)
             when(p){
-                NovaAiProvider.CHATGPT,NovaAiProvider.GROK,NovaAiProvider.KIMI,NovaAiProvider.DEEPSEEK->{
+                NovaAiProvider.CHATGPT,NovaAiProvider.GROK,NovaAiProvider.KIMI,NovaAiProvider.DEEPSEEK,NovaAiProvider.OPENROUTER->{
                     val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",it.role).put("content",it.text))}
                     val url=when(p){
                         NovaAiProvider.GROK->"https://api.x.ai/v1/chat/completions"
                         NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/chat/completions"
                         NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/chat/completions"
+                        NovaAiProvider.OPENROUTER->"https://openrouter.ai/api/v1/chat/completions"
                         else->"https://api.openai.com/v1/chat/completions"
                     }
-                    call("POST",url,mapOf("Authorization" to "Bearer $key"),JSONObject().put("model",model).put("messages",a))
+                    call("POST",url,if(p==NovaAiProvider.OPENROUTER) mapOf("Authorization" to "Bearer $key","HTTP-Referer" to "https://nova.browser","X-Title" to "Nova Browser") else mapOf("Authorization" to "Bearer $key"),JSONObject().put("model",model).put("messages",a))
                         .optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty().ifBlank{error("Empty AI response")}
                 }
                 NovaAiProvider.CLAUDE->{
@@ -233,7 +250,7 @@ internal class NovaAiAssistantUi(
     }
 
     private fun modelRow(id: String, dropdown: Boolean): TextView = TextView(context).apply {
-        text = id
+        text = if (provider == NovaAiProvider.OPENROUTER) "${id.removeSuffix(":free")} · FREE" else id
         textSize = 13f
         setTextColor(primary)
         gravity = Gravity.CENTER_VERTICAL
@@ -256,7 +273,7 @@ internal class NovaAiAssistantUi(
                 modelRow(getItem(position).orEmpty(), true)
         }
     private fun updateModelChoices(preferred: String = model) {
-        val choices = (listOf(preferred) + availableModelIds.sorted() + NovaAiModelCatalog.premium(provider))
+        val choices = (listOf(preferred) + availableModelIds.sorted() + NovaAiModelCatalog.premium(provider) + if (provider == NovaAiProvider.OPENROUTER) NovaAiModelCatalog.openRouterFree else emptyList())
             .filter { it.isNotBlank() }.distinct()
         displayedModelIds = choices
         modelAdapter.clear()
@@ -583,7 +600,7 @@ internal class NovaAiAssistantUi(
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         AlertDialog.Builder(context).setTitle("${provider.label} API key")
-            .setMessage("Stored encrypted with Android Keystore. Nova sends the key directly to ${provider.label}'s official API.")
+            .setMessage(if (provider == NovaAiProvider.OPENROUTER) "Add your OpenRouter API key (create one at openrouter.ai/keys). Nova stores it encrypted with Android Keystore. The six listed models are $0 per token, but free-tier usage is rate limited." else "Stored encrypted with Android Keystore. Nova sends the key directly to ${provider.label}'s official API.")
             .setView(field)
             .setPositiveButton("Save") { _, _ ->
                 runCatching { store.setKey(provider, field.text.toString()) }
@@ -616,7 +633,7 @@ internal class NovaAiAssistantUi(
                 val preferred = if (model in availableModelIds || !isPremiumModel(model)) model else store.model(provider)
                 updateModelChoices(preferred)
                 model = preferred
-                status.text = "${availableModelIds.size} models available · premium models locked unless provider API access is confirmed"
+                status.text = if (provider == NovaAiProvider.OPENROUTER) "${availableModelIds.size} of 6 free models currently available · free-tier rate limits apply" else "${availableModelIds.size} models available · premium models locked unless provider API access is confirmed"
             }.onFailure {
                 availableModelIds = emptySet()
                 updateModelChoices(model)
