@@ -2288,8 +2288,7 @@ class MainActivity : ComponentActivity() {
                 runCatching { passwordVault.save(Autocomplete.LoginEntry.Builder().guid(UUID.randomUUID().toString()).origin("${Uri.parse(url).scheme}://${Uri.parse(url).host}").username(username.text.toString()).password(password.text.toString()).build()) }
                     .onSuccess {
                         toast("Login saved encrypted on this device")
-                        switchCurrentTabToGeckoIfSavedLoginMatches()
-                    }
+                            }
                     .onFailure { toast("Could not save login: ${it?.localizedMessage ?: "Unknown error"}") }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -2370,16 +2369,6 @@ class MainActivity : ComponentActivity() {
         startActivityForResult(intent, historyExportRequestCode)
     }
 
-    private fun switchCurrentTabToGeckoIfSavedLoginMatches() {
-        val tab = currentTab() ?: return
-        if (tab.engineType != BrowserEngineType.CEFRIUM) return
-        val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull() ?: return
-        val hasSavedLogin = runCatching {
-            passwordVault.all().any { Uri.parse(it.origin).host.equals(host, ignoreCase = true) }
-        }.getOrDefault(false)
-        if (hasSavedLogin) switchCurrentTabToGecko("saved password autofill")
-    }
-
     private fun switchCurrentTabToGecko(reason: String) {
         val tab = currentTab() ?: return
         if (tab.engineType != BrowserEngineType.CEFRIUM) return
@@ -2388,7 +2377,7 @@ class MainActivity : ComponentActivity() {
         tab.needsReload = true
         showPrimaryEngineView(browserView)
         activateTab(tab)
-        toast("Switched to GeckoView for $reason. This site may require you to sign in again; website data is not migrated yet.")
+        toast("Switched to GeckoView for $reason. This site may require you to sign in again; website data is never transferred between engines.")
     }
 
     /** Shield is a runtime-wide protection policy, so every Normal Cefrium tab must leave Cefrium. */
@@ -2696,7 +2685,6 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 applySyncSnapshot(merged)
                 passwordVault.importSyncBundle(mergedVault)
-                switchCurrentTabToGeckoIfSavedLoginMatches()
                 prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
                 toast("Encrypted cloud sync completed")
             }
