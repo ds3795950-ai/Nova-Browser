@@ -368,15 +368,35 @@ internal class NovaAiAssistantUi(
     }
 
     private fun showWorkspaceMenu() {
-        val items = arrayOf("New chat", "Conversation history", "Manage API key", "Refresh model list")
+        val items = arrayOf("What are we working on?", "AI history", "Current conversation", "New chat", "Manage API key", "Refresh model list")
         AlertDialog.Builder(context).setTitle("Nova AI workspace").setItems(items) { _, which ->
             when (which) {
-                0 -> newChat()
+                0 -> showWorkspaceHome()
                 1 -> historyDialog()
-                2 -> editKey()
-                3 -> refreshModels()
+                2 -> showCurrentConversation()
+                3 -> newChat()
+                4 -> editKey()
+                5 -> refreshModels()
             }
         }.show()
+    }
+
+    private fun showWorkspaceHome() {
+        // Bring the welcome/suggestion panel back without deleting the active conversation.
+        feed.removeAllViews()
+        showWelcome()
+        status.text = if (messages.isEmpty()) "Ready for a new task" else "Workspace home · conversation preserved"
+    }
+
+    private fun showCurrentConversation() {
+        feed.removeAllViews()
+        if (messages.isEmpty()) {
+            showWelcome()
+            status.text = "No messages in this conversation yet"
+        } else {
+            messages.forEach(::render)
+            status.text = "Current conversation"
+        }
     }
 
     private fun newChat() {
