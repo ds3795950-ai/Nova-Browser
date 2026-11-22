@@ -94,10 +94,14 @@ class NovaSyncMergeTest {
         val cefriumUrls = merged.getJSONObject("CEFRIUM").getJSONArray("bookmarks")
         assertEquals(2, geckoUrls.length())
         assertEquals(2, cefriumUrls.length())
-        assertEquals("https://gecko.example", geckoUrls.getJSONObject(0).getString("url"))
-        assertEquals("https://cefrium.example", cefriumUrls.getJSONObject(0).getString("url"))
-        for (i in 0 until geckoUrls.length()) assertTrue(!geckoUrls.getJSONObject(i).getString("url").contains("cefrium"))
-        for (i in 0 until cefriumUrls.length()) assertTrue(!cefriumUrls.getJSONObject(i).getString("url").contains("gecko"))
+        val geckoUrlSet = (0 until geckoUrls.length()).map { geckoUrls.getJSONObject(it).getString("url") }.toSet()
+        val cefriumUrlSet = (0 until cefriumUrls.length()).map { cefriumUrls.getJSONObject(it).getString("url") }.toSet()
+        assertTrue(geckoUrlSet.contains("https://gecko.example"))
+        assertTrue(geckoUrlSet.contains("https://gecko-remote.example"))
+        assertTrue(cefriumUrlSet.contains("https://cefrium.example"))
+        assertTrue(cefriumUrlSet.contains("https://cefrium-remote.example"))
+        for (url in geckoUrlSet) assertTrue(!url.contains("cefrium"))
+        for (url in cefriumUrlSet) assertTrue(!url.contains("gecko"))
     }
 
     @Test fun legacyUnscopedSnapshotCannotPopulateEitherEngineProfile() {
