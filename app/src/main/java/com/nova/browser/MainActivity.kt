@@ -3707,7 +3707,7 @@ class MainActivity : ComponentActivity() {
 
     private fun isJavaScriptAllowed(engine: BrowserEngineType, url: String): Boolean {
         val key = javaScriptPreferenceKey(engine, url) ?: return true
-        return prefs.getBoolean(key, true)
+        return prefs.getBoolean(key, prefs.getBoolean("site_default_javascript_${engine.name.lowercase()}", true))
     }
 
     private fun applyJavaScriptSetting(tab: BrowserTab, url: String, reload: Boolean) {
@@ -3737,7 +3737,8 @@ class MainActivity : ComponentActivity() {
     }
     private fun siteSettingAllowed(engine: BrowserEngineType, url: String, setting: String, default: Boolean): Boolean {
         val key = siteSettingKey(engine, url, setting) ?: return default
-        return prefs.getBoolean(key, default)
+        val globalDefault = prefs.getBoolean("site_default_${engine.name.lowercase()}_$setting", default)
+        return prefs.getBoolean(key, globalDefault)
     }
     private fun toggleSiteSetting(tab: BrowserTab, setting: String, default: Boolean) {
         val key = siteSettingKey(tab.engineType, tab.lastUrl, setting) ?: return toast("Open an HTTP or HTTPS site first")
@@ -3797,6 +3798,8 @@ class MainActivity : ComponentActivity() {
         val host = currentTab()?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
         val actions = arrayOf(
             "Current site settings · ${host ?: "open a website"}",
+            "Default settings · GeckoView",
+            "Default settings · Cefrium",
             "All sites · ${storedSiteRuleEntries().size}",
             "Clear all site data · GeckoView",
             "Clear all site data · Cefrium"
@@ -3805,10 +3808,45 @@ class MainActivity : ComponentActivity() {
             .setItems(actions) { _, which ->
                 when (which) {
                     0 -> showSiteControls()
-                    1 -> showAllSiteSettings()
-                    2 -> confirmClearAllSiteData(BrowserEngineType.GECKOVIEW)
-                    3 -> confirmClearAllSiteData(BrowserEngineType.CEFRIUM)
+                    1 -> showDefaultSiteSettings(BrowserEngineType.GECKOVIEW)
+                    2 -> showDefaultSiteSettings(BrowserEngineType.CEFRIUM)
+                    3 -> showAllSiteSettings()
+                    4 -> confirmClearAllSiteData(BrowserEngineType.GECKOVIEW)
+                    5 -> confirmClearAllSiteData(BrowserEngineType.CEFRIUM)
                 }
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun showDefaultSiteSettings(engine: BrowserEngineType) {
+        val definitions = listOf(Triple("javascript", "JavaScript", true)) +
+            if (engine == BrowserEngineType.CEFRIUM) listOf(
+                Triple("popups", "Pop-ups and redirects", false),
+                Triple("autoplay", "Autoplay", false),
+                Triple("ads", "Ads and trackers", true),
+                Triple("sound", "Sound", true)
+            ) else emptyList()
+        val labels = definitions.map { (key, name, fallback) ->
+            val enabled = prefs.getBoolean("site_default_${engine.name.lowercase()}_$key", fallback)
+            "$name · ${if (enabled) "Allowed" else "Blocked"}"
+        }.toTypedArray()
+        val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
+        AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
+            .setItems(labels) { _, which ->
+                val (key, name, fallback) = definitions[which]
+                val prefKey = "site_default_${engine.name.lowercase()}_$key"
+                val next = !prefs.getBoolean(prefKey, fallback)
+                prefs.edit().putBoolean(prefKey, next).apply()
+                tabs.filter { it.engineType == engine && !it.isPrivate && !it.isGuest }.forEach { active ->
+                    when (key) {
+                        "javascript" -> applyJavaScriptSetting(active, active.lastUrl, reload = false)
+                        "autoplay" -> (active.browserEngine as? CefriumBrowserEngine)?.setAutoplayAllowed(next)
+                        "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
+                        "sound" -> (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next)
+                    }
+                    if (active.lastUrl.startsWith("http", true)) active.browserEngine?.reload()
+                }
+                toast("$engineLabel default · $name ${if (next) "allowed" else "blocked"}")
+                showDefaultSiteSettings(engine)
             }.setNegativeButton(getString(R.string.close), null).show()
     }
 
