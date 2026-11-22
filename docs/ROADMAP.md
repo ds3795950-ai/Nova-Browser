@@ -41,16 +41,17 @@ Status key:
 - `MainActivity.BrowserTab` now owns the engine-neutral `BrowserEngine?` and does not retain a `GeckoSession`; Gecko-specific delegate installation and a narrow Gecko-session accessor remain in `MainActivity`.
 - Remaining: complete engine-neutral tab ownership, feature-capability routing, crash/lifecycle recovery tests, and device compatibility/performance acceptance. Do not bypass privacy or feature guards to increase Cefrium coverage.
 
-## Phase 3 — shared data and cross-engine migration
+## Phase 3 — strict engine profile isolation
 
-**Status: PARTIAL**
+**Status: IMPLEMENTED IN SOURCE; CI AND DEVICE ACCEPTANCE REQUIRED**
 
-- Nova-owned bookmarks, history, tabs/session metadata and download records are shared at the browser-app layer.
-- Exact-host engine affinity is stored for Normal mode only.
-- A consent-gated migration coordinator validates an exact web origin, imports and verifies portable data, and never deletes the source profile after a failure.
-- The coordinator is a contract only: concrete GeckoView/Cefrium `WebsiteDataPort` adapters are not wired.
-- GeckoView's documented public storage APIs do not provide general cookie and website-storage export. HttpOnly/partitioned cookies, service workers, Cache Storage, sessionStorage, passkeys and device-bound credentials cannot be promised portable.
-- Remaining: implement adapters only for data exposed by supported APIs, add user-facing partial-migration/re-authentication recovery, and run integration/device tests. Do not claim lossless website-session migration.
+- Cefrium and GeckoView have disjoint website profiles; no cookies, cache, localStorage, IndexedDB, service workers, permissions, credentials, passkeys or session state cross the engine boundary.
+- Nova-owned history, bookmarks, folders/tombstones, workspaces, saved Normal tab metadata and downloads use engine-specific storage namespaces. Download preference records, partial files and public download folders are also separated.
+- Bookmark backup files are schema-tagged with their engine and cross-engine or unscoped imports are rejected. History exports include engine provenance. Password vault UI is GeckoView-only. Private and Guest modes cannot read owner bookmarks, history, workspaces or downloads.
+- Encrypted cloud sync stores and merges independent `GECKOVIEW` and `CEFRIUM` profile objects. Legacy unscoped cloud snapshots are not imported into either profile.
+- `WebsiteDataMigrationCoordinator` contains no data ports and always blocks cross-engine migration.
+- Unscoped legacy local records are preserved but quarantined because the owning engine cannot be reliably inferred.
+- Remaining: run the latest Android CI, lint, Android 16 emulator and BrowserStack workflows; perform real-device profile-leak tests on Android 10+ and extended tab/download lifecycle tests.
 
 ## Phase 4 — Private and Guest privacy
 

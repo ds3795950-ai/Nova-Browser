@@ -15,6 +15,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.util.UUID
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,8 +23,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** App-controlled HTTP downloader with resumable Range requests and persisted partial files. */
 class NovaDownloadManager(
     private val context: Context,
+    storageNamespace: String,
     private val changed: (List<Item>) -> Unit
 ) {
+    private val storageNamespace = storageNamespace.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() || it == '-' || it == '_' }.also { require(it.isNotBlank()) { "A non-empty engine storage namespace is required" } }
     data class Item(
         val id: String,
         val url: String,
@@ -48,7 +51,7 @@ class NovaDownloadManager(
         @Volatile var input: InputStream? = null
     )
 
-    private val prefs = context.getSharedPreferences("nova_downloads", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("nova_downloads_${storageNamespace}", Context.MODE_PRIVATE)
     private val executor = Executors.newCachedThreadPool()
     private val running = ConcurrentHashMap<String, Running>()
     private val records = LinkedHashMap<String, Item>()
@@ -302,14 +305,14 @@ class NovaDownloadManager(
         }
     }
 
-    private fun partial(id: String) = File(File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "nova-partials"), "$id.part")
+    private fun partial(id: String) = File(File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "nova-partials/${storageNamespace}"), "$id.part")
 
     private fun publish(file: File, name: String, mime: String): Uri {
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
                 put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Nova")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Nova/${storageNamespace}")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)

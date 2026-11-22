@@ -4,6 +4,12 @@ package com.nova.browser.engine
 object BrowserEngineProfilePolicy {
     const val NORMAL_CEFRIUM_PROFILE = "nova-normal-v1"
 
+    fun kindFor(isPrivate: Boolean, isGuest: Boolean): BrowserProfileKind = when {
+        isGuest -> BrowserProfileKind.GUEST
+        isPrivate -> BrowserProfileKind.PRIVATE
+        else -> BrowserProfileKind.NORMAL
+    }
+
     fun cefriumPersistentProfile(profile: BrowserProfileKind): String? =
         if (profile == BrowserProfileKind.NORMAL) NORMAL_CEFRIUM_PROFILE else null
 

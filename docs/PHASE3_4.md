@@ -27,6 +27,8 @@
 
 ## Phase 3 — strict engine profile isolation (replaces data migration)
 
+**Implementation target:** engine-native and Nova-owned records remain namespaced by engine; the prior cross-engine migration concept is removed.
+
 - GeckoView and Cefrium use independent engine-owned profiles and storage. No website data is shared between them, in either direction.
 - Cookies, browsing history, HTTP cache, localStorage, IndexedDB, service workers, Cache Storage, permissions, passwords, passkeys, downloads, and session state remain within the owning engine/profile.
 - There is no cross-engine export, import, migration, synchronization, fallback read, or profile reuse.
@@ -36,6 +38,8 @@
 - Any future request to share data between engines is out of scope and requires a separate explicit security review and product decision.
 
 ## Phase 4 — validation and hardening
+
+- Automated checks verify separate engine preference namespaces, engine-tagged bookmark backups, profile-separated cloud-sync merge/restore, and the fail-closed migration guard.
 
 - Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
 - Verify both directions of engine switching do not expose cookies, history, cache, localStorage, IndexedDB, credentials, permissions, or session state.

@@ -90,11 +90,17 @@ class MainActivity : ComponentActivity() {
     private var pendingFilePrompt: FilePrompt? = null
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private var bookmarkTransferMode: String? = null
+    private var bookmarkTransferEngineType: BrowserEngineType? = null
     private var guestContextId: String = ""
     private val guestContextCleanupLock = Any()
-    private val novaDownloads: NovaDownloadManager by lazy {
-        NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
-            .also { it.resumeInterrupted() }
+    private val downloadManagers = mutableMapOf<BrowserEngineType, NovaDownloadManager>()
+
+    private fun downloadManager(engineType: BrowserEngineType): NovaDownloadManager = synchronized(downloadManagers) {
+        downloadManagers.getOrPut(engineType) {
+            NovaDownloadManager(this, EngineProfileStoragePolicy.suffix(engineType)) { items ->
+                runOnUiThread { if (currentTab()?.engineType == engineType) updateDownloadSummary(items) }
+            }.also { it.resumeInterrupted() }
+        }
     }
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
@@ -520,14 +526,14 @@ class MainActivity : ComponentActivity() {
         setOnClickListener { action() }
     }
 
-    private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
+    private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false, preferredEngine: BrowserEngineType? = null) {
         if (currentTab()?.isGuest == true && !isGuest) {
             toast("Normal and Private tabs are unavailable in Guest Mode")
             return
         }
         currentTab()?.let(::deactivateTabRuntime)
         val tab = BrowserTab(isPrivate = isPrivate, isGuest = isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
-        tab.engineType = resolveEngineForTab(tab)
+        tab.engineType = if (preferredEngine == BrowserEngineType.GECKOVIEW) BrowserEngineType.GECKOVIEW else resolveEngineForTab(tab)
         tabs.add(tab)
         activeIndex = tabs.lastIndex
         activateTab(tab)
@@ -542,7 +548,7 @@ class MainActivity : ComponentActivity() {
     private fun resolveEngineForTab(tab: BrowserTab): BrowserEngineType {
         // Privacy profiles are fixed to GeckoView; Normal-mode preferences cannot override them.
         if (tab.isGuest || tab.isPrivate) return BrowserEngineType.GECKOVIEW
-        val profileKind = if (tab.isPrivate) BrowserProfileKind.PRIVATE else BrowserProfileKind.NORMAL
+        val profileKind = BrowserEngineProfilePolicy.kindFor(tab.isPrivate, tab.isGuest)
         val webUrl = tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")
         val hasSavedLogin = runCatching {
             passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) }
@@ -592,7 +598,10 @@ class MainActivity : ComponentActivity() {
     private fun ensureCefriumEngine(tab: BrowserTab, popupBrowser: CefriumBrowser? = null): CefriumBrowserEngine {
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
         check(!tab.isGuest && !tab.isPrivate) { "Private and Guest tabs must remain on GeckoView" }
-        val profile = popupBrowser?.getProfile() ?: CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
+        val profileKind = BrowserEngineProfilePolicy.kindFor(tab.isPrivate, tab.isGuest)
+        val profileName = BrowserEngineProfilePolicy.cefriumPersistentProfile(profileKind)
+            ?: error("Cefrium is restricted to the Normal profile")
+        val profile = popupBrowser?.getProfile() ?: CefriumProfile.get(profileName)
         val engine = CefriumBrowserEngine(
             activity = this,
             profile = profile,
@@ -626,7 +635,7 @@ class MainActivity : ComponentActivity() {
             },
             onDownloadCompleted = { download ->
                 runOnUiThread {
-                    novaDownloads.registerCompleted(
+                    downloadManager(tab.engineType).registerCompleted(
                         url = download.url,
                         fileName = download.fileName,
                         mimeType = download.mimeType,
@@ -898,7 +907,7 @@ class MainActivity : ComponentActivity() {
                     val rawName = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "nova-download-${System.currentTimeMillis()}" }
                     val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
                     requestDownloadNotificationPermission()
-                    novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
+                    downloadManager(tab.engineType).saveExternalStream(body, rawName, mime.substringBefore(';'))
                     toast("Webpage download received · saving to Downloads/Nova")
                 }
                 override fun onTitleChange(session: GeckoSession, title: String?) {
@@ -1020,9 +1029,10 @@ class MainActivity : ComponentActivity() {
         (tab.browserEngine as? GeckoViewBrowserEngine)?.let { return it.session }
         tab.browserEngine?.close()
         tab.browserEngine = null
+        val profileKind = BrowserEngineProfilePolicy.kindFor(tab.isPrivate, tab.isGuest)
         val settings = GeckoSessionSettings.Builder()
-            .usePrivateMode(tab.isPrivate || GuestModePolicy.requiresEphemeralStorage(tab.isGuest))
-            .contextId(if (tab.isGuest) guestContextId else null)
+            .usePrivateMode(BrowserEngineProfilePolicy.isEphemeral(profileKind))
+            .contextId(BrowserEngineProfilePolicy.geckoContextId(profileKind, guestContextId))
             .userAgentMode(if (tab.desktopSite) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(if (tab.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .build()
@@ -1288,133 +1298,163 @@ class MainActivity : ComponentActivity() {
         if (wasActive) switchTab(activeIndex.coerceIn(tabs.indices))
     }
 
+    private fun currentEngineType(): BrowserEngineType = currentTab()?.engineType ?: BrowserEngineType.GECKOVIEW
+
+    private fun engineStorageKey(base: String, engineType: BrowserEngineType = currentEngineType()): String =
+        EngineProfileStoragePolicy.key(base, engineType)
+
     private fun saveNamedSession() {
-        if (denyGuestAccess("Saving workspaces")) return
+        if (currentTab()?.isPrivate == true || denyGuestAccess("Saving workspaces")) {
+            if (currentTab()?.isPrivate == true) toast("Workspaces are unavailable in Private Mode")
+            return
+        }
+        val engineType = currentEngineType()
         val input = EditText(this).apply { hint = "Session name"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Save workspace").setView(input)
             .setPositiveButton("Save") { _, _ ->
                 val name = input.text.toString().trim().ifBlank { "Saved workspace" }
                 val urls = JSONArray()
-                tabs.filter { !it.isPrivate && !it.isGuest }.forEach { urls.put(JSONObject().put("url", it.lastUrl).put("group", it.group).put("title", it.title)) }
-                val snapshots = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
+                tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == engineType }.forEach { tab ->
+                    urls.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title).put("engine", engineType.name))
+                }
+                val workspacesKey = engineStorageKey("saved_workspaces", engineType)
+                val tombstonesKey = engineStorageKey("workspace_tombstones", engineType)
+                val snapshots = prefs.getStringSet(workspacesKey, emptySet())?.toMutableSet() ?: mutableSetOf()
                 snapshots.removeAll { raw -> runCatching { JSONObject(raw).optString("name") == name }.getOrDefault(false) }
-                val workspaceTombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
-                val createdAt = maxOf(System.currentTimeMillis(), workspaceTombstones.optLong(name) + 1L)
-                snapshots.add(JSONObject().put("name", name).put("createdAt", createdAt).put("tabs", urls).toString())
-                prefs.edit().putStringSet("saved_workspaces", snapshots).apply()
-                toast("Workspace saved")
+                val tombstones = runCatching { JSONObject(prefs.getString(tombstonesKey, "{}") ?: "{}") }.getOrDefault(JSONObject())
+                val createdAt = maxOf(System.currentTimeMillis(), tombstones.optLong(name) + 1L)
+                snapshots.add(JSONObject().put("name", name).put("createdAt", createdAt).put("engine", engineType.name).put("tabs", urls).toString())
+                prefs.edit().putStringSet(workspacesKey, snapshots).apply()
+                toast("$engineType workspace saved")
             }.setNegativeButton("Cancel", null).show()
     }
 
     private fun persistTabs() {
-        val saved = JSONArray()
-        tabs.filter { GuestModePolicy.mayPersistBrowsingData(it.isPrivate, it.isGuest) }.forEach { tab ->
-            saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title)
-                .put("readerOriginalUrl", tab.readerOriginalUrl ?: "").put("engine", tab.engineType.name))
+        val editor = prefs.edit()
+        val active = currentTab()?.takeIf { GuestModePolicy.mayPersistBrowsingData(it.isPrivate, it.isGuest) }
+        for (engineType in BrowserEngineType.values()) {
+            val engineTabs = tabs.filter { GuestModePolicy.mayPersistBrowsingData(it.isPrivate, it.isGuest) && it.engineType == engineType }
+            val saved = JSONArray()
+            engineTabs.forEach { tab ->
+                saved.put(JSONObject().put("url", tab.lastUrl).put("group", tab.group).put("title", tab.title)
+                    .put("readerOriginalUrl", tab.readerOriginalUrl ?: "").put("engine", engineType.name))
+            }
+            val activeIndex = if (active?.engineType == engineType) engineTabs.indexOf(active).coerceAtLeast(0)
+                else prefs.getInt(engineStorageKey("active_normal_tab", engineType), 0).coerceIn(0, (engineTabs.size - 1).coerceAtLeast(0))
+            editor.putString(engineStorageKey("open_normal_tabs", engineType), saved.toString())
+                .putInt(engineStorageKey("active_normal_tab", engineType), activeIndex)
         }
-        val normalTabs = tabs.filter { GuestModePolicy.mayPersistBrowsingData(it.isPrivate, it.isGuest) }
-        val active = currentTab()
-        val selectedNormalIndex = if (active != null && !active.isPrivate && !active.isGuest) {
-            normalTabs.indexOf(active).coerceAtLeast(0)
-        } else {
-            prefs.getInt("active_normal_tab", 0).coerceIn(0, (normalTabs.size - 1).coerceAtLeast(0))
+        if (active != null) editor.putString("active_normal_engine", active.engineType.name)
+        editor.apply()
+    }
+
+    private fun migrateLegacyTabMetadataByRecordedEngine() {
+        if (prefs.getBoolean("legacy_tabs_partitioned", false)) return
+        val raw = prefs.getString("open_normal_tabs", null) ?: run { prefs.edit().putBoolean("legacy_tabs_partitioned", true).apply(); return }
+        runCatching {
+            val legacy = JSONArray(raw)
+            val editor = prefs.edit()
+            for (engineType in BrowserEngineType.values()) {
+                val partition = JSONArray()
+                for (i in 0 until legacy.length()) {
+                    val item = legacy.optJSONObject(i) ?: continue
+                    if (item.optString("engine") == engineType.name) partition.put(item)
+                }
+                if (partition.length() > 0) {
+                    editor.putString(engineStorageKey("open_normal_tabs", engineType), partition.toString())
+                    editor.putInt(engineStorageKey("active_normal_tab", engineType), 0)
+                }
+            }
+            editor.putBoolean("legacy_tabs_partitioned", true).apply()
         }
-        prefs.edit().putString("open_normal_tabs", saved.toString())
-            .putInt("active_normal_tab", selectedNormalIndex).apply()
     }
 
     private fun restoreTabs() {
-        val raw = prefs.getString("open_normal_tabs", null) ?: return
-        try {
-            val saved = JSONArray(raw)
-            val savedActiveIndex = prefs.getInt("active_normal_tab", 0)
-            for (i in 0 until saved.length()) {
-                val item = saved.getJSONObject(i)
-                val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
-                val storedEngine = runCatching {
-                    BrowserEngineType.valueOf(item.optString("engine", "GECKOVIEW"))
-                }.getOrDefault(BrowserEngineType.GECKOVIEW)
-                val tab = BrowserTab(
-                    isPrivate = false,
-                    isGuest = false,
-                    lastUrl = url,
-                    group = item.optString("group", "Ungrouped"),
-                    title = item.optString("title", "New tab"),
-                    engineType = storedEngine,
-                    desktopSite = isDesktopUrl(url),
-                    needsReload = true,
-                    readerOriginalUrl = item.optString("readerOriginalUrl")
-                        .takeIf { it.startsWith("http://") || it.startsWith("https://") }
-                )
-                // Preserve a saved explicit Gecko choice, but never restore Cefrium when the
-                // current Shield/password/profile policy now requires GeckoView.
-                if (storedEngine == BrowserEngineType.CEFRIUM) tab.engineType = resolveEngineForTab(tab)
-                tabs.add(tab)
-            }
-            if (tabs.isNotEmpty()) {
-                activeIndex = savedActiveIndex.coerceIn(tabs.indices)
-                // Only the selected tab gets a GeckoSession on startup. Other tabs
-                // remain lightweight records until the user opens them.
-                switchTab(activeIndex)
-            }
-        } catch (_: Exception) {
-            prefs.edit().remove("open_normal_tabs").apply()
+        migrateLegacyTabMetadataByRecordedEngine()
+        for (engineType in BrowserEngineType.values()) {
+            val raw = prefs.getString(engineStorageKey("open_normal_tabs", engineType), null) ?: continue
+            try {
+                val saved = JSONArray(raw)
+                for (i in 0 until saved.length()) {
+                    val item = saved.getJSONObject(i)
+                    if (item.optString("engine") != engineType.name) continue
+                    val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
+                    val tab = BrowserTab(
+                        isPrivate = false, isGuest = false, lastUrl = url,
+                        group = item.optString("group", "Ungrouped"), title = item.optString("title", "New tab"),
+                        engineType = engineType, desktopSite = isDesktopUrl(url), needsReload = true,
+                        readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                    )
+                    if (engineType == BrowserEngineType.CEFRIUM) tab.engineType = resolveEngineForTab(tab)
+                    tabs.add(tab)
+                }
+            } catch (_: Exception) { prefs.edit().remove(engineStorageKey("open_normal_tabs", engineType)).apply() }
+        }
+        if (tabs.isNotEmpty()) {
+            val preferred = runCatching { BrowserEngineType.valueOf(prefs.getString("active_normal_engine", BrowserEngineType.CEFRIUM.name) ?: BrowserEngineType.CEFRIUM.name) }.getOrDefault(BrowserEngineType.CEFRIUM)
+            val engineTabs = tabs.filter { it.engineType == preferred }
+            val selectedIndex = prefs.getInt(engineStorageKey("active_normal_tab", preferred), 0)
+            val selected = engineTabs.getOrNull(selectedIndex) ?: tabs.first()
+            activeIndex = tabs.indexOf(selected)
+            switchTab(activeIndex)
         }
     }
 
     private fun showSavedWorkspaces() {
+        if (currentTab()?.isPrivate == true) { toast("Workspaces are unavailable in Private Mode"); return }
         if (denyGuestAccess("Saved workspaces")) return
-        val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
-        if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
+        val engineType = currentEngineType()
+        val saved = prefs.getStringSet(engineStorageKey("saved_workspaces", engineType), emptySet())?.toList().orEmpty()
+        if (saved.isEmpty()) { toast("No $engineType workspaces yet"); return }
         val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " · long-press to delete" }
         val list = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels) }
-        val dialog = AlertDialog.Builder(this).setTitle("Saved workspaces").setView(list).setNegativeButton("Close", null).create()
-        list.setOnItemClickListener { _, _, which, _ ->
-            dialog.dismiss()
-            restoreWorkspace(saved[which])
-        }
+        val dialog = AlertDialog.Builder(this).setTitle("$engineType workspaces").setView(list).setNegativeButton("Close", null).create()
+        list.setOnItemClickListener { _, _, which, _ -> dialog.dismiss(); restoreWorkspace(saved[which], engineType) }
         list.setOnItemLongClickListener { _, _, which, _ ->
             val raw = saved[which]
             val name = runCatching { JSONObject(raw).optString("name", "Workspace") }.getOrDefault("Workspace")
             AlertDialog.Builder(this).setTitle("Delete workspace?")
-                .setMessage("Delete '$name' from this device and synced devices?")
+                .setMessage("Delete '$name' from this device and synced devices in the $engineType profile?")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Delete") { _, _ -> deleteWorkspace(raw, name) }
-                .show()
+                .setPositiveButton("Delete") { _, _ -> deleteWorkspace(raw, name, engineType) }.show()
             true
         }
         dialog.show()
     }
 
-    private fun restoreWorkspace(raw: String) {
-        if (denyGuestAccess("Restoring workspaces")) return
+    private fun restoreWorkspace(raw: String, engineType: BrowserEngineType) {
+        if (currentTab()?.isPrivate == true || denyGuestAccess("Restoring workspaces")) return
         runCatching {
-            val data = JSONObject(raw).getJSONArray("tabs")
+            val workspace = JSONObject(raw)
+            require(workspace.optString("engine") == engineType.name) { "Workspace belongs to a different engine profile" }
+            val data = workspace.getJSONArray("tabs")
             for (i in 0 until data.length()) {
                 val item = data.getJSONObject(i)
-                createTab(false, item.optString("url", HOME_URL))
+                require(item.optString("engine") == engineType.name) { "Workspace tab belongs to a different engine profile" }
+                createTab(false, item.optString("url", HOME_URL), preferredEngine = engineType)
                 tabs.last().group = item.optString("group", "Ungrouped")
                 tabs.last().title = item.optString("title", "New tab")
-                tabs.last().readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
             }
-            persistTabs(); toast("Workspace restored")
-        }.onFailure { toast("Could not restore workspace") }
+            persistTabs(); toast("$engineType workspace restored")
+        }.onFailure { toast("Could not restore workspace: ${it.message ?: "profile mismatch"}") }
     }
 
-    private fun deleteWorkspace(raw: String, name: String) {
-        val tombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+    private fun deleteWorkspace(raw: String, name: String, engineType: BrowserEngineType) {
+        val tombstonesKey = engineStorageKey("workspace_tombstones", engineType)
+        val workspacesKey = engineStorageKey("saved_workspaces", engineType)
+        val tombstones = runCatching { JSONObject(prefs.getString(tombstonesKey, "{}") ?: "{}") }.getOrDefault(JSONObject())
         val createdAt = runCatching { JSONObject(raw).optLong("createdAt") }.getOrDefault(0L)
         tombstones.put(name, maxOf(System.currentTimeMillis(), createdAt + 1L))
-        val remaining = prefs.getStringSet("saved_workspaces", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val remaining = prefs.getStringSet(workspacesKey, emptySet())?.toMutableSet() ?: mutableSetOf()
         remaining.removeAll { candidate -> runCatching { JSONObject(candidate).optString("name") == name }.getOrDefault(false) }
-        prefs.edit().putStringSet("saved_workspaces", remaining).putString("workspace_tombstones", tombstones.toString()).apply()
-        toast("Workspace deleted and queued for cloud sync")
+        prefs.edit().putStringSet(workspacesKey, remaining).putString(tombstonesKey, tombstones.toString()).apply()
+        toast("Workspace deleted from $engineType and queued for cloud sync")
     }
 
     private fun closeCurrentTab() = closeTabAt(activeIndex)
 
-    private fun readBookmarks(): MutableList<BookmarkEntry> {
-        val raw = prefs.getString("bookmarks_v2", null)
+    private fun readBookmarks(engineType: BrowserEngineType = currentEngineType()): MutableList<BookmarkEntry> {
+        val raw = prefs.getString(engineStorageKey("bookmarks_v2", engineType), null)
         if (raw != null) return runCatching {
             val array = JSONArray(raw)
             MutableList(array.length()) { i ->
@@ -1422,56 +1462,58 @@ class MainActivity : ComponentActivity() {
                 BookmarkEntry(item.optString("url"), item.optString("title"), item.optString("folder", "General"), item.optLong("addedAt", 0L))
             }
         }.getOrDefault(mutableListOf())
-        return (prefs.getStringSet("bookmarks", emptySet()) ?: emptySet()).map {
+        return (prefs.getStringSet(engineStorageKey("bookmarks", engineType), emptySet()) ?: emptySet()).map {
             BookmarkEntry(it, Uri.parse(it).host ?: it, "General", System.currentTimeMillis())
         }.toMutableList()
     }
 
-    private fun saveBookmarks(items: List<BookmarkEntry>, trackDeletes: Boolean = true) {
+    private fun saveBookmarks(items: List<BookmarkEntry>, engineType: BrowserEngineType = currentEngineType(), trackDeletes: Boolean = true) {
         if (trackDeletes) {
-            val previous = readBookmarks()
+            val previous = readBookmarks(engineType)
             val retained = items.map { it.url }.toSet()
             val removed = previous.filterNot { it.url in retained }
             if (removed.isNotEmpty()) {
-                val tombstones = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
+                val tombstonesKey = engineStorageKey("bookmark_tombstones", engineType)
+                val tombstones = runCatching { JSONObject(prefs.getString(tombstonesKey, "{}") ?: "{}") }.getOrDefault(JSONObject())
                 val deletedAt = System.currentTimeMillis()
                 removed.forEach { tombstones.put(it.url, maxOf(deletedAt, it.addedAt + 1L)) }
-                prefs.edit().putString("bookmark_tombstones", tombstones.toString()).apply()
+                prefs.edit().putString(tombstonesKey, tombstones.toString()).apply()
             }
         }
         val array = JSONArray()
         items.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-        prefs.edit().putString("bookmarks_v2", array.toString()).putStringSet("bookmarks", items.map { it.url }.toSet()).apply()
+        prefs.edit().putString(engineStorageKey("bookmarks_v2", engineType), array.toString())
+            .putStringSet(engineStorageKey("bookmarks", engineType), items.map { it.url }.toSet()).apply()
     }
 
     private fun toggleBookmark() {
         val tab = currentTab() ?: return
         if (tab.isPrivate || tab.isGuest) { toast("Private and Guest tabs cannot save bookmarks"); return }
         if (tab.lastUrl == HOME_URL) { toast("Open a page before bookmarking"); return }
-        val items = readBookmarks()
+        val items = readBookmarks(tab.engineType)
         val existing = items.indexOfFirst { it.url == tab.lastUrl }
-        if (existing >= 0) { items.removeAt(existing); saveBookmarks(items); toast("Bookmark removed") }
+        if (existing >= 0) { items.removeAt(existing); saveBookmarks(items, tab.engineType); toast("Bookmark removed") }
         else {
-            val priorDelete = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}").optLong(tab.lastUrl) }.getOrDefault(0L)
+            val tombstonesKey = engineStorageKey("bookmark_tombstones", tab.engineType)
+            val priorDelete = runCatching { JSONObject(prefs.getString(tombstonesKey, "{}") ?: "{}").optLong(tab.lastUrl) }.getOrDefault(0L)
             items.add(BookmarkEntry(tab.lastUrl, tab.title, "General", maxOf(System.currentTimeMillis(), priorDelete + 1L)))
-            saveBookmarks(items); toast("Bookmark saved")
+            saveBookmarks(items, tab.engineType); toast("Bookmark saved in ${tab.engineType} profile")
         }
     }
 
     private fun showBookmarks() {
-        if (!GuestModePolicy.mayReadOwnerData(currentTab()?.isGuest == true)) {
-            denyGuestAccess("Bookmarks")
-            return
-        }
-        val items = readBookmarks()
+        val tab = currentTab()
+        if (tab?.isPrivate == true) { toast("Bookmarks are unavailable in Private Mode"); return }
+        if (!GuestModePolicy.mayReadOwnerData(tab?.isGuest == true)) { denyGuestAccess("Bookmarks"); return }
+        val engineType = tab?.engineType ?: currentEngineType()
+        val items = readBookmarks(engineType)
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
         val search = EditText(this).apply { hint = "Search bookmarks"; isSingleLine = true }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { addView(list) }
-        content.addView(search)
-        content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val dialog = AlertDialog.Builder(this).setTitle("Bookmarks · ${items.size}").setView(content)
-            .setPositiveButton("New folder") { _, _ -> createBookmarkFolder() }
+        content.addView(search); content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        val dialog = AlertDialog.Builder(this).setTitle("$engineType bookmarks · ${items.size}").setView(content)
+            .setPositiveButton("New folder") { _, _ -> createBookmarkFolder(engineType) }
             .setNeutralButton("Import / export") { _, _ -> showBookmarkTransfer() }
             .setNegativeButton("Close", null).create()
         fun render(query: String) {
@@ -1484,7 +1526,7 @@ class MainActivity : ComponentActivity() {
                     list.addView(TextView(this).apply {
                         text = "★  ${entry.title}\n${entry.url}"; textSize = 13f; setTextColor(0xFFFFFFFF.toInt()); setPadding(12, 10, 8, 10)
                         setOnClickListener { dialog.dismiss(); navigate(entry.url) }
-                        setOnLongClickListener { showBookmarkActions(entry); true }
+                        setOnLongClickListener { showBookmarkActions(entry, engineType); true }
                     })
                 }
             }
@@ -1495,39 +1537,42 @@ class MainActivity : ComponentActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { render(s?.toString().orEmpty()) }
             override fun afterTextChanged(s: Editable?) {}
         })
-        render("")
-        dialog.show()
+        render(""); dialog.show()
     }
 
-    private fun showBookmarkActions(entry: BookmarkEntry) {
+    private fun showBookmarkActions(entry: BookmarkEntry, engineType: BrowserEngineType) {
         AlertDialog.Builder(this).setTitle(entry.title)
             .setItems(arrayOf("Edit title / folder", "Delete bookmark", "Open")) { _, which ->
                 when (which) {
-                    0 -> editBookmark(entry)
-                    1 -> { val items = readBookmarks().filterNot { it.url == entry.url }; saveBookmarks(items); toast("Bookmark deleted") }
+                    0 -> editBookmark(entry, engineType)
+                    1 -> { val items = readBookmarks(engineType).filterNot { it.url == entry.url }; saveBookmarks(items, engineType); toast("Bookmark deleted") }
                     2 -> navigate(entry.url)
                 }
             }.show()
     }
 
-    private fun editBookmark(entry: BookmarkEntry) {
+    private fun editBookmark(entry: BookmarkEntry, engineType: BrowserEngineType) {
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 0) }
         val title = EditText(this).apply { setText(entry.title); hint = "Title" }
         val folder = EditText(this).apply { setText(entry.folder); hint = "Folder name" }
         form.addView(title); form.addView(folder)
         AlertDialog.Builder(this).setTitle("Edit bookmark").setView(form)
             .setPositiveButton("Save") { _, _ ->
-                val items = readBookmarks().map { if (it.url == entry.url) it.copy(title = title.text.toString().trim().ifBlank { entry.title }, folder = folder.text.toString().trim().ifBlank { "General" }) else it }
-                saveBookmarks(items); toast("Bookmark updated")
+                val items = readBookmarks(engineType).map { if (it.url == entry.url) it.copy(title = title.text.toString().trim().ifBlank { entry.title }, folder = folder.text.toString().trim().ifBlank { "General" }) else it }
+                saveBookmarks(items, engineType); toast("Bookmark updated")
             }.setNegativeButton("Cancel", null).show()
     }
 
-    private fun createBookmarkFolder() {
+    private fun createBookmarkFolder(engineType: BrowserEngineType = currentEngineType()) {
         val input = EditText(this).apply { hint = "Folder name"; isSingleLine = true }
         AlertDialog.Builder(this).setTitle("Create bookmark folder").setView(input)
             .setPositiveButton("Create") { _, _ ->
                 val folder = input.text.toString().trim()
-                if (folder.isNotBlank()) { prefs.edit().putStringSet("bookmark_folders", (prefs.getStringSet("bookmark_folders", emptySet()) ?: emptySet()) + folder).apply(); toast("Folder created; assign bookmarks by editing them") }
+                if (folder.isNotBlank()) {
+                    val key = engineStorageKey("bookmark_folders", engineType)
+                    prefs.edit().putStringSet(key, (prefs.getStringSet(key, emptySet()) ?: emptySet()) + folder).apply()
+                    toast("Folder created in $engineType profile; assign bookmarks by editing them")
+                }
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -1539,7 +1584,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exportBookmarks() {
-        if (denyGuestAccess("Bookmark export")) return
+        if (currentTab()?.isPrivate == true || denyGuestAccess("Bookmark export")) {
+            if (currentTab()?.isPrivate == true) toast("Private bookmarks cannot be exported")
+            return
+        }
+        bookmarkTransferEngineType = currentEngineType()
         bookmarkTransferMode = "export"
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-bookmarks.json")
@@ -1548,46 +1597,55 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importBookmarks() {
-        if (denyGuestAccess("Bookmark import")) return
+        if (currentTab()?.isPrivate == true || denyGuestAccess("Bookmark import")) {
+            if (currentTab()?.isPrivate == true) toast("Private bookmarks cannot be imported")
+            return
+        }
+        bookmarkTransferEngineType = currentEngineType()
         bookmarkTransferMode = "import"
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/json" }
         startActivityForResult(intent, bookmarkRequestCode)
     }
 
-    private fun clearBrowsingHistory() {
-        if (denyGuestAccess("Clearing owner history")) return
-        prefs.edit().putLong("history_cleared_at", System.currentTimeMillis()).remove("history").remove("history_v2").apply()
+    private fun clearBrowsingHistory(engineType: BrowserEngineType = currentEngineType()) {
+        if (currentTab()?.isPrivate == true || denyGuestAccess("Clearing owner history")) return
+        prefs.edit().putLong(engineStorageKey("history_cleared_at", engineType), System.currentTimeMillis())
+            .remove(engineStorageKey("history", engineType)).remove(engineStorageKey("history_v2", engineType)).apply()
     }
 
     private fun addHistory(url: String, sourceTab: BrowserTab?) {
         if (sourceTab == null || !GuestModePolicy.mayPersistBrowsingData(sourceTab.isPrivate, sourceTab.isGuest)) return
         if (url.isBlank() || url == HOME_URL) return
-        val items = readHistory().filterNot { it.url == url }.toMutableList()
-        val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
+        val engineType = sourceTab.engineType
+        val items = readHistory(engineType).filterNot { it.url == url }.toMutableList()
+        val clearedAt = prefs.getLong(engineStorageKey("history_cleared_at", engineType), 0L)
+        val visitedAt = maxOf(System.currentTimeMillis(), clearedAt + 1L)
         items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
         val array = JSONArray()
         items.takeLast(500).forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
-        prefs.edit().putString("history_v2", array.toString()).apply()
+        prefs.edit().putString(engineStorageKey("history_v2", engineType), array.toString()).apply()
     }
 
-    private fun readHistory(): List<HistoryEntry> {
-        val raw = prefs.getString("history_v2", null)
+    private fun readHistory(engineType: BrowserEngineType = currentEngineType()): List<HistoryEntry> {
+        val raw = prefs.getString(engineStorageKey("history_v2", engineType), null)
         if (raw != null) return runCatching {
             val array = JSONArray(raw)
             List(array.length()) { i -> val item = array.getJSONObject(i); HistoryEntry(item.optString("url"), item.optString("title"), item.optLong("visitedAt")) }
         }.getOrDefault(emptyList())
-        return (prefs.getStringSet("history", emptySet()) ?: emptySet()).map { HistoryEntry(it, Uri.parse(it).host ?: it, 0L) }
+        return (prefs.getStringSet(engineStorageKey("history", engineType), emptySet()) ?: emptySet()).map { HistoryEntry(it, Uri.parse(it).host ?: it, 0L) }
     }
 
     private fun showHistory() {
-        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) { toast("History is unavailable in private or Guest Mode"); return }
-        val items = readHistory().sortedByDescending { it.visitedAt }
+        val tab = currentTab()
+        if (tab?.let { it.isPrivate || it.isGuest } == true) { toast("History is unavailable in private or Guest Mode"); return }
+        val engineType = tab?.engineType ?: currentEngineType()
+        val items = readHistory(engineType).sortedByDescending { it.visitedAt }
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(12, 8, 12, 8) }
         val search = EditText(this).apply { hint = "Search history"; isSingleLine = true }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(search); content.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
         val dialog = AlertDialog.Builder(this).setTitle("History · ${items.size}").setView(content)
-            .setNeutralButton("Clear history") { _, _ -> clearBrowsingHistory(); toast("Browsing history cleared") }
+            .setNeutralButton("Clear history") { _, _ -> clearBrowsingHistory(engineType); toast("$engineType browsing history cleared") }
             .setNegativeButton("Close", null).create()
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -1638,7 +1696,7 @@ class MainActivity : ComponentActivity() {
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
         requestDownloadNotificationPermission()
-        runCatching { novaDownloads.enqueue(url); toast("Download started · resumable") }
+        runCatching { downloadManager(tab.engineType).enqueue(url); toast("Download started · resumable · ${tab.engineType}") }
             .onFailure { toast("Download could not start: ${it?.localizedMessage ?: "Unknown error"}") }
     }
 
@@ -1651,8 +1709,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDownloads() {
-        if (denyGuestAccess("Downloads")) return
-        val items = novaDownloads.items()
+        if (currentTab()?.isPrivate == true || denyGuestAccess("Downloads")) {
+            if (currentTab()?.isPrivate == true) toast("Downloads are unavailable in Private Mode")
+            return
+        }
+        val engineType = currentEngineType()
+        val manager = downloadManager(engineType)
+        val items = manager.items()
         if (items.isEmpty()) { downloadPrompt(); return }
         val rows = items.map { item ->
             val state = when (item.state) {
@@ -1668,13 +1731,14 @@ class MainActivity : ComponentActivity() {
             "${item.fileName}\n$state"
         }.toTypedArray()
         AlertDialog.Builder(this).setTitle("Nova Downloads · ${items.size}")
-            .setItems(rows) { _, which -> showDownloadActions(items[which]) }
+            .setItems(rows) { _, which -> showDownloadActions(items[which], engineType) }
             .setPositiveButton("New download") { _, _ -> downloadPrompt() }
             .setNeutralButton("Refresh", null)
             .setNegativeButton("Close", null).show()
     }
 
-    private fun showDownloadActions(item: NovaDownloadManager.Item) {
+    private fun showDownloadActions(item: NovaDownloadManager.Item, engineType: BrowserEngineType) {
+        val manager = downloadManager(engineType)
         val actions = when (item.state) {
             "RUNNING", "QUEUED" -> arrayOf("Pause", "Cancel")
             "FINALIZING" -> arrayOf("Close")
@@ -1686,11 +1750,11 @@ class MainActivity : ComponentActivity() {
         }
         AlertDialog.Builder(this).setTitle(item.fileName).setItems(actions) { _, which ->
             when (actions[which]) {
-                "Pause" -> { novaDownloads.pause(item.id); toast("Pausing download…") }
-                "Resume" -> { novaDownloads.resume(item.id); toast("Resuming with HTTP Range when supported…") }
-                "Cancel" -> { novaDownloads.cancel(item.id); toast("Download cancelled") }
+                "Pause" -> { manager.pause(item.id); toast("Pausing download…") }
+                "Resume" -> { manager.resume(item.id); toast("Resuming with HTTP Range when supported…") }
+                "Cancel" -> { manager.cancel(item.id); toast("Download cancelled") }
                 "Open file" -> openDownloadedFile(item)
-                "Remove from list" -> novaDownloads.cancel(item.id)
+                "Remove from list" -> manager.cancel(item.id)
                 "Close" -> Unit
             }
         }.show()
@@ -2183,7 +2247,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPasswordVault() {
-        if (denyGuestAccess("Password vault")) return
+        val tab = currentTab()
+        if (tab?.isPrivate == true || tab?.isGuest == true || denyGuestAccess("Password vault")) {
+            if (tab?.isPrivate == true) toast("Password vault is unavailable in Private Mode")
+            return
+        }
+        if (tab?.engineType == BrowserEngineType.CEFRIUM) { toast("Password vault belongs to the GeckoView profile; switch this tab to GeckoView first"); return }
         val entries = runCatching { passwordVault.all() }.getOrElse { toast("Password vault could not be unlocked: ${it?.localizedMessage ?: "Unknown error"}"); return }
         val rows = entries.map { "${Uri.parse(it.origin).host ?: it.origin} · ${it.username}" }.toTypedArray()
         val labels = rows + "Add login manually"
@@ -2290,11 +2359,13 @@ class MainActivity : ComponentActivity() {
 
     private fun exportHistory() {
         if (denyGuestAccess("History export")) return
+        if (currentTab()?.isPrivate == true) { toast("Private history cannot be exported"); return }
+        val engineType = currentEngineType()
         val array = JSONArray()
-        readHistory().sortedByDescending { it.visitedAt }.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
-        pendingHistoryExport = array.toString(2)
+        readHistory(engineType).sortedByDescending { it.visitedAt }.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
+        pendingHistoryExport = JSONObject().put("schema", 1).put("engine", engineType.name).put("history", array).toString(2)
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-history.json")
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-history-${engineType.name.lowercase()}.json")
         }
         startActivityForResult(intent, historyExportRequestCode)
     }
@@ -2550,7 +2621,7 @@ class MainActivity : ComponentActivity() {
         val lastSyncText = if (lastSync > 0L) SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(lastSync)) else "Not synced yet"
         val syncError = prefs.getString("cloud_sync_last_error", null)
         val check = CheckBox(this).apply { text = "Allow encrypted cloud sync from this device"; isChecked = enabled; setPadding(24, 12, 24, 12) }
-        val syncMessage = "Your sync data is encrypted before upload. The passphrase is never sent to Nova or Supabase and is stored only as Android-Keystore-protected ciphertext on this device after the first successful sync. Passwords, bookmarks, history and saved workspaces are included; private and Guest data is excluded.\n\nAutomatic sync: every 6 hours when a network is available.\nLast successful sync: $lastSyncText" + if (!syncError.isNullOrBlank()) "\nLast sync issue: $syncError" else ""
+        val syncMessage = "Your sync data is encrypted before upload. The passphrase is never sent to Nova or Supabase and is stored only as Android-Keystore-protected ciphertext on this device after the first successful sync. The GeckoView-only password vault is encrypted separately. Cefrium and GeckoView bookmarks, history, workspaces and downloads are stored and synced in separate engine profiles; no website data or credentials move between engines. Private and Guest data is excluded.\n\nAutomatic sync: every 6 hours when a network is available.\nLast successful sync: $lastSyncText" + if (!syncError.isNullOrBlank()) "\nLast sync issue: $syncError" else ""
         AlertDialog.Builder(this).setTitle("Nova Cloud · $email").setMessage(syncMessage)
             .setView(check).setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("cloud_sync_enabled", check.isChecked).apply()
@@ -2591,7 +2662,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showSyncPassphrase() {
         val input = EditText(this).apply { hint = "Sync passphrase (10+ characters)"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true }
-        AlertDialog.Builder(this).setTitle("Encrypt and sync").setMessage("Use the same passphrase on every device. If you lose it, the encrypted backup cannot be recovered. Passwords, bookmarks, history and saved workspaces are included; private and Guest data is excluded.")
+        AlertDialog.Builder(this).setTitle("Encrypt and sync").setMessage("Use the same passphrase on every device. If you lose it, the encrypted backup cannot be recovered. The GeckoView-only password vault is encrypted separately. Cefrium and GeckoView bookmarks, history, workspaces and downloads are stored and synced in separate engine profiles; no website data or credentials move between engines. Private and Guest data is excluded.")
             .setView(input).setPositiveButton("Sync now") { _, _ ->
                 val passphrase = input.text.toString().toCharArray()
                 if (passphrase.size < 10) { passphrase.fill('\u0000'); toast("Passphrase must be at least 10 characters"); return@setPositiveButton }
@@ -2706,21 +2777,26 @@ class MainActivity : ComponentActivity() {
         }
         if (requestCode == bookmarkRequestCode) {
             val mode = bookmarkTransferMode
+            val engineType = bookmarkTransferEngineType
             bookmarkTransferMode = null
+            bookmarkTransferEngineType = null
             val uri = data?.data
-            if (resultCode != RESULT_OK || uri == null || mode == null) return
+            if (resultCode != RESULT_OK || uri == null || mode == null || engineType == null) return
             runCatching {
                 if (mode == "export") {
                     val array = JSONArray()
-                    readBookmarks().forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(array.toString(2)) }
+                    readBookmarks(engineType).forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
+                    val payload = JSONObject().put("schema", 1).put("engine", engineType.name).put("bookmarks", array)
+                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(payload.toString(2)) }
                         ?: throw IllegalStateException("Could not open export destination")
-                    toast("Bookmarks exported")
+                    toast("$engineType bookmarks exported")
                 } else {
                     val json = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                         ?: throw IllegalStateException("Could not read bookmark file")
-                    val imported = JSONArray(json)
-                    val merged = readBookmarks().associateBy { it.url }.toMutableMap()
+                    val payload = JSONObject(json)
+                    require(payload.optInt("schema", -1) == 1 && payload.optString("engine") == engineType.name) { "Unscoped or cross-engine bookmark import is blocked; file must be a schema 1 backup for $engineType" }
+                    val imported = payload.optJSONArray("bookmarks") ?: throw IllegalArgumentException("Bookmark backup has no bookmarks array")
+                    val merged = readBookmarks(engineType).associateBy { it.url }.toMutableMap()
                     for (i in 0 until imported.length()) {
                         val item = imported.getJSONObject(i)
                         val url = item.optString("url")
@@ -2728,8 +2804,8 @@ class MainActivity : ComponentActivity() {
                             merged[url] = BookmarkEntry(url, item.optString("title", Uri.parse(url).host ?: url), item.optString("folder", "Imported"), item.optLong("addedAt", System.currentTimeMillis()))
                         }
                     }
-                    saveBookmarks(merged.values.toList())
-                    toast("Imported ${imported.length()} bookmarks")
+                    saveBookmarks(merged.values.toList(), engineType)
+                    toast("Imported ${imported.length()} bookmarks into $engineType")
                 }
             }.onFailure { toast("Bookmark transfer failed: ${it?.localizedMessage ?: "Unknown error"}") }
         }
