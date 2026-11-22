@@ -124,9 +124,8 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
-                if (tab?.lastUrl == HOME_URL) finish()
-                else if (tab?.canGoBack == true) tab.session?.goBack()
-                else finish()
+                // Home is a normal history entry, so Back from Home returns to the page left.
+                if (tab?.canGoBack == true) tab.session?.goBack() else finish()
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
@@ -176,6 +175,8 @@ class MainActivity : ComponentActivity() {
         addressBar = EditText(this).apply {
             hint = "Search or enter address"
             isSingleLine = true
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             textSize = 15f
             setTextColor(0xFFFFFFFF.toInt())
             setHintTextColor(0xFFB9AEC8.toInt())
@@ -207,8 +208,8 @@ class MainActivity : ComponentActivity() {
         homeButton.minimumHeight = dp(48)
         addressRow.addView(homeButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         addressRow.addView(addressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
-        searchEngineButton = actionButton("$searchEngine ▾") { chooseSearchEngine() }
-        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+        searchEngineButton = actionButton("${engineLabel()} ▾") { chooseSearchEngine() }
+        refreshSearchEngineButton()
         searchEngineButton.minWidth = dp(64)
         searchEngineButton.minimumWidth = dp(64)
         addressRow.addView(searchEngineButton, LinearLayout.LayoutParams(dp(72), dp(48)))
@@ -321,17 +322,14 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         root.requestFocus()
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        applySystemInsets()
     }
 
     private fun createHomePanel(): LinearLayout {
-        val panel = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(20), dp(28), dp(20), dp(20))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
-            )
         }
         val dragon = TextView(this).apply {
             text = "🐉"
@@ -364,20 +362,43 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(8), 0, dp(8))
         }
-        homeShortcuts = LinearLayout(this).apply {
+        val shortcutRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        homeShortcuts.addView(actionButton("Google") { navigate("https://www.google.com") })
-        homeShortcuts.addView(actionButton("YouTube") { navigate("https://m.youtube.com") })
-        homeShortcuts.addView(actionButton("Wikipedia") { navigate("https://www.wikipedia.org") })
-        homeShortcuts.addView(actionButton("GitHub") { navigate("https://github.com") })
-        panel.addView(dragon)
-        panel.addView(title)
-        panel.addView(subtitle)
-        panel.addView(shortcutTitle)
-        panel.addView(homeShortcuts)
-        return panel
+        shortcutRow.addView(actionButton("Google") { navigate("https://www.google.com") })
+        shortcutRow.addView(actionButton("YouTube") { navigate("https://m.youtube.com") })
+        shortcutRow.addView(actionButton("Wikipedia") { navigate("https://www.wikipedia.org") })
+        shortcutRow.addView(actionButton("GitHub") { navigate("https://github.com") })
+        // Scrolls on narrow screens / large fonts, stays centered otherwise.
+        val shortcutScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+            addView(shortcutRow, android.view.ViewGroup.LayoutParams(-2, -2))
+        }
+        // Title and row share one container so the settings toggle hides both.
+        homeShortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(shortcutTitle, LinearLayout.LayoutParams(-1, -2))
+            addView(shortcutScroll, LinearLayout.LayoutParams(-1, -2))
+        }
+        content.addView(dragon)
+        content.addView(title)
+        content.addView(subtitle)
+        content.addView(homeShortcuts, LinearLayout.LayoutParams(-1, -2))
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
+            )
+            addView(scroll, LinearLayout.LayoutParams(-1, -1))
+        }
     }
 
     private fun showHomeScreen() {
@@ -393,9 +414,49 @@ class MainActivity : ComponentActivity() {
             activeTab?.isPrivate == true -> "Private session"
             else -> "Ready · $searchEngine"
         }
-        searchEngineButton.text = "$searchEngine ▾"
-        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+        refreshSearchEngineButton()
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
+    }
+
+    private fun engineLabel(): String = when (searchEngine) {
+        "DuckDuckGo" -> "DDG"
+        "Brave Search" -> "Brave"
+        else -> searchEngine
+    }
+
+    private fun refreshSearchEngineButton() {
+        searchEngineButton.text = "${engineLabel()} ▾"
+        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+    }
+
+    /** Private/Guest tabs ask the keyboard not to learn what is typed in the address bar. */
+    private fun updateAddressBarPrivacy() {
+        val incognito = currentTab()?.let { it.isPrivate || it.isGuest } == true
+        val options = EditorInfo.IME_ACTION_GO or (if (incognito) EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING else 0)
+        if (addressBar.imeOptions != options) addressBar.imeOptions = options
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applySystemInsets() {
+        // targetSdk 36 is edge-to-edge on Android 15+; keep the address bar clear of system bars.
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+                val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
+                view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            } else {
+                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            }
+            insets
+        }
+        root.requestApplyInsets()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Dark UI: use light status/navigation icons.
+            window.insetsController?.setSystemBarsAppearance(
+                0,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            )
+        }
     }
 
     private fun dismissAddressBarInput() {
@@ -408,9 +469,12 @@ class MainActivity : ComponentActivity() {
 
     private fun goHome() {
         currentTab()?.let { tab ->
+            val wasOnPage = tab.lastUrl != HOME_URL
             tab.lastUrl = HOME_URL
             tab.title = "Nova Home"
             tab.needsReload = false
+            // Move the engine to about:blank too: stops loads/audio and keeps Back/Forward consistent.
+            if (wasOnPage) tab.session?.loadUri(HOME_URL)
             if (!tab.isPrivate && !tab.isGuest) persistTabs()
         }
         showHomeScreen()
@@ -458,6 +522,7 @@ class MainActivity : ComponentActivity() {
         session.setActive(true)
         session.setFocused(true)
         tab.lastAccess = System.nanoTime()
+        updateAddressBarPrivacy()
         addressBar.setText(url)
         tabLabel.text = when { isGuest -> "Guest tab · temporary"; isPrivate -> "Private tab · ${tabs.size} total"; else -> "Tab ${tabs.size}" }
         if (!isPrivate && !isGuest) persistTabs()
@@ -602,13 +667,21 @@ class MainActivity : ComponentActivity() {
             override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) { tab.canGoForward = canGoForward }
             override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                 if (url.isNullOrBlank()) return
+                if (url == HOME_URL) {
+                    tab.lastUrl = HOME_URL
+                    tab.title = "Nova Home"
+                    if (!tab.isPrivate && !tab.isGuest) persistTabs()
+                    if (currentTab() === tab) showHomeScreen()
+                    return
+                }
                 tab.lastUrl = url
                 tab.contentPermissions = perms
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 tab.title = Uri.parse(url).host ?: url.take(48)
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
                 if (currentTab() === tab) {
-                    addressBar.setText(url)
+                    if (homePanel.visibility == View.VISIBLE) showBrowserPage()
+                    if (!addressBar.hasFocus()) addressBar.setText(url)
                     pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
                 }
             }
@@ -666,6 +739,7 @@ class MainActivity : ComponentActivity() {
         browserView.setSession(session)
         session.setActive(true)
         session.setFocused(true)
+        updateAddressBarPrivacy()
         addressBar.setText(tab.lastUrl)
         tabLabel.text = (when { tab.isGuest -> "Guest tab"; tab.isPrivate -> "Private tab"; else -> "Tab" }) + " · ${index + 1}/${tabs.size}"
         pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Normal session · ${tab.group}" }
@@ -751,7 +825,11 @@ class MainActivity : ComponentActivity() {
         if (tab.canGoForward) tab.session?.goForward() else toast("No next page")
     }
 
-    private fun reloadPage() { currentTab()?.let { ensureSession(it).reload() } }
+    private fun reloadPage() {
+        val tab = currentTab() ?: return
+        if (tab.lastUrl == HOME_URL) { toast("Nothing to reload on the home screen"); return }
+        ensureSession(tab).reload()
+    }
 
     private fun showTabs() {
         if (tabs.isEmpty()) return
@@ -911,6 +989,7 @@ class MainActivity : ComponentActivity() {
                     isPrivate = false,
                     isGuest = false,
                     lastUrl = url,
+                    needsReload = url != HOME_URL,
                     group = item.optString("group", "Ungrouped"),
                     title = item.optString("title", "New tab"),
                     desktopSite = isDesktopUrl(url),
@@ -1392,8 +1471,7 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this).setTitle("Default search engine")
             .setSingleChoiceItems(engines, engines.indexOf(searchEngine)) { dialog, which ->
                 searchEngine = engines[which]
-                searchEngineButton.text = "$searchEngine ▾"
-                searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+                refreshSearchEngineButton()
                 prefs.edit().putString("search_engine", searchEngine).apply()
                 dialog.dismiss(); toast("$searchEngine selected")
             }.setNegativeButton("Cancel", null).show()
@@ -1866,7 +1944,7 @@ class MainActivity : ComponentActivity() {
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
         runtime.settings.setForceUserScalableEnabled(true)
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
-        searchEngineButton.text = "$searchEngine ▾"
+        refreshSearchEngineButton()
     }
 
     private fun JSONArray?.toStringSet(): Set<String> {
