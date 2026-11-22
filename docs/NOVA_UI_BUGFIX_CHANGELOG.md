@@ -26,7 +26,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 17 | `AndroidManifest.xml`, `MainActivity.kt` | `adjustResize` and unchanged soft-input state. |
 | 18 | `MainActivity.kt` | Gecko progress delegate drives the progress bar and loading/error state; stop/reload is available from the browser menu. |
 | 19 | `MainActivity.kt`, `BrowserUiState.kt` | Security state reflects secure, certificate-warning and not-secure pages; host is emphasized. |
-| 20 | `MainActivity.kt`, `BrowserUiState.kt`, `BrowserUiStateTest.kt` | Debounced-in-practice local suggestions from history/bookmarks plus a search action and URL matching. **Partial:** no live third-party search-suggestion requests are sent while typing, by privacy choice. |
+| 20 | `MainActivity.kt`, `BrowserUiState.kt`, `BrowserUiStateTest.kt` | Live local suggestions from history/bookmarks plus a search action and URL matching. **Partial:** no live third-party search-suggestion requests are sent while typing, by privacy choice. |
 | 21 | `MainActivity.kt` | Page title and user rename override are stored separately. |
 | 22 | `MainActivity.kt` | Bookmark control reflects the current URL's saved state. |
 | 23 | `res/drawable/ic_*.xml`, `MainActivity.kt`, `res/values/strings.xml` | Main navigation icons use vector resources and descriptive accessibility labels. |
