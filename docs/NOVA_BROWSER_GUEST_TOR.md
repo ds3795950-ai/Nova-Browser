@@ -20,3 +20,7 @@ Guest tabs are fixed to GeckoView. The Tor proxy listener is attached to Nova's 
 ## Verification
 
 `GuestTorRoutingSmokeTest` starts the embedded daemon on an Android device/emulator, waits for a circuit, and checks `https://check.torproject.org/api/ip` through its SOCKS listener. This validates the bundled daemon and Tor exit path. Runtime UI testing must additionally confirm that the GeckoView proxy extension reports its Tor route ready and that Guest navigation is blocked when Tor is unavailable.
+
+## Third-party license
+
+The embedded Tor service is provided by Guardian Project. Its upstream license and component notices are included at `app/src/main/assets/licenses/tor-android-LICENSE.txt`.
