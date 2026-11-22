@@ -46,3 +46,10 @@ internal object BrowserUiState {
         else -> BrowserSecurityState.NOT_SECURE
     }
 }
+
+
+/** Gate remote suggestions behind explicit consent and Normal-mode-only execution. */
+internal object RemoteSearchSuggestionPolicy {
+    fun shouldFetch(enabled: Boolean, isPrivate: Boolean, isGuest: Boolean, query: String): Boolean =
+        enabled && !isPrivate && !isGuest && query.trim().length >= 2
+}

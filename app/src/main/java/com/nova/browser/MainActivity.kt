@@ -1733,18 +1733,36 @@ class MainActivity : ComponentActivity() {
 
     private fun scheduleRemoteSuggestions(query: String, local: List<BrowserSuggestion>, searchSuggestion: BrowserSuggestion?) {
         cancelPendingRemoteSuggestions()
-        val tab = currentTab()
-        if (!prefs.getBoolean("remote_search_suggestions", false) || tab?.isPrivate == true || tab?.isGuest == true || query.length < 2) return
+        val tab = currentTab() ?: return
+        val enabled = prefs.getBoolean("remote_search_suggestions", false)
+        if (!RemoteSearchSuggestionPolicy.shouldFetch(enabled, tab.isPrivate, tab.isGuest, query)) return
+        val requestedSearchEngine = searchEngine
         val request = Runnable {
+            // The user may switch tabs/modes during the debounce interval. Re-check before
+            // making any network request, not only after the response returns.
+            val active = currentTab()
+            if (isDestroyed || active !== tab || !::addressBar.isInitialized || !addressBar.hasFocus() ||
+                addressBar.text?.toString()?.trim() != query || searchEngine != requestedSearchEngine ||
+                !RemoteSearchSuggestionPolicy.shouldFetch(
+                    prefs.getBoolean("remote_search_suggestions", false),
+                    active?.isPrivate ?: true,
+                    active?.isGuest ?: true,
+                    query
+                )) return@Runnable
             remoteSuggestionExecutor.execute {
-                val remote = RemoteSearchSuggestions.fetch(query, searchEngine)
+                val remote = RemoteSearchSuggestions.fetch(query, requestedSearchEngine)
                 runOnUiThread {
                     val current = currentTab()
-                    if (isDestroyed || !::addressBar.isInitialized || !addressBar.hasFocus() ||
-                        addressBar.text?.toString()?.trim() != query ||
-                        !prefs.getBoolean("remote_search_suggestions", false) || current?.isPrivate == true || current?.isGuest == true) return@runOnUiThread
+                    if (isDestroyed || current !== tab || !::addressBar.isInitialized || !addressBar.hasFocus() ||
+                        addressBar.text?.toString()?.trim() != query || searchEngine != requestedSearchEngine ||
+                        !RemoteSearchSuggestionPolicy.shouldFetch(
+                            prefs.getBoolean("remote_search_suggestions", false),
+                            current?.isPrivate ?: true,
+                            current?.isGuest ?: true,
+                            query
+                        )) return@runOnUiThread
                     val remoteItems = remote.mapNotNull { label ->
-                        BrowserUrlResolver.resolve(label, searchEngine)?.let { BrowserSuggestion(label, it) }
+                        BrowserUrlResolver.resolve(label, requestedSearchEngine)?.let { BrowserSuggestion(label, it) }
                     }
                     addressSuggestionItems = (local + remoteItems + listOfNotNull(searchSuggestion)).distinctBy { it.url }.take(7)
                     addressSuggestionsAdapter.clear()

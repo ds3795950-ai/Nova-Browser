@@ -1,6 +1,8 @@
 package com.nova.browser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowserUiStateTest {
@@ -46,4 +48,13 @@ class BrowserUiStateTest {
         assertEquals(0, BrowserUiState.modeOrdinal(listOf(BrowserMode.NORMAL), -1))
         assertEquals(0, BrowserUiState.modeOrdinal(listOf(BrowserMode.NORMAL), 2))
     }
+    @Test fun remoteSuggestionsRequireOptInAndNormalMode() {
+        assertFalse(RemoteSearchSuggestionPolicy.shouldFetch(false, false, false, "example"))
+        assertTrue(RemoteSearchSuggestionPolicy.shouldFetch(true, false, false, "example"))
+        assertFalse(RemoteSearchSuggestionPolicy.shouldFetch(true, true, false, "example"))
+        assertFalse(RemoteSearchSuggestionPolicy.shouldFetch(true, false, true, "example"))
+        assertFalse(RemoteSearchSuggestionPolicy.shouldFetch(true, false, false, "a"))
+        assertFalse(RemoteSearchSuggestionPolicy.shouldFetch(true, false, false, "  "))
+    }
+
 }
