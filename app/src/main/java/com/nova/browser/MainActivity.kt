@@ -1076,14 +1076,21 @@ class MainActivity : ComponentActivity() {
             toast("Blocked an external-app link without a user gesture")
             return true
         }
-        val intent = runCatching {
+        val parsedIntent = runCatching {
             if (url.startsWith("intent:", true)) Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
             else Intent(Intent.ACTION_VIEW, Uri.parse(url))
         }.getOrNull() ?: return true
-        val fallbackUrl = intent.getStringExtra("browser_fallback_url")
-        intent.addCategory(Intent.CATEGORY_BROWSABLE)
+        val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
+        val destination = parsedIntent.data ?: return true
+        val scheme = destination.scheme?.lowercase() ?: return true
+        if (scheme in setOf("file", "content", "javascript", "intent")) return true
+        // Never forward page-controlled components, selectors, actions, or extras to Android.
+        val safeIntent = Intent(Intent.ACTION_VIEW, destination).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+            parsedIntent.type?.let { type = it }
+        }
         return try {
-            startActivity(intent)
+            startActivity(safeIntent)
             true
         } catch (_: Exception) {
             val safeFallback = fallbackUrl?.takeIf { it.startsWith("https://", true) || it.startsWith("http://", true) }
@@ -2142,7 +2149,7 @@ class MainActivity : ComponentActivity() {
                     clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.link), link))
                     toast(getString(R.string.link_copied))
                 }
-                if (image != null && element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE) actions += getString(R.string.save_image) to {
+                if (image != null && !tab.isPrivate && !tab.isGuest && element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE) actions += getString(R.string.save_image) to {
                     runCatching {
                         val fileName = "Nova-${Uri.parse(image).lastPathSegment ?: "image"}".replace(Regex("[^A-Za-z0-9._-]"), "_")
                         downloadsFor(tab).enqueue(image, fileName, "image/*")
@@ -5528,7 +5535,12 @@ private fun showForgotPassword(prefillEmail: String = "") {
                 } else {
                     val json = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                         ?: throw IllegalStateException("Could not read bookmark file")
-                    val imported = JSONArray(json)
+                    val imported = if (json.trimStart().startsWith("{")) {
+                        JSONObject(json).optJSONArray("bookmarks")
+                            ?: throw IllegalArgumentException("Bookmark backup does not contain a bookmarks array")
+                    } else {
+                        JSONArray(json)
+                    }
                     val merged = readBookmarks().associateBy { it.url }.toMutableMap()
                     for (i in 0 until imported.length()) {
                         val item = imported.getJSONObject(i)
