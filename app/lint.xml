@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      Cefrium's Gradle plugin emits a javaless manifest containing native sandbox service
+      declarations. The classes are supplied by the SDK's native service/runtime packaging,
+      so source-level MissingClass analysis of this generated manifest is a false positive.
+      Keep MissingClass enabled for all app and library source manifests.
+    -->
+    <issue id="MissingClass">
+        <ignore path="build/generated/manifests/generateCefriumJavalessManifestDebug/AndroidManifest.xml" />
+    </issue>
+</lint>

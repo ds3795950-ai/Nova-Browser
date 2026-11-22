@@ -1,35 +1,47 @@
-# Nova Browser — Phase 3 and Phase 4 completion update
+# Phase 2 — tab management and engine integration
 
-## Phase 3: bookmarks, history, downloads, uploads and page tools
+## Engine-neutral tab ownership
 
-- Bookmarks: structured title/URL/folder/time records; search; folder grouping; edit; delete; create folders; JSON import/export via Android document picker. Legacy URL-only bookmarks are migrated on read.
-- History: timestamped entries, title/host labels, search, date grouping, deduplicated visits, 500-entry cap, and clear-history. Private and Guest tabs never write history.
-- Downloads: replaced the limited platform DownloadManager path with an app-controlled HTTP downloader. It persists job metadata and partial files, supports pause/resume/cancel, uses HTTP Range and If-Range validators when the server supports them, shows byte progress, and publishes completed files to Downloads/Nova using MediaStore on Android 10+. On Android 8/9, it uses the app-specific Downloads directory. Resume requires a server that honors byte-range requests; if a server ignores Range, the downloader safely restarts from byte zero.
-- Webpage download interception: GeckoView ContentDelegate.onExternalResponse consumes the actual response body stream and saves it, preserving the browser's already-authenticated response rather than issuing a second unauthenticated request. These downloads appear in the downloads list and can be cancelled while saving. Private and Guest response streams are closed without saving.
-- Uploads: Android Storage Access Framework picker supports single and multiple file inputs. GeckoView folder-upload prompts now receive an explicit Allow/Deny confirmation instead of being silently rejected. Folder upload is controlled by GeckoView's folder-upload prompt; it is not an unrestricted filesystem picker.
-- Desktop site: per-site mobile/desktop preference uses GeckoView user-agent and viewport settings. Preferences are stored only for normal browsing.
-- Reader mode: uses GeckoView's built-in `about:reader` article extraction and reader UI, with an in-app explanation and Exit Reader action. The original URL is retained for exit.
-- Translation: now invokes GeckoView's native translation controller, offers source and target language selection, and allows GeckoView to download required translation models. Actual language availability depends on the GeckoView translation engine and model support on the device; unsupported pairs report an error rather than silently switching to an external website.
-- Sharing remains available via Android share sheet.
+- `BrowserTab` stores a `BrowserEngine` runtime, not a raw `GeckoSession` or a concrete Cefrium engine field.
+- `CefriumBrowserEngine` and `GeckoViewBrowserEngine` implement the same per-tab contract for URL loading, back/forward, reload, view, activation, host pause/resume, and close.
+- `GeckoViewBrowserEngine` owns the `GeckoSession` and Gecko-specific permission snapshots created for that tab. Gecko-only delegates and APIs remain behind the Gecko adapter/factory; no engine-neutral caller may obtain another engine's native session.
+- `BrowserTab` contains no `GeckoSession` or Gecko permission-object fields. `MainActivity` routes shared navigation and lifecycle through `BrowserEngine`.
+- Gecko adapter attach/detach moves a session between the primary and secondary panes and releases the old view before attaching the new one. Closing a tab closes its engine once; Cefrium's default attach/detach hooks leave its engine-owned view unchanged.
+- Cefrium-only reader extraction and desktop user-agent control remain explicit adapter-specific capabilities rather than being falsely advertised as common features.
 
-## Phase 4: private browsing and Guest Mode
+## Existing tab behavior
 
-- Private tabs use GeckoView private mode and are excluded from normal history, bookmarks, workspaces, and session restore.
-- Guest Mode is a distinct tab category using private mode plus a dedicated Gecko session storage context. Guest tabs are excluded from normal persistence, workspaces, history, bookmarks, and downloads.
-- Guest storage context is cleared at startup (cleaning up after process death), after the final Guest tab closes, and during activity teardown after its sessions close. The context ID rotates for the next Guest session.
-- Tab switcher keeps normal, private, and Guest tabs separate; split-screen remains restricted to normal tabs.
+- Normal and Private tabs remain in separate sections; Guest tabs remain isolated from owner tabs.
+- Tabs are grouped by their assigned group name and support collapsed group headings, expand-all, and collapse-all controls.
+- Nova keeps the active tab and up to three most-recently-used background runtimes open. Older runtimes are closed and recreated lazily when selected.
+- A sleeping tab reloads its last URL; it does not promise preservation of in-page form state, scroll position, or the full back/forward session history.
+- Private and Guest URLs are excluded from normal tab persistence and workspace snapshots.
 
-## Verification and remaining limits
+## Split-screen
 
-- Earlier combined Phase 3/4 commit passed GitHub Actions unit tests, debug APK assembly, and artifact upload.
-- The downloader now validates HTTP Content-Range offsets and final byte counts, rejects unsafe filenames, and has JVM regression tests. A foreground dataSync service keeps active downloads visible while Nova is backgrounded. The changes still require a fresh CI build and physical-device verification.
-- Device tests are still required on Android 16 / Realme RMX5313 for downloads, cookies/session isolation, folder upload, translation model downloads, and reader mode. No physical-device test is claimed here.
-- HTTP Range support is server-dependent; non-range servers restart rather than resume. Downloads do not yet run in a dedicated foreground service, so active transfers may stop if Android kills the app process. Partial data and metadata remain so the user can resume after reopening Nova.
-- GeckoView native translation requires its translation toolkit/model support; available language pairs vary by GeckoView build and device.
+- Split mode supports two distinct tab-owned engine views in stacked panes, each with its own address field and Go control.
+- The second pane can be selected from existing Normal tabs only; Private and Guest tabs are excluded.
+- Gecko sessions are attached to exactly one pane at a time. Switching or closing a tab detaches its Gecko view before it is re-used or released.
+- The secondary address field and Go control expose stable accessibility labels for automation and assistive technology.
+- Split state is temporary and is not restored after process recreation.
 
+## Phase 3 — strict engine profile isolation (replaces data migration)
 
-## Follow-up build fix
+**Implementation target:** engine-native and Nova-owned records remain namespaced by engine; the prior cross-engine migration concept is removed.
 
-- Translation failure callback now handles GeckoResult nullable Throwable safely.
+- GeckoView and Cefrium use independent engine-owned profiles and storage. No website data is shared between them, in either direction.
+- Cookies, browsing history, HTTP cache, localStorage, IndexedDB, service workers, Cache Storage, permissions, passwords, passkeys, downloads, and session state remain within the owning engine/profile.
+- There is no cross-engine export, import, migration, synchronization, fallback read, or profile reuse.
+- Switching a tab to another engine starts with that engine's own profile state. The other engine's cookies or authenticated sessions must never appear.
+- Private and Guest modes remain isolated from Normal mode and from each other according to their existing profile policy; they must not persist owner browsing data.
+- `WebsiteDataMigrationCoordinator` is a fail-closed guard only. Cross-engine requests return `BLOCKED_BY_ENGINE_ISOLATION`; same-engine requests are no-ops. It contains no export/import interface.
+- Any future request to share data between engines is out of scope and requires a separate explicit security review and product decision.
 
-- Folder input now opens Android's actual directory picker and returns the chosen tree URI to GeckoView before the separate folder-upload consent prompt.
+## Phase 4 — validation and hardening
+
+- Automated checks verify separate engine preference namespaces, engine-tagged bookmark backups, profile-separated cloud-sync merge/restore, and the fail-closed migration guard.
+
+- Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
+- Verify both directions of engine switching do not expose cookies, history, cache, localStorage, IndexedDB, credentials, permissions, or session state.
+- Verify Private and Guest tabs never write browsing records into Normal profile persistence.
+- Do not mark the work verified until Android build, unit tests, emulator smoke tests, and device suite pass.

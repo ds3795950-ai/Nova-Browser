@@ -1,6 +1,6 @@
 # Nova Browser UI bugfix changelog
 
-Branch: `fix/ui-50-browser-polish`  
+Branch: `fix/ui-50-browser-polish`
 Base: PR #4 branch `fix/top-10-bugs`
 
 ## Item-by-item changes

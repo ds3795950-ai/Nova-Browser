@@ -2,9 +2,9 @@ name: Android Emulator Smoke
 
 on:
   push:
-    branches: ["**"]
+    branches: [main, feature/phase-1-dual-engine-foundation, fix/phase-1-engine-compatibility, feature/phase-2-privacy-isolation]
   pull_request:
-    branches: ["**"]
+    branches: [main, fix/phase-1-engine-compatibility]
   workflow_dispatch:
 
 permissions:
@@ -27,24 +27,27 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
-      - name: Install Android SDK 37.1 platform
+      - name: Install Android SDK 37.2 platform
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.1"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.2" "platforms;android-36"
       - name: Run Android 16 emulator smoke tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
           target: google_apis
           arch: x86_64
-          profile: pixel_2
+          profile: pixel_6
+          cores: 4
+          ram-size: 4096
+          heap-size: 512
           # Hosted runners may not expose KVM. Force the emulator's software CPU
           # translator and avoid snapshot restore so Android 16 can boot reliably.
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -accel off
-          emulator-boot-timeout: 1200
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          emulator-boot-timeout: 1800
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
           script: gradle :app:connectedDebugAndroidTest --stacktrace

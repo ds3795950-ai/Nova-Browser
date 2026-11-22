@@ -48,4 +48,40 @@ class UrlInputTest {
     @Test fun trimsInput() {
         assertEquals("https://example.com", BrowserUrlResolver.resolve("  example.com  "))
     }
+
+    @Test fun localhostUsesHttp() {
+        assertEquals("http://localhost:3000", BrowserUrlResolver.resolve("localhost:3000"))
+    }
+
+    @Test fun lanIpUsesHttp() {
+        assertEquals("http://192.168.1.1:8080/admin", BrowserUrlResolver.resolve("192.168.1.1:8080/admin"))
+    }
+
+    @Test fun decimalNumberIsSearchedNotNavigated() {
+        assertEquals("https://www.google.com/search?q=3.14", BrowserUrlResolver.resolve("3.14"))
+    }
+
+    @Test fun emailIsSearched() {
+        assertEquals("https://www.google.com/search?q=me%40example.com", BrowserUrlResolver.resolve("me@example.com"))
+    }
+
+    @Test fun fileSchemePassesThrough() {
+        assertEquals("file:///sdcard/a.html", BrowserUrlResolver.resolve("file:///sdcard/a.html"))
+    }
+
+    @Test fun viewSourceSchemePassesThrough() {
+        assertEquals("view-source:https://example.com", BrowserUrlResolver.resolve("view-source:https://example.com"))
+    }
+
+    @Test fun domainWithPathAndQuery() {
+        assertEquals("https://example.com/a?b=1", BrowserUrlResolver.resolve("example.com/a?b=1"))
+    }
+
+    @Test fun domainWithPort() {
+        assertEquals("https://example.com:8080", BrowserUrlResolver.resolve("example.com:8080"))
+    }
+
+    @Test fun unicodeDomainIsNavigated() {
+        assertEquals("https://münchen.de", BrowserUrlResolver.resolve("münchen.de"))
+    }
 }

@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
+    private var guestTorStartPending: Boolean = false
     private val novaDownloads: NovaDownloadManager by lazy {
         NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
             .also { it.resumeInterrupted() }
@@ -572,7 +573,7 @@ class MainActivity : ComponentActivity() {
         panel.addView(addShortcut)
         return panel
         /* original static shortcut row replaced by user-managed tiles */
-        
+
     }
 
     private fun readHomeShortcuts(): List<HomeShortcut> {
@@ -934,8 +935,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createGuestTab() {
-        createTab(isPrivate = false, url = HOME_URL, isGuest = true)
-        toast("Guest Mode started · temporary browsing data")
+        if (guestTorStartPending) {
+            toast("Guest Tor is already connecting")
+            return
+        }
+        guestTorStartPending = true
+        pageStatus.text = "Guest Mode · connecting to Tor…"
+        TorGuestRoutingController.start(
+            context = this,
+            onReady = {
+                guestTorStartPending = false
+                if (isFinishing || isDestroyed) {
+                    TorGuestRoutingController.stop()
+                    return@start
+                }
+                runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
+                    .onSuccess { toast("Guest Mode started · Tor routing active") }
+                    .onFailure {
+                        TorGuestRoutingController.stop()
+                        toast("Guest Mode could not start: ${it.localizedMessage ?: "browser initialization failed"}")
+                    }
+            },
+            onFailure = { reason ->
+                guestTorStartPending = false
+                if (tabs.any { it.isGuest }) {
+                    toast("Tor connection lost. Closing Guest Mode to prevent direct traffic.")
+                    closeGuestTabs()
+                } else {
+                    pageStatus.text = "Guest Mode unavailable · Tor required"
+                    toast("Guest Mode blocked: Tor is unavailable. No direct connection was made. $reason")
+                }
+            }
+        )
     }
 
     private fun isDesktopUrl(url: String): Boolean {
@@ -3363,6 +3394,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cleanupGuestContextIfIdle() {
+        if (tabs.none { it.isGuest }) TorGuestRoutingController.stop()
         if (tabs.none { it.isGuest } && guestContextId.isNotBlank()) {
             runtime.storageController.clearDataForSessionContext(guestContextId)
             guestContextId = "nova-guest-${UUID.randomUUID()}"
@@ -3569,18 +3601,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openOrbotTorRouting() {
-        if (currentTab()?.isGuest != true) { toast("Tor routing is available only in Guest Mode"); return }
-        val launch = packageManager.getLaunchIntentForPackage("org.torproject.android")
-        if (launch == null) {
-            AlertDialog.Builder(this).setTitle("Orbot is not installed")
-                .setMessage("Install Orbot from the official Tor Project distribution, then return here. Nova does not bundle Tor.")
-                .setPositiveButton("OK", null).show()
+        if (currentTab()?.isGuest != true) {
+            toast("Tor status is available only in Guest Mode")
             return
         }
-        AlertDialog.Builder(this).setTitle("Route traffic through Orbot")
-            .setMessage("Open Orbot and enable VPN mode. Make sure Nova Browser is selected in Orbot's app list. Android allows only one active VPN service per user/profile, so disconnect any other VPN before starting Orbot. For fail-closed protection, enable Android Settings → Network & internet → VPN → Orbot → Always-on VPN and Block connections without VPN. Nova cannot verify that the active VPN is Tor or guarantee routing if Orbot is stopped. Tor is an optional external route; Guest Mode itself does not create a Tor circuit.")
-            .setPositiveButton("Open Orbot") { _, _ -> runCatching { startActivity(launch) }.onFailure { toast("Could not open Orbot") } }
-            .setNegativeButton("Cancel", null).show()
+        AlertDialog.Builder(this).setTitle("Nova Guest Tor · always on")
+            .setMessage("Guest Mode requires the embedded Tor service. Browsing is allowed only after Tor has built a circuit, the SOCKS5 proxy is active, remote DNS is enabled, and WebRTC leak protection is confirmed. If Tor or its proxy bridge stops, Guest Mode closes instead of falling back to your normal connection.\n\nStatus: ${TorGuestRoutingController.statusText()}")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun showAiAssistant() {
@@ -5213,6 +5241,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
     }
 
     override fun onDestroy() {
+        guestTorStartPending = false
+        TorGuestRoutingController.stop()
         cancelPendingRemoteSuggestions()
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()
