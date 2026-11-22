@@ -253,7 +253,7 @@ class MainActivity : ComponentActivity() {
             hint = getString(R.string.address_bar_hint)
             contentDescription = getString(R.string.address_bar_accessibility)
             isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_NO_AUTO_CORRECT
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             textSize = 15f
             setTextColor(getColor(R.color.nova_text_primary))
             setHintTextColor(getColor(R.color.nova_text_secondary))
