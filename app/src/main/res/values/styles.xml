@@ -1,17 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="NovaTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:colorAccent">#7044C8</item>
-        <item name="android:colorBackground">#F6F3FA</item>
-        <item name="android:windowBackground">#F6F3FA</item>
-        <item name="android:textColorPrimary">#241C2B</item>
-        <item name="android:textColorSecondary">#746A7E</item>
-        <item name="android:statusBarColor">#F6F3FA</item>
-        <item name="android:navigationBarColor">#F6F3FA</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
-        <item name="android:windowActionModeOverlay">true</item>
-    </style>
     <style name="NovaThemeLight" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:colorAccent">#7044C8</item>
         <item name="android:colorBackground">#F6F3FA</item>
