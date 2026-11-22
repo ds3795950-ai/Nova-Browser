@@ -1051,7 +1051,7 @@ class MainActivity : ComponentActivity() {
             listener = BrowserEngineListener { state -> runOnUiThread { applyCefriumState(tab, state) } },
             onDownloadCompleted = { download ->
                 runOnUiThread {
-                    downloadsFor(tab).registerCompleted(
+                    cefriumDownloads.registerCompleted(
                         download.url, download.fileName, download.mimeType, download.savedUri, download.bytes
                     )
                     toast("Downloaded ${download.fileName}")
@@ -1062,7 +1062,7 @@ class MainActivity : ComponentActivity() {
             } },
             onFullscreenChanged = { fullScreen -> runOnUiThread { setBrowserFullscreen(fullScreen, tab) } },
             onPopupRequested = { popup, popupUrl, userGesture ->
-                if (!siteSettingAllowed(BrowserEngineType.CEFRIUM, tab.lastUrl, "popups", false)) { popup.close(); false }
+                if (!siteSettingAllowed(BrowserEngineType.CEFRIUM, tab.lastUrl, "popups", false)) { popup.close(); true }
                 else handleCefriumPopup(popup, popupUrl, userGesture)
             },
             onPopupClosed = { popup -> handleCefriumPopupClosed(popup) },
