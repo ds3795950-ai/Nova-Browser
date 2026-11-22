@@ -33,7 +33,8 @@ class GeckoViewBrowserEngine(
         BrowserEngineCapability.VPN_PROXY,
         BrowserEngineCapability.TRANSLATION,
         BrowserEngineCapability.PASSWORD_AUTOFILL,
-        BrowserEngineCapability.NOVA_SHIELD
+        BrowserEngineCapability.NOVA_SHIELD,
+        BrowserEngineCapability.EXTENSIONS
     )
     private var attachedView: GeckoView = initialView
     private var isAttached = false

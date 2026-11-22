@@ -25,7 +25,7 @@ class GeckoViewEngineFactory(private val runtime: GeckoRuntime) {
         val session = GeckoSession(settings)
         val engine = GeckoViewBrowserEngine(session, initialView)
         try {
-            engine.installDelegates(delegateInstaller)
+            engine.installDelegates(delegateInstaller::install)
             onEngineCreated(engine)
             session.open(runtime)
             return engine
