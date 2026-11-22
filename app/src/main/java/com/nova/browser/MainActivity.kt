@@ -870,6 +870,7 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.split_view) to { chooseSplitTab() }
             actions += getString(R.string.bookmarks) to { showBookmarks() }
             if (!tab.isPrivate) actions += getString(R.string.history) to { showHistory() }
+        if (!tab.isPrivate) actions += "Clear browsing data" to { showClearBrowsingData() }
             if (!tab.isPrivate) actions += getString(R.string.downloads) to { showDownloads() }
             actions += getString(if (tab.isLoading) R.string.stop_loading else R.string.reload_page) to { toggleStopReload() }
             actions += getString(R.string.find_in_page) to { showFindBar() }
@@ -4555,6 +4556,7 @@ private fun showQuickSettings() {
                 if (::addressBar.isInitialized && addressBar.hasFocus()) updateAddressSuggestions(addressBar.text?.toString().orEmpty())
             },
             getString(R.string.clear_history) to { clearBrowsingHistory() },
+            "Clear browsing data" to { showClearBrowsingData() },
             "Clear Cefrium profile data" to { clearCefriumProfileData() },
             getString(R.string.close_private_guest_tabs) to { closePrivateAndGuestTabs() },
             "Site Settings" to { showSiteSettingsHub() },
@@ -4600,28 +4602,146 @@ private fun showQuickSettings() {
         dialog.show()
     }
 
+    private fun showClearBrowsingData() {
+        if (currentTab()?.isPrivate == true) {
+            toast("Clear owner browsing data from a Normal tab")
+            return
+        }
+        if (denyGuestAccess("Clear browsing data")) return
+        val history = CheckBox(this).apply { text = "Browsing history · GeckoView and Cefrium"; isChecked = true }
+        val geckoSiteData = CheckBox(this).apply { text = "Cookies, site storage and authentication · GeckoView"; isChecked = true }
+        val geckoCache = CheckBox(this).apply { text = "Browser cache · GeckoView"; isChecked = true }
+        val geckoSettings = CheckBox(this).apply { text = "Site permissions and settings · GeckoView"; isChecked = false }
+        val cefriumData = CheckBox(this).apply { text = "Cookies, cache, local storage and service workers · Cefrium"; isChecked = false }
+        val passwords = CheckBox(this).apply { text = "Saved passwords · encrypted Nova vault"; isChecked = false }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            addView(history)
+            addView(geckoSiteData)
+            addView(geckoCache)
+            addView(geckoSettings)
+            addView(cefriumData)
+            addView(passwords)
+            addView(TextView(this@MainActivity).apply {
+                text = "Downloaded files and download records are not deleted. Private and Guest browsing data is kept separate and is not included."
+                textSize = 12f
+                setPadding(0, dp(12), 0, 0)
+            })
+        }
+        AlertDialog.Builder(this).setTitle("Clear browsing data")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setPositiveButton("Clear selected") { _, _ ->
+                val selection = BrowsingDataSelection(
+                    history = history.isChecked,
+                    siteData = geckoSiteData.isChecked,
+                    cache = geckoCache.isChecked,
+                    siteSettings = geckoSettings.isChecked,
+                    cefriumProfileData = cefriumData.isChecked,
+                    savedPasswords = passwords.isChecked
+                )
+                if (!selection.hasSelection()) {
+                    toast("Select at least one data type")
+                    return@setPositiveButton
+                }
+                val activeTabId = currentTab()?.id
+                if (selection.history) {
+                    clearAllBrowsingHistory()
+                    toast("Browsing history cleared")
+                }
+                if (selection.savedPasswords) {
+                    runCatching { passwordVault.clear() }
+                        .onSuccess { toast("Encrypted password vault cleared") }
+                        .onFailure { toast("Could not clear password vault: ${it.localizedMessage ?: "Unknown error"}") }
+                }
+                val flags = selection.geckoFlags()
+                val finishCefrium = {
+                    if (selection.cefriumProfileData) {
+                        clearCefriumProfileDataNow(activeTabId) { succeeded, message ->
+                            if (succeeded) toast(message ?: "Cefrium profile data cleared")
+                            else toast("Cefrium data clear failed: ${message ?: "Unknown error"}")
+                        }
+                    } else if (flags == 0L && !selection.history && !selection.savedPasswords) {
+                        toast("No selected browser data was cleared")
+                    }
+                }
+                if (flags != 0L) {
+                    clearGeckoWebsiteData(flags, activeTabId) { succeeded, message ->
+                        if (succeeded) toast("Selected GeckoView website data cleared")
+                        else toast("GeckoView data clear failed: ${message ?: "Unknown error"}")
+                        finishCefrium()
+                    }
+                } else {
+                    finishCefrium()
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun clearAllBrowsingHistory() {
+        prefs.edit()
+            .putLong("history_cleared_at", System.currentTimeMillis())
+            .remove("history")
+            .remove("history_v2")
+            .apply()
+    }
+
+    private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
+        if (splitTabId != null) exitSplitScreen()
+        tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.GECKOVIEW }.forEach { tab ->
+            if (tab.browserEngine != null) {
+                deactivateTabRuntime(tab)
+                closeTabRuntime(tab)
+            }
+            tab.needsReload = tab.lastUrl != HOME_URL
+        }
+        val finish = { succeeded: Boolean, message: String? ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val index = tabs.indexOfFirst { it.id == activeTabId }
+                if (index >= 0 && tabs[index].engineType == BrowserEngineType.GECKOVIEW &&
+                    !tabs[index].isPrivate && !tabs[index].isGuest) switchTab(index)
+                onFinished(succeeded, message)
+            }
+        }
+        runCatching {
+            runtime.storageController.clearData(flags).accept(
+                { finish(true, null) },
+                { error -> finish(false, error?.localizedMessage) }
+            )
+        }.onFailure { finish(false, it.localizedMessage) }
+    }
+
+    private fun clearCefriumProfileDataNow(activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
+        val oldProfile = enginePreferences.cefriumProfileName()
+        val cefriumTabs = tabs.filter { it.engineType == BrowserEngineType.CEFRIUM && !it.isPrivate && !it.isGuest }
+        cefriumTabs.forEach { tab ->
+            runCatching { closeTabRuntime(tab) }
+            tab.needsReload = tab.lastUrl != HOME_URL
+            tab.cefriumNavigationState = null
+        }
+        val newProfile = enginePreferences.rotateCefriumProfile()
+        val deletion = runCatching { CefriumProfile.delete(oldProfile) }
+        val index = tabs.indexOfFirst { it.id == activeTabId }
+        if (index >= 0 && tabs[index].engineType == BrowserEngineType.CEFRIUM) switchTab(index)
+        if (splitTabId != null && cefriumTabs.any { it.id == splitTabId }) restoreSplitPane()
+        persistTabs()
+        when {
+            deletion.isFailure -> onFinished(false, "New clean Cefrium profile active ($newProfile); old profile deletion failed")
+            deletion.getOrNull() == true -> onFinished(true, "Cefrium profile cleared; new clean profile active")
+            else -> onFinished(true, "New clean Cefrium profile active; old profile deletion will finish on next restart")
+        }
+    }
+
     private fun clearCefriumProfileData() {
         if (denyGuestAccess("Cefrium profile deletion")) return
         AlertDialog.Builder(this).setTitle("Clear Cefrium profile data?")
             .setMessage("This removes cookies, cache, local/session storage, IndexedDB and service workers from all Normal Cefrium tabs. Those tabs will reload in a fresh profile. You may need to sign in again. Private and Guest data are separate and are not affected.")
             .setNegativeButton(getString(R.string.cancel), null)
             .setPositiveButton("Clear profile") { _, _ ->
-                val oldProfile = enginePreferences.cefriumProfileName()
-                val cefriumTabs = tabs.filter { it.engineType == BrowserEngineType.CEFRIUM }
-                cefriumTabs.forEach { tab ->
-                    runCatching { closeTabRuntime(tab) }
-                    tab.needsReload = tab.lastUrl != HOME_URL
-                    tab.cefriumNavigationState = null
-                }
-                val newProfile = enginePreferences.rotateCefriumProfile()
-                val deletion = runCatching { CefriumProfile.delete(oldProfile) }
-                currentTab()?.let { if (it in cefriumTabs) activateTab(it) }
-                if (splitTabId != null && cefriumTabs.any { it.id == splitTabId }) restoreSplitPane()
-                persistTabs()
-                when {
-                    deletion.isFailure -> toast("New clean Cefrium profile active ($newProfile); old profile deletion failed. Restart Nova and retry.")
-                    deletion.getOrNull() == true -> toast("Cefrium profile cleared; new clean profile active")
-                    else -> toast("New clean Cefrium profile active; old profile deletion will finish on next restart")
+                clearCefriumProfileDataNow(currentTab()?.id) { succeeded, message ->
+                    toast(message ?: if (succeeded) "Cefrium profile cleared" else "Cefrium profile clear failed")
                 }
             }.show()
     }

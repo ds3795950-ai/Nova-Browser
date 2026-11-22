@@ -25,7 +25,7 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun all(): List<Autocomplete.LoginEntry> {
         val bytes = readEncryptedBlob() ?: return emptyList()
-        require(bytes.size > 12) { "Password vault data is invalid" }
+        require(bytes.size in MIN_ENCRYPTED_BLOB_BYTES..MAX_VAULT_BYTES) { "Password vault data is invalid or unexpectedly large" }
         val iv = bytes.copyOfRange(0, 12)
         val encrypted = bytes.copyOfRange(12, bytes.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -45,7 +45,10 @@ class PasswordVault(context: Context) {
     }
 
     @Synchronized fun save(login: Autocomplete.LoginEntry) {
+        require(PasswordVaultPolicy.isAllowedOrigin(login.origin)) { "Saved login must use a valid HTTP or HTTPS origin without embedded credentials" }
+        require(PasswordVaultPolicy.isAllowedOptionalOrigin(login.formActionOrigin)) { "Saved login form action must be a valid HTTP or HTTPS origin" }
         val entries = all().filterNot { it.guid == login.guid || (it.origin == login.origin && it.username == login.username) }.toMutableList()
+        require(entries.size < MAX_ENTRIES) { "Password vault entry limit reached" }
         entries.add(login)
         persist(entries)
         val key = credentialKey(login.origin, login.username)
@@ -100,16 +103,16 @@ class PasswordVault(context: Context) {
         val entries = mutableListOf<Autocomplete.LoginEntry>()
         val metadata = JSONObject()
         for (i in 0 until credentials.length()) {
-            // Skip malformed remote entries instead of throwing: one bad entry must not block sync or crash the app.
-            val item = credentials.optJSONObject(i) ?: continue
-            val origin = item.optString("origin")
-            if (!(origin.startsWith("https://") || origin.startsWith("http://"))) continue
-            if (!item.has("username") || !item.has("password")) continue
-            val username = item.optString("username")
+            val item = credentials.getJSONObject(i)
+            val origin = item.getString("origin")
+            require(PasswordVaultPolicy.isAllowedOrigin(origin)) { "Invalid saved login origin" }
+            val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
+            require(PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) { "Invalid saved login form action origin" }
+            val username = item.getString("username")
             val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
-                .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                .origin(origin).formActionOrigin(formActionOrigin)
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
-                .username(username).password(item.optString("password")).build()
+                .username(username).password(item.getString("password")).build()
             entries.add(entry)
             metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
         }
@@ -124,9 +127,11 @@ class PasswordVault(context: Context) {
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
             val origin = item.getString("origin")
-            require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
+            require(PasswordVaultPolicy.isAllowedOrigin(origin)) { "Invalid saved login origin" }
+            val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
+            require(PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) { "Invalid saved login form action origin" }
             val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
-                .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                .origin(origin).formActionOrigin(formActionOrigin)
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
                 .username(item.getString("username")).password(item.getString("password")).build()
             merged[entry.origin + "|" + entry.username] = entry
@@ -134,9 +139,15 @@ class PasswordVault(context: Context) {
         persist(merged.values.toList())
     }
 
-    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).apply(); vaultFile.delete() }
+    @Synchronized fun clear() {
+        check(!vaultFile.exists() || vaultFile.delete()) { "Could not remove encrypted password vault file" }
+        check(prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).commit()) { "Could not clear password vault metadata" }
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (store.containsAlias(alias)) store.deleteEntry(alias)
+    }
 
     private fun persist(entries: List<Autocomplete.LoginEntry>) {
+        require(entries.size <= MAX_ENTRIES) { "Password vault entry limit reached" }
         val json = JSONArray()
         entries.forEach { login ->
             json.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
@@ -194,6 +205,9 @@ class PasswordVault(context: Context) {
         private const val KEY_BLOB = "encrypted_entries_v1"
         private const val META_KEY = "credential_updated_at_v1"
         private const val TOMBSTONES_KEY = "credential_tombstones_v1"
+        private const val MAX_ENTRIES = 2000
+        private const val MIN_ENCRYPTED_BLOB_BYTES = 28
+        private const val MAX_VAULT_BYTES = 4 * 1024 * 1024
 
         /** Merges credentials and deletion markers from two devices; newer explicit deletes win. */
         internal fun decodeSyncBundle(serialized: String): JSONObject {
@@ -211,7 +225,7 @@ class PasswordVault(context: Context) {
             val merged = linkedMapOf<String, JSONObject>()
             for (source in listOf(remote.optJSONArray("credentials") ?: JSONArray(), local.optJSONArray("credentials") ?: JSONArray())) {
                 for (i in 0 until source.length()) {
-                    val item = source.optJSONObject(i) ?: continue
+                    val item = source.getJSONObject(i)
                     val key = item.optString("origin") + "|" + item.optString("username")
                     val previous = merged[key]
                     if (previous == null || item.optLong("updatedAt") >= previous.optLong("updatedAt")) merged[key] = item
