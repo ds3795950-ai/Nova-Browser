@@ -16,6 +16,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
@@ -31,7 +34,9 @@ internal object AutoSyncPassphraseStore {
     fun has(context: Context): Boolean = file(context).isFile
 
     fun save(context: Context, passphrase: CharArray) {
-        val clear = String(passphrase).toByteArray(Charsets.UTF_8)
+        val encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(passphrase))
+        val clear = ByteArray(encoded.remaining())
+        encoded.get(clear)
         try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key())
@@ -39,7 +44,10 @@ internal object AutoSyncPassphraseStore {
             val temporary = File(target.parentFile, target.name + ".tmp")
             FileOutputStream(temporary).use { out -> out.write(cipher.iv + cipher.doFinal(clear)); out.fd.sync() }
             Os.rename(temporary.absolutePath, target.absolutePath)
-        } finally { clear.fill(0) }
+        } finally {
+            clear.fill(0)
+            if (encoded.hasArray()) encoded.array().fill(0)
+        }
     }
 
     fun load(context: Context): CharArray? {
@@ -50,7 +58,15 @@ internal object AutoSyncPassphraseStore {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
         val clear = cipher.doFinal(packed.copyOfRange(12, packed.size))
-        return try { String(clear, Charsets.UTF_8).toCharArray() } finally { clear.fill(0) }
+        var decoded: CharBuffer? = null
+        return try {
+            val charBuffer = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(clear))
+            decoded = charBuffer
+            CharArray(charBuffer.remaining()).also { charBuffer.get(it) }
+        } finally {
+            clear.fill(0)
+            decoded?.takeIf { it.hasArray() }?.array()?.fill('\u0000')
+        }
     }
 
     fun clear(context: Context) {

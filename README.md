@@ -1,6 +1,6 @@
 # Nova Browser
 
-Nova is being reconstructed as an Android/Kotlin browser using **GeckoView as its only browser engine**.
+Nova is an Android/Kotlin browser. **GeckoView remains the production engine** while Phase 1 adds Cefrium 0.21.0 behind an isolated engine adapter and a debug-only engine lab. Normal-mode engine selection is not enabled yet.
 
 This repository is a fresh reconstruction. The previous repository/account could not be accessed, and no source backup was available; this is not a recovered copy.
 
@@ -17,7 +17,7 @@ This repository is a fresh reconstruction. The previous repository/account could
 
 ## Build
 
-Requires JDK 17, Gradle 9.3.1, Android SDK Platform 37 and Android Gradle Plugin 9.1.1.
+Requires JDK 25, Gradle 9.7.1, Android SDK Platform 37 and Android Gradle Plugin 9.4.0. Cefrium 0.21.0 requires this toolchain.
 
 ```bash
 gradle testDebugUnitTest
@@ -28,8 +28,8 @@ The CI workflow publishes the debug APK as a short-lived workflow artifact after
 
 ## Security notes
 
-- GeckoView is the only rendering engine.
-- Guest Mode, Nova Shield, Tor routing, cloud sync and authentication are not yet implemented.
+- The live MainActivity still uses GeckoView. Cefrium is currently available through the debug-only Engine Lab; the production tab manager has not been migrated.
+- Guest Mode, Nova Shield, encrypted cloud sync and authentication have existing GeckoView implementations. Embedded Tor routing is not implemented; the existing Orbot handoff is not proof of per-tab Tor enforcement.
 - Do not put API keys, Supabase service-role keys, signing secrets or user credentials in source control.
 - Private-mode behavior still requires device-level verification before being described as production-ready.
 

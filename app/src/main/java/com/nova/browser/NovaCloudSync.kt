@@ -22,42 +22,76 @@ import javax.crypto.spec.PBEKeySpec
 internal object CloudCrypto {
     private const val ITERATIONS = 310_000
     private const val KEY_BITS = 256
+    private const val MIN_PASSPHRASE_LENGTH = 10
+    private const val MAX_BACKUP_BYTES = 32 * 1024 * 1024
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
     private fun unb64(value: String) = java.util.Base64.getDecoder().decode(value)
 
     fun encrypt(plainText: String, passphrase: CharArray): JSONObject {
-        require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
+        require(passphrase.size >= MIN_PASSPHRASE_LENGTH) { "Choose a sync passphrase with at least 10 characters" }
+        val clearBytes = plainText.toByteArray(Charsets.UTF_8)
+        require(clearBytes.size <= MAX_BACKUP_BYTES) { "Cloud backup is too large to encrypt safely" }
         val random = SecureRandom()
         val salt = ByteArray(16).also(random::nextBytes)
         val iv = ByteArray(12).also(random::nextBytes)
         val spec = PBEKeySpec(passphrase, salt, ITERATIONS, KEY_BITS)
-        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        spec.clearPassword()
+        val keyBytes = try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally { spec.clearPassword() }
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
             JSONObject().put("version", 1).put("algorithm", "AES-256-GCM")
                 .put("kdf", "PBKDF2-HMAC-SHA256").put("iterations", ITERATIONS)
                 .put("salt", b64(salt)).put("iv", b64(iv))
-                .put("ciphertext", b64(cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))))
-        } finally { keyBytes.fill(0) }
+                .put("ciphertext", b64(cipher.doFinal(clearBytes)))
+        } finally {
+            keyBytes.fill(0)
+            clearBytes.fill(0)
+        }
     }
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
+        require(passphrase.size >= MIN_PASSPHRASE_LENGTH) { "Sync passphrase must contain at least 10 characters" }
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
+        require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported cloud backup key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
         val salt = unb64(envelope.getString("salt"))
         val iv = unb64(envelope.getString("iv"))
-        require(salt.size == 16 && iv.size == 12) { "Invalid encrypted backup" }
+        val ciphertext = unb64(envelope.getString("ciphertext"))
+        require(salt.size == 16 && iv.size == 12 && ciphertext.size in 16..(MAX_BACKUP_BYTES + 16)) {
+            "Invalid encrypted backup"
+        }
         val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
-        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        spec.clearPassword()
+        val keyBytes = try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally { spec.clearPassword() }
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
-            String(cipher.doFinal(unb64(envelope.getString("ciphertext"))), Charsets.UTF_8)
+            val clearBytes = cipher.doFinal(ciphertext)
+            try { String(clearBytes, Charsets.UTF_8) } finally { clearBytes.fill(0) }
         } finally { keyBytes.fill(0) }
+    }
+}
+
+
+/** One revision contains both encrypted payloads, so a sync cannot update only half the backup. */
+internal object NovaCloudBundle {
+    const val FORMAT = "nova-encrypted-sync-bundle-v1"
+
+    fun pack(snapshot: JSONObject, vault: JSONObject): JSONObject =
+        JSONObject().put("format", FORMAT).put("browser", snapshot).put("vault", vault)
+
+    fun unpack(snapshot: JSONObject?, legacyVault: JSONObject?): Pair<JSONObject?, JSONObject?> {
+        if (snapshot?.optString("format") == FORMAT) {
+            val browser = snapshot.optJSONObject("browser")
+            val vault = snapshot.optJSONObject("vault")
+            require(browser != null && vault != null) { "Encrypted cloud bundle is incomplete" }
+            return Pair(browser, vault)
+        }
+        return Pair(snapshot, legacyVault)
     }
 }
 
@@ -73,7 +107,6 @@ class NovaCloudSync(context: Context) {
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
     @Volatile private var snapshotVersion: String? = null
-    @Volatile private var vaultVersion: String? = null
 
     fun sendEmailOtp(email: String) {
         val clean = email.trim().lowercase()
@@ -108,30 +141,35 @@ class NovaCloudSync(context: Context) {
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
         val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
-        val vault = fetchRow("nova_encrypted_vault", "payload", userId, token)
-        return Pair(snapshot, vault)
+        if (snapshot?.optString("format") == NovaCloudBundle.FORMAT) {
+            return NovaCloudBundle.unpack(snapshot, null)
+        }
+        // Read backups written by older Nova builds before the atomic bundle format.
+        val legacyVault = fetchRow("nova_encrypted_vault", "payload", userId, token)
+        return NovaCloudBundle.unpack(snapshot, legacyVault)
     }
 
     fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        upsertRow("nova_sync_state", "snapshot", userId, snapshot, token, snapshotVersion)
-        upsertRow("nova_encrypted_vault", "payload", userId, vault, token, vaultVersion)
+        // Keep browser data and password-vault ciphertext in one compare-and-swap row.
+        // This prevents a conflict between two separate writes from leaving a half-updated backup.
+        val bundle = NovaCloudBundle.pack(snapshot, vault)
+        upsertRow("nova_sync_state", "snapshot", userId, bundle, token, snapshotVersion)
         snapshotVersion = null
-        vaultVersion = null
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
         val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
         val rows = org.json.JSONArray(result)
         if (rows.length() == 0) {
-            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
+            if (column == "snapshot") snapshotVersion = null
             return null
         }
         val row = rows.getJSONObject(0)
         val version = row.optString("updated_at").takeIf { it.isNotBlank() }
-        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
+        if (column == "snapshot") snapshotVersion = version
         return row.optJSONObject(column)
     }
 
@@ -165,6 +203,8 @@ class NovaCloudSync(context: Context) {
 
     private fun request(method: String, path: String, body: String?, bearer: String? = null, prefer: String? = null): String {
         val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+            // Auth and refresh tokens must never be forwarded to a redirect target.
+            instanceFollowRedirects = false
             requestMethod = method
             connectTimeout = 20_000
             readTimeout = 30_000

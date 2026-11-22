@@ -69,6 +69,10 @@ class UrlInputTest {
         assertEquals("file:///sdcard/a.html", BrowserUrlResolver.resolve("file:///sdcard/a.html"))
     }
 
+    @Test fun viewSourceSchemePassesThrough() {
+        assertEquals("view-source:https://example.com", BrowserUrlResolver.resolve("view-source:https://example.com"))
+    }
+
     @Test fun domainWithPathAndQuery() {
         assertEquals("https://example.com/a?b=1", BrowserUrlResolver.resolve("example.com/a?b=1"))
     }

@@ -58,8 +58,13 @@ These are the previously agreed product choices. Do not replace them with generi
 - Phishing/malware protection.
 - Also retain the previously discussed desktop-site mode with per-site preferences, downloads, file uploads, reader mode, translation, password manager/autofill and session restore as roadmap items.
 
-## Engine constraint
-- Current rebuild target is Android/Kotlin with GeckoView as the only browser engine. Do not add Chromium or Android WebView as a fallback.
+## Engine strategy (latest explicit user decision)
+- Normal Mode uses Cefrium as its primary engine, with GeckoView fallback only where a required feature or site-compatibility limitation makes Cefrium unsuitable.
+- Private Mode is GeckoView-only and must use ephemeral private sessions.
+- Guest Mode is GeckoView-only and must use a separate temporary context. Normal-mode preferences and site affinities must never override either privacy profile.
+- Tor is an optional Guest-only feature, off by default. It must use a dedicated Guest-only transport and fail closed; Normal and Private browsing must never be routed through Tor.
+- The 1VPN browser proxy is a separate VPN/proxy feature and must never be described as Tor.
+- Cefrium remains behind its adapter; compatibility, security, performance and real-device acceptance are still required before release.
 
 ## Implementation policy
 These decisions define the target product, not the current implementation status. Update docs/ROADMAP.md as features are implemented and tested. A feature is not complete until its acceptance tests pass. Never claim Tor routing, security protection, encryption, login or sync is working without technical verification.

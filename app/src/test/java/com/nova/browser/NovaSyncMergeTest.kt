@@ -1,5 +1,6 @@
 package com.nova.browser
 
+import com.nova.browser.engine.BrowserEngineType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -79,4 +80,61 @@ class NovaSyncMergeTest {
         assertEquals(1, PasswordVault.decodeSyncBundle(legacy.toString()).getJSONArray("credentials").length())
     }
 
+
+
+    @Test fun cefriumAndGeckoViewProfilesNeverMergeIntoEachOther() {
+        val local = JSONObject().put("profiles", JSONObject()
+            .put("GECKOVIEW", JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://gecko.example").put("addedAt", 10))))
+            .put("CEFRIUM", JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://cefrium.example").put("addedAt", 20)))))
+        val remote = JSONObject().put("profiles", JSONObject()
+            .put("GECKOVIEW", JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://gecko-remote.example").put("addedAt", 30))))
+            .put("CEFRIUM", JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://cefrium-remote.example").put("addedAt", 40)))))
+        val merged = NovaSyncMerge.merge(local, remote).getJSONObject("profiles")
+        val geckoUrls = merged.getJSONObject("GECKOVIEW").getJSONArray("bookmarks")
+        val cefriumUrls = merged.getJSONObject("CEFRIUM").getJSONArray("bookmarks")
+        assertEquals(2, geckoUrls.length())
+        assertEquals(2, cefriumUrls.length())
+        val geckoUrlSet = (0 until geckoUrls.length()).map { geckoUrls.getJSONObject(it).getString("url") }.toSet()
+        val cefriumUrlSet = (0 until cefriumUrls.length()).map { cefriumUrls.getJSONObject(it).getString("url") }.toSet()
+        assertTrue(geckoUrlSet.contains("https://gecko.example"))
+        assertTrue(geckoUrlSet.contains("https://gecko-remote.example"))
+        assertTrue(cefriumUrlSet.contains("https://cefrium.example"))
+        assertTrue(cefriumUrlSet.contains("https://cefrium-remote.example"))
+        for (url in geckoUrlSet) assertTrue(!url.contains("cefrium"))
+        for (url in cefriumUrlSet) assertTrue(!url.contains("gecko"))
+    }
+
+    @Test fun legacyUnscopedSnapshotCannotPopulateEitherEngineProfile() {
+        val local = JSONObject().put("profiles", JSONObject().put("GECKOVIEW", JSONObject()
+            .put("bookmarks", JSONArray().put(JSONObject().put("url", "https://owned-gecko.example").put("addedAt", 1)))))
+        val legacyRemote = JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://unscoped.example").put("addedAt", 99)))
+        val merged = NovaSyncMerge.merge(local, legacyRemote).getJSONObject("profiles")
+        assertEquals(1, merged.getJSONObject("GECKOVIEW").getJSONArray("bookmarks").length())
+        assertEquals("https://owned-gecko.example", merged.getJSONObject("GECKOVIEW").getJSONArray("bookmarks").getJSONObject(0).getString("url"))
+        assertTrue(!merged.has("CEFRIUM"))
+    }
+
+
+    @Test fun engineStorageKeysAreDisjointAndStable() {
+        assertEquals("bookmarks_geckoview", EngineProfileStoragePolicy.key("bookmarks", BrowserEngineType.GECKOVIEW))
+        assertEquals("bookmarks_cefrium", EngineProfileStoragePolicy.key("bookmarks", BrowserEngineType.CEFRIUM))
+        assertTrue(EngineProfileStoragePolicy.key("history_v2", BrowserEngineType.GECKOVIEW) != EngineProfileStoragePolicy.key("history_v2", BrowserEngineType.CEFRIUM))
+    }
+
+    @Test fun historiesAndWorkspacesRemainInTheirOwnEngineProfiles() {
+        val local = JSONObject().put("profiles", JSONObject()
+            .put("GECKOVIEW", JSONObject()
+                .put("history", JSONArray().put(JSONObject().put("url", "https://gecko-history.example").put("visitedAt", 10)))
+                .put("workspaces", JSONArray().put(JSONObject().put("name", "Gecko workspace").put("createdAt", 10).put("engine", "GECKOVIEW"))))
+            .put("CEFRIUM", JSONObject()
+                .put("history", JSONArray().put(JSONObject().put("url", "https://cefrium-history.example").put("visitedAt", 20)))
+                .put("workspaces", JSONArray().put(JSONObject().put("name", "Cefrium workspace").put("createdAt", 20).put("engine", "CEFRIUM")))))
+        val merged = NovaSyncMerge.merge(local, JSONObject()).getJSONObject("profiles")
+        val gecko = merged.getJSONObject("GECKOVIEW")
+        val cefrium = merged.getJSONObject("CEFRIUM")
+        assertEquals("https://gecko-history.example", gecko.getJSONArray("history").getJSONObject(0).getString("url"))
+        assertEquals("https://cefrium-history.example", cefrium.getJSONArray("history").getJSONObject(0).getString("url"))
+        assertEquals("GECKOVIEW", gecko.getJSONArray("workspaces").getJSONObject(0).getString("engine"))
+        assertEquals("CEFRIUM", cefrium.getJSONArray("workspaces").getJSONObject(0).getString("engine"))
+    }
 }

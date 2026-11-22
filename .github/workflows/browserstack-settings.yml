@@ -30,17 +30,25 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "25"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      - name: Install Android SDK 37.1 platform
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.1"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.3.1"
+          gradle-version: "9.7.1"
 
       - name: Parse and verify BrowserStack credentials
         env:
@@ -98,16 +106,25 @@ jobs:
           if [ "$CURL_STATUS" -ne 0 ] || [ "$UPLOAD_HTTP" != "200" ]; then
             echo "BrowserStack upload failed: HTTP ${UPLOAD_HTTP:-unknown}, curl exit ${CURL_STATUS}"
             cat browserstack-upload.json
+            if grep -q 'BROWSERSTACK_TESTING_TIME_LIMIT_EXHAUSTED' browserstack-upload.json; then
+              echo "::warning::BrowserStack trial testing time is exhausted. Device tests were not run; restore BrowserStack quota to re-enable them."
+              echo "app_url=" >> "$GITHUB_OUTPUT"
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             exit 1
           fi
           APP_URL="$(jq -r '.app_url // empty' browserstack-upload.json)"
           if [ -z "$APP_URL" ]; then cat browserstack-upload.json; exit 1; fi
           echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
 
       - name: Install Appium test dependency
+        if: steps.upload.outputs.app_url != ''
         run: npm install --no-save webdriverio@9
 
       - name: Run VPN and firewall settings tests
+        if: steps.upload.outputs.app_url != ''
         env:
           BROWSERSTACK_USERNAME: ${{ env.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ env.BROWSERSTACK_ACCESS_KEY }}

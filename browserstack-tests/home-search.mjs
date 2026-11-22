@@ -176,9 +176,71 @@ try {
   await byText('Close').click();
   record('Normal browsing history is recorded', true, 'Normal marker appears in History');
 
+  // Engine-neutral tab ownership: switch the live tab in both directions, then split Gecko + Cefrium.
+  await tapToolbar('Shield', 2);
+  await byText('Off').click();
+  await tapToolbar('Settings', 1);
+  await byTextContains('Browser engine ·').click();
+  await byText('Cefrium · Chromium (default)').click();
+
+  await tapToolbar('Settings', 1);
+  await byText("Switch this tab's engine").click();
+  await byTextContains('Cefrium (Chromium)').waitForDisplayed({ timeout: 10000 });
+  await byText('Switch and reload').click();
+  await driver.waitUntil(async () => (await addressBar.getAttribute('text').catch(() => '')).includes('example.com'), {
+    timeout: 20000, timeoutMsg: 'Tab did not reload after switching to Cefrium'
+  });
+  record('Manual engine switch to Cefrium', true, 'Existing tab reloaded through the Cefrium BrowserEngine adapter');
+
+  await tapToolbar('Settings', 1);
+  await byText("Switch this tab's engine").click();
+  await byTextContains('GeckoView (Firefox)').waitForDisplayed({ timeout: 10000 });
+  await byText('Switch and reload').click();
+  await driver.waitUntil(async () => (await addressBar.getAttribute('text').catch(() => '')).includes('example.com'), {
+    timeout: 20000, timeoutMsg: 'Tab did not reload after switching back to GeckoView'
+  });
+  record('Manual engine switch back to GeckoView', true, 'Existing tab reloaded through the GeckoView BrowserEngine adapter');
+
+  // New Normal tabs now default to Cefrium while this existing tab remains GeckoView.
+  await tapToolbar('＋', 0);
+  await navigateTo('https://example.org/', 'example.org');
+  await tapToolbar('Split', 0);
+  await byText('Open second pane').waitForDisplayed({ timeout: 10000 });
+  await byTextContains('GECKOVIEW').click();
+  await byA11y('Secondary address bar').waitForDisplayed({ timeout: 10000 });
+  const splitSource = await driver.getPageSource();
+  if (!splitSource.includes('example.com')) throw new Error('GeckoView secondary pane did not retain its page after attach');
+  const secondaryAddress = byA11y('Secondary address bar');
+  await secondaryAddress.setValue('https://example.net/');
+  await byA11y('Secondary Go').click();
+  await driver.waitUntil(async () => (await secondaryAddress.getAttribute('text').catch(() => '')).includes('example.net'), {
+    timeout: 20000, timeoutMsg: 'Secondary pane did not navigate through its BrowserEngine adapter'
+  });
+  await byA11y('Close split').click();
+  record('Mixed-engine split pane attaches, navigates and detaches', true, 'Cefrium remains primary; GeckoView attaches to secondary, navigates, then detaches cleanly');
+  await tapToolbar('Shield', 2);
+  await byText('Standard · recommended').click();
+
+  // Verify that the engine's persistent Normal cookie jar is not visible to ephemeral profiles.
+  await navigateTo('https://httpbin.org/cookies/set?nova_owner_cookie=owner', 'httpbin.org/cookies');
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const normalCookieSource = await driver.getPageSource();
+  if (!normalCookieSource.includes('nova_owner_cookie')) throw new Error('Normal profile cookie was not retained');
+  record('Normal cookies persist in the owner profile', true, 'httpbin reflects the Normal-only cookie');
+
   await tapToolbar('Private', 0);
   await byTextContains('Private session').waitForDisplayed({ timeout: 10000 });
   record('Private mode indicator appears on home', true, 'Private session status is visible immediately after opening a Private tab');
+
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const privateCookiesBefore = await driver.getPageSource();
+  if (privateCookiesBefore.includes('nova_owner_cookie')) throw new Error('Private mode exposed a Normal profile cookie');
+  await navigateTo('https://httpbin.org/cookies/set?nova_private_cookie=private', 'httpbin.org/cookies');
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const privateCookieSource = await driver.getPageSource();
+  if (!privateCookieSource.includes('nova_private_cookie')) throw new Error('Private profile did not retain its own cookie during the session');
+  if (privateCookieSource.includes('nova_owner_cookie')) throw new Error('Private profile read a Normal cookie after setting its own cookie');
+  record('Private cookies are isolated from Normal browsing', true, 'Private sees its own cookie but not the owner-profile cookie');
   await navigateTo('https://example.com/?' + privateMarker + '=1', privateMarker);
   await tapToolbar('History', 1);
   await driver.pause(1000);
@@ -207,6 +269,16 @@ try {
   await tapToolbar('Guest', 0);
   await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
   record('Guest mode indicator appears on home', true, 'Guest Mode status is visible immediately after opening a Guest tab');
+
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestCookiesBefore = await driver.getPageSource();
+  if (guestCookiesBefore.includes('nova_owner_cookie')) throw new Error('Guest Mode exposed a Normal profile cookie');
+  await navigateTo('https://httpbin.org/cookies/set?nova_guest_cookie=guest', 'httpbin.org/cookies');
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestCookieSource = await driver.getPageSource();
+  if (!guestCookieSource.includes('nova_guest_cookie')) throw new Error('Guest profile did not retain its own cookie during the session');
+  if (guestCookieSource.includes('nova_owner_cookie')) throw new Error('Guest profile read a Normal cookie after setting its own cookie');
+  record('Guest cookies are isolated from the owner profile', true, 'Guest sees its own cookie but not the owner-profile cookie');
   await navigateTo('https://example.com/?' + guestMarker + '=1', guestMarker);
   await tapToolbar('History', 1);
   await driver.pause(500);
@@ -263,7 +335,7 @@ try {
 
   await tapToolbar('Settings', 1);
   try {
-    await byText('Tor routing · Orbot').waitForDisplayed({ timeout: 10000 });
+    await byText('Tor routing status').waitForDisplayed({ timeout: 10000 });
     await byText('Exit Guest Mode').waitForDisplayed({ timeout: 5000 });
   } catch (error) {
     console.error('Guest settings screen after tapping Settings:', await driver.getPageSource());
@@ -273,10 +345,10 @@ try {
   for (const forbidden of ['Account & encrypted cloud sync', 'Export history', 'Password manager', 'Clear browsing history', 'Close private and Guest tabs']) {
     if (guestSettingsSource.includes(forbidden)) throw new Error('Guest settings exposed owner action: ' + forbidden);
   }
-  if (!guestSettingsSource.includes('Tor routing · Orbot') || !guestSettingsSource.includes('Exit Guest Mode')) throw new Error('Guest Mode settings actions are missing');
+  if (!guestSettingsSource.includes('Tor routing status') || !guestSettingsSource.includes('Exit Guest Mode')) throw new Error('Guest Mode settings actions are missing');
   await byText('Close').waitForDisplayed({ timeout: 10000 });
   await byText('Close').click();
-  record('Guest settings hide owner data', true, 'Only Exit Guest Mode is offered; owner exports and account controls are hidden');
+  record('Guest settings hide owner data', true, 'Only Guest-specific Tor status and Exit Guest Mode are offered; owner exports and account controls are hidden');
 
   await tapToolbar('＋', 0);
   await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
@@ -287,6 +359,13 @@ try {
   await byText('Exit Guest').click();
   await driver.waitUntil(async () => !(await sessionStatus.getText().catch(() => '')).includes('Guest Mode'), { timeout: 10000, timeoutMsg: 'Guest Mode did not exit after confirmation' });
   record('Guest exit requires confirmation', true, 'The tab manager warns before returning to owner tabs');
+
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const cookiesAfterGuestExit = await driver.getPageSource();
+  if (!cookiesAfterGuestExit.includes('nova_owner_cookie')) throw new Error('Normal cookie was lost after Guest exit');
+  if (cookiesAfterGuestExit.includes('nova_guest_cookie')) throw new Error('Guest cookie leaked into the owner profile after Guest exit');
+  if (cookiesAfterGuestExit.includes('nova_private_cookie')) throw new Error('Private cookie leaked into the owner profile after Private exit');
+  record('Private and Guest cookies are cleared from the owner view after exit', true, 'Owner cookie remains; ephemeral cookies are absent');
 
   const historyAfterGuest = await openHistoryAndReadSource();
   if (historyAfterGuest.includes(guestMarker)) throw new Error('Guest URL leaked into normal history');
@@ -362,32 +441,40 @@ try {
   await byText('Cancel').click();
   record('Cloud sync sign-in uses email OTP UI', true, 'One email field; no password requested and no OTP sent');
 
-  await tapToolbar('Shield', 2);
-  await byText('Open Orbot · system VPN routing').click();
-  const noOrbot = byText('Orbot is not installed');
-  const routeOrbot = byText('Route traffic through Orbot');
-  await driver.waitUntil(async () =>
-    (await noOrbot.isDisplayed().catch(() => false)) ||
-    (await routeOrbot.isDisplayed().catch(() => false)),
-    { timeout: 10000, timeoutMsg: 'Orbot handoff dialog did not appear' }
-  );
-  if (await noOrbot.isDisplayed().catch(() => false)) {
-    await byText('OK').click();
-    record('Tor handoff states Orbot dependency', true, 'Orbot is not installed on this test device; Nova does not bundle Tor');
-  } else {
-    const vpnCopy = await driver.getPageSource();
-    if (!vpnCopy.includes('Always-on VPN') || !vpnCopy.includes('Nova cannot verify')) throw new Error('Orbot handoff omits VPN fail-closed and verification limitations');
-    await byText('Cancel').click();
-    record('Tor handoff requires explicit approval', true, 'Orbot routing requires user action and explains Always-on VPN and verification limits');
+  // Verify the Guest-only Tor boundary is honest: Orbot's app-wide VPN cannot isolate one tab.
+  await tapToolbar('Guest', 0);
+  await byTextContains('Guest Mode').waitForDisplayed({ timeout: 15000 });
+  await tapToolbar('Settings', 1);
+  await byText('Tor routing status').click();
+  await byTextContains('Guest-only Tor is not available yet').waitForDisplayed({ timeout: 10000 });
+  const torStatusSource = await driver.getPageSource();
+  if (!torStatusSource.includes('whole Nova app') || !torStatusSource.includes('Normal and Private traffic too')) {
+    throw new Error('Guest-only Tor status does not explain the app-wide Orbot routing limitation');
   }
-
-  // Close ephemeral tabs, then confirm they are not restored after an app restart.
+  await byText('OK').click();
+  record('Guest-only Tor fails closed until an isolated transport exists', true, 'No Orbot launch or app-wide VPN toggle is offered from Guest Mode');
   await tapToolbar('Settings', 1);
   await byText('Exit Guest Mode').click();
+  await byText('Exit Guest').click();
+
+  // Close ephemeral tabs, then create fresh ones and confirm they are not restored after restart.
   await tapToolbar('Settings', 1);
   await byText('Close private and Guest tabs').click();
   await tapToolbar('Private', 0);
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const privateAfterClose = await driver.getPageSource();
+  if (privateAfterClose.includes('nova_private_cookie') || privateAfterClose.includes('nova_guest_cookie')) {
+    throw new Error('A newly opened Private profile retained cookies from an earlier ephemeral session');
+  }
+  record('Private profile data clears after the final Private tab closes', true, 'A fresh Private profile has no prior Private or Guest cookies');
   await tapToolbar('Guest', 0);
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestAfterClose = await driver.getPageSource();
+  if (guestAfterClose.includes('nova_private_cookie') || guestAfterClose.includes('nova_guest_cookie')) {
+    throw new Error('A newly opened Guest profile retained cookies from an earlier ephemeral session');
+  }
+  record('Guest profile data clears after the final Guest tab closes', true, 'A fresh Guest context has no prior Private or Guest cookies');
+  await navigateTo('https://httpbin.org/cookies/set?nova_crash_guest_cookie=guest', 'httpbin.org/cookies');
   await driver.terminateApp('com.nova.browser');
   await driver.activateApp('com.nova.browser');
   await byA11y('Nova address bar').waitForDisplayed({ timeout: 30000 });
@@ -398,6 +485,16 @@ try {
   }
   await byText('Done').click();
   record('Private and Guest tabs are not restored after app restart', true, 'Only normal tabs remain in the tab manager');
+  await tapToolbar('Guest', 0);
+  await navigateTo('https://httpbin.org/cookies', 'httpbin.org/cookies');
+  const guestAfterProcessDeath = await driver.getPageSource();
+  if (guestAfterProcessDeath.includes('nova_crash_guest_cookie')) {
+    throw new Error('Guest cookies survived process death and were visible in the next Guest session');
+  }
+  record('Guest storage is cleared after process death', true, 'The next Guest session cannot read the previous process Guest cookie');
+  await tapToolbar('Settings', 1);
+  await byText('Exit Guest Mode').click();
+  await byText('Exit Guest').click();
 
   await tapToolbar('Shield', 2);
   await byTextContains('Nova Shield · STANDARD').waitForDisplayed({ timeout: 10000 });
