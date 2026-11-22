@@ -1,8 +1,10 @@
 package com.nova.browser.engine
 
 import android.view.View
+import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.TranslationsController
 
 /**
  * GeckoView adapter for one tab session. It owns the Gecko session lifecycle and exposes a
@@ -93,6 +95,32 @@ class GeckoViewBrowserEngine(
         if (closed) return
         hostPaused = false
         applyVisibility()
+    }
+
+    /** Runs GeckoView native translation without exposing its session to browser chrome. */
+    fun translate(sourceLanguage: String, targetLanguage: String, onResult: (Boolean, String?) -> Unit) {
+        val translation = session.sessionTranslation
+        if (translation == null) { onResult(false, "GeckoView translation is unavailable for this session"); return }
+        translation.translate(sourceLanguage, targetLanguage,
+            TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
+        ).accept({ onResult(true, null) }, { error -> onResult(false, error?.localizedMessage ?: "language model not supported") })
+    }
+
+    /** Applies a per-site tracker permission through the Gecko adapter boundary. */
+    fun setTrackingProtectionAllowed(runtime: GeckoRuntime, allowed: Boolean): Boolean {
+        val permission = trackingPermission ?: return false
+        runtime.storageController.setPermission(permission, if (allowed)
+            GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+        else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+        return true
+    }
+
+    /** Returns a compact Shield log result without leaking GeckoSession into browser chrome. */
+    fun getContentBlockingLog(runtime: GeckoRuntime, onResult: (Int?, String?) -> Unit) {
+        runtime.getContentBlockingController().getLog(session).accept(
+            { entries -> onResult(entries?.size ?: 0, null) },
+            { error -> onResult(null, error?.localizedMessage ?: "Unknown error") }
+        )
     }
 
     /** Allows the existing Gecko delegates to keep the shared state snapshot current. */

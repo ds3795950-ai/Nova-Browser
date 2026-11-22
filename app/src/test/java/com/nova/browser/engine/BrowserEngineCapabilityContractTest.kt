@@ -1,0 +1,34 @@
+package com.nova.browser.engine
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BrowserEngineCapabilityContractTest {
+    @Test fun geckoAdvertisesItsNativeFeatureSet() {
+        val expected = setOf(BrowserEngineCapability.DOWNLOADS, BrowserEngineCapability.SITE_PERMISSIONS,
+            BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DESKTOP_MODE,
+            BrowserEngineCapability.TRANSLATION, BrowserEngineCapability.PASSWORD_AUTOFILL,
+            BrowserEngineCapability.NOVA_SHIELD, BrowserEngineCapability.EXTENSIONS)
+        assertTrue(BrowserEngineCapabilitySets.GECKOVIEW.containsAll(expected))
+    }
+    @Test fun cefriumDoesNotClaimGeckoOnlyFeatures() {
+        val unsupported = setOf(BrowserEngineCapability.TRANSLATION, BrowserEngineCapability.PASSWORD_AUTOFILL,
+            BrowserEngineCapability.NOVA_SHIELD, BrowserEngineCapability.EXTENSIONS)
+        unsupported.forEach { assertFalse("Cefrium must not advertise $it", it in BrowserEngineCapabilitySets.CEFRIUM) }
+    }
+    @Test fun cefriumAdvertisesImplementedCommonFeaturesAndProxy() {
+        val expected = setOf(BrowserEngineCapability.DOWNLOADS, BrowserEngineCapability.SITE_PERMISSIONS,
+            BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DESKTOP_MODE, BrowserEngineCapability.VPN_PROXY)
+        assertTrue(BrowserEngineCapabilitySets.CEFRIUM.containsAll(expected))
+    }
+    @Test fun privateAndGuestRemainOnGeckoForSavedLoginAutofill() {
+        listOf(BrowserProfileKind.PRIVATE, BrowserProfileKind.GUEST).forEach { profile ->
+            val route = BrowserEngineCapabilityPolicy.resolve(BrowserEngineType.GECKOVIEW, profile,
+                BrowserEngineCapability.PASSWORD_AUTOFILL, BrowserEngineCapabilitySets.GECKOVIEW)
+            assertEquals(BrowserEngineType.GECKOVIEW, route.engine)
+            assertFalse(route.requiresSwitch)
+        }
+    }
+}
