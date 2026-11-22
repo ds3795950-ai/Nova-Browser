@@ -57,32 +57,6 @@ class NovaDownloadManager(
 
     init { loadRecords() }
 
-    /** Records a file already published by an engine into the public Downloads collection. */
-    @Synchronized fun registerCompleted(
-        url: String,
-        fileName: String,
-        mimeType: String,
-        savedUri: String,
-        bytes: Long
-    ) {
-        val parsedUrl = runCatching { URL(url) }.getOrNull()
-        val safeUrl = parsedUrl?.takeIf { it.protocol == "http" || it.protocol == "https" }?.toString().orEmpty()
-        val uri = Uri.parse(savedUri)
-        require(uri.scheme == "content") { "Completed download must be published through Android storage" }
-        val safeName = sanitize(fileName).ifBlank { "nova-download.bin" }
-        val size = bytes.coerceAtLeast(0L)
-        put(Item(
-            id = UUID.randomUUID().toString(),
-            url = safeUrl.take(8192),
-            fileName = safeName,
-            mimeType = mimeType.take(128).ifBlank { "application/octet-stream" },
-            downloaded = size,
-            total = size,
-            state = "COMPLETE",
-            savedUri = uri.toString()
-        ))
-    }
-
     @Synchronized fun items(): List<Item> = records.values.toList().reversed()
 
     @Synchronized private fun put(item: Item) {
@@ -124,17 +98,20 @@ class NovaDownloadManager(
 
     /** Records a file already downloaded by a browser engine and published to MediaStore. */
     fun registerCompleted(url: String, fileName: String, mimeType: String, savedUri: String, bytes: Long): String {
-        require(savedUri.isNotBlank()) { "A published download URI is required" }
+        val parsedUrl = runCatching { URL(url) }.getOrNull()
+        val safeUrl = parsedUrl?.takeIf { it.protocol == "http" || it.protocol == "https" }?.toString().orEmpty()
+        val uri = Uri.parse(savedUri)
+        require(uri.scheme == "content") { "A published Android Downloads URI is required" }
         val id = "engine-${UUID.randomUUID()}"
         put(Item(
             id = id,
-            url = url,
-            fileName = sanitize(fileName),
-            mimeType = mimeType.ifBlank { "application/octet-stream" },
+            url = safeUrl.take(8192),
+            fileName = sanitize(fileName).ifBlank { "nova-download.bin" },
+            mimeType = mimeType.take(128).ifBlank { "application/octet-stream" },
             downloaded = bytes.coerceAtLeast(0L),
             total = bytes.coerceAtLeast(0L),
             state = "COMPLETE",
-            savedUri = savedUri
+            savedUri = uri.toString()
         ))
         return id
     }

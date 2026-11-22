@@ -133,7 +133,7 @@ class MainActivity : ComponentActivity() {
     private var guestContextId: String = ""
     private var guestTorStartPending: Boolean = false
     private val novaDownloads: NovaDownloadManager by lazy {
-        NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
+        NovaDownloadManager(this, "normal") { items -> runOnUiThread { updateDownloadSummary(items) } }
             .also { it.resumeInterrupted() }
     }
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
