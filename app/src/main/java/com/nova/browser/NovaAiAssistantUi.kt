@@ -82,6 +82,8 @@ internal class NovaAiSecureStore(context:Context) {
     fun clear(){p.edit().remove("history").commit()}
 }
 
+internal class NovaAiUsageLimitException(detail: String) : Exception(detail)
+
 internal object NovaAiApi {
     private val pool=Executors.newFixedThreadPool(2)
     private val main=Handler(Looper.getMainLooper())
@@ -95,7 +97,13 @@ internal object NovaAiApi {
             if(body!=null){c.doOutput=true;c.setRequestProperty("Content-Type","application/json");c.outputStream.use{it.write(body.toString().toByteArray(StandardCharsets.UTF_8))}}
             val code=c.responseCode;val raw=(if(code in 200..299)c.inputStream else c.errorStream)?.bufferedReader()?.use{it.readText()}.orEmpty()
             val j=runCatching{JSONObject(raw)}.getOrElse{JSONObject()}
-            if(code !in 200..299) error("Provider API error ($code): ${j.optJSONObject("error")?.optString("message")?:j.optString("message").ifBlank{"Request failed"}}")
+            if(code !in 200..299) {
+                val e=j.optJSONObject("error")
+                val message=e?.optString("message")?.takeIf{it.isNotBlank()} ?: j.optString("message").ifBlank{"Request failed"}
+                val errorCode=(e?.optString("code").orEmpty()+" "+e?.optString("type").orEmpty()+" "+e?.optString("status").orEmpty()+" "+j.optString("status")).lowercase()
+                if(code==429 || errorCode.contains("rate_limit") || errorCode.contains("resource_exhausted") || errorCode.contains("insufficient_quota") || errorCode.contains("quota_exceeded")) throw NovaAiUsageLimitException(message)
+                error("Provider API error ($code): $message")
+            }
             return j
         } finally {c.disconnect()}
     }
@@ -237,22 +245,9 @@ internal class NovaAiAssistantUi(
         providerRow.addView(providers, LinearLayout.LayoutParams(0, dp(46), 1f))
         root.addView(providerRow)
 
-        val modelRow = LinearLayout(context).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(2), dp(7), dp(2), dp(7))
-        }
         models = Spinner(context)
         modelAdapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(model))
         models.adapter = modelAdapter
-        modelRow.addView(label("MODEL", 9f, muted, true).apply {
-            setPadding(dp(5), 0, dp(8), 0)
-        })
-        modelRow.addView(models, LinearLayout.LayoutParams(0, dp(42), 1f))
-        modelRow.addView(action("↻") { refreshModels() }, LinearLayout.LayoutParams(dp(44), dp(40)))
-        modelRow.addView(action("Key") { editKey() }, LinearLayout.LayoutParams(dp(54), dp(40)).apply {
-            leftMargin = dp(6)
-        })
-        root.addView(modelRow)
 
         status = label("", 11f, muted).apply {
             setPadding(dp(5), 0, dp(5), dp(7))
@@ -301,12 +296,23 @@ internal class NovaAiAssistantUi(
             leftMargin = dp(6)
         })
         composerActions.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+        composer.addView(composerActions)
+
+        val modelActions = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(7), 0, 0)
+        }
+        modelActions.addView(label("MODEL", 9f, muted, true).apply { setPadding(dp(4), 0, dp(6), 0) })
+        models.background = rounded(raised, 10, line)
+        models.setPadding(dp(5), 0, dp(5), 0)
+        modelActions.addView(models, LinearLayout.LayoutParams(0, dp(40), 1f))
+        modelActions.addView(action("↻") { refreshModels() }, LinearLayout.LayoutParams(dp(42), dp(38)).apply { leftMargin = dp(5) })
         val sendButton = action("↑ Send") { send() }.apply {
             setTextColor(bg)
             background = rounded(accent, 12)
         }
-        composerActions.addView(sendButton, LinearLayout.LayoutParams(dp(82), dp(40)))
-        composer.addView(composerActions)
+        modelActions.addView(sendButton, LinearLayout.LayoutParams(dp(76), dp(40)).apply { leftMargin = dp(6) })
+        composer.addView(modelActions)
         root.addView(composer, LinearLayout.LayoutParams(-1, -2).apply {
             topMargin = dp(8)
         })
@@ -347,8 +353,8 @@ internal class NovaAiAssistantUi(
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(30), dp(12), dp(20))
         }
-        welcome.addView(label("What are we working on?", 23f, primary, true))
-        welcome.addView(label("Ask questions, explore a page, or work through an idea.", 13f, muted).apply {
+        welcome.addView(label("Ask Nova anything", 21f, primary, true))
+        welcome.addView(label("Explore a webpage, research a topic, or get help writing.", 13f, muted).apply {
             setPadding(0, dp(7), 0, dp(18))
         })
         listOf("Explain this webpage", "Help me research a topic", "Write or improve text").forEach { prompt ->
@@ -368,24 +374,16 @@ internal class NovaAiAssistantUi(
     }
 
     private fun showWorkspaceMenu() {
-        val items = arrayOf("What are we working on?", "AI history", "Current conversation", "New chat", "Manage API key", "Refresh model list")
+        val items = arrayOf("AI history", "Current conversation", "New chat", "API key", "Refresh model list")
         AlertDialog.Builder(context).setTitle("Nova AI workspace").setItems(items) { _, which ->
             when (which) {
-                0 -> showWorkspaceHome()
-                1 -> historyDialog()
-                2 -> showCurrentConversation()
-                3 -> newChat()
-                4 -> editKey()
-                5 -> refreshModels()
+                0 -> historyDialog()
+                1 -> showCurrentConversation()
+                2 -> newChat()
+                3 -> editKey()
+                4 -> refreshModels()
             }
         }.show()
-    }
-
-    private fun showWorkspaceHome() {
-        // Bring the welcome/suggestion panel back without deleting the active conversation.
-        feed.removeAllViews()
-        showWelcome()
-        status.text = if (messages.isEmpty()) "Ready for a new task" else "Workspace home · conversation preserved"
     }
 
     private fun showCurrentConversation() {
@@ -516,9 +514,18 @@ internal class NovaAiAssistantUi(
                 render(reply)
                 if (persistHistory) runCatching { store.append(reply) }
                 status.text = "${provider.label} · ${model}"
-            }.onFailure {
-                status.text = "Request failed"
-                notify(it.message ?: "AI request failed")
+            }.onFailure { failure ->
+                if (failure is NovaAiUsageLimitException) {
+                    status.text = "Usage limit reached · ${provider.label}"
+                    AlertDialog.Builder(context)
+                        .setTitle("Model temporarily unavailable")
+                        .setMessage("The selected model or API account has reached its current usage limit or quota. Wait for the provider's limit to reset, check your billing/usage settings, or choose another available model.\n\nProvider details: ${failure.message.orEmpty()}")
+                        .setPositiveButton("OK", null)
+                        .show()
+                } else {
+                    status.text = "Request failed"
+                    notify(failure.message ?: "AI request failed")
+                }
             }
         }
     }
