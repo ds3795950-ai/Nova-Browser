@@ -1854,7 +1854,6 @@ class MainActivity : ComponentActivity() {
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession> {
                 val source = tabs.firstOrNull { it.session === session } ?: return GeckoResult.fromValue(null)
-                if (!siteSettingAllowed(BrowserEngineType.GECKOVIEW, uri, "popups", false)) return GeckoResult.fromValue(null)
                 val newSettings = GeckoSessionSettings.Builder()
                     .usePrivateMode(source.isPrivate || source.isGuest)
                     .contextId(if (source.isGuest) guestContextId else null)
