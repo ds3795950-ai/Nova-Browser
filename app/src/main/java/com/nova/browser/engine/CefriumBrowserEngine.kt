@@ -315,12 +315,18 @@ class CefriumBrowserEngine(
 
     override fun goBack() {
         checkOpen()
-        if (currentState.canGoBack) browser.goBack()
+        if (currentState.canGoBack) {
+            applyHistoryDestinationSettings(-1)
+            browser.goBack()
+        }
     }
 
     override fun goForward() {
         checkOpen()
-        if (currentState.canGoForward) browser.goForward()
+        if (currentState.canGoForward) {
+            applyHistoryDestinationSettings(1)
+            browser.goForward()
+        }
     }
 
     override fun reload() {
@@ -433,6 +439,14 @@ class CefriumBrowserEngine(
         novaAddonScriptHandlers.clear()
         closed = true
         browser.close()
+    }
+
+    private fun applyHistoryDestinationSettings(offset: Int) {
+        val entries = runCatching { browser.getNavigationEntries() }.getOrNull().orEmpty()
+        val currentIndex = entries.indexOfFirst { it.current }
+        if (currentIndex < 0) return
+        val destinationUrl = entries.getOrNull(currentIndex + offset)?.url ?: return
+        applySiteSettingsForUrl(destinationUrl)
     }
 
     private fun applySiteSettingsForUrl(url: String) {
