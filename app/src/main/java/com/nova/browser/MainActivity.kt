@@ -876,7 +876,7 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.share_page) to { sharePage() }
             actions += getString(R.string.nova_shield) to { showShieldSettings() }
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
-            actions += getString(R.string.extensions) to { showExtensions() }
+            if (tab.engineType == BrowserEngineType.GECKOVIEW) actions += getString(R.string.extensions) to { showExtensions() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
             actions += getString(R.string.site_permissions) to { showSiteControls() }
             actions += getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
@@ -3379,6 +3379,10 @@ class MainActivity : ComponentActivity() {
 
     private fun showExtensions() {
         if (denyGuestAccess("Extensions")) return
+        if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
+            toast("Firefox extensions are available only while this tab uses GeckoView. Switch this tab to GeckoView to manage them.")
+            return
+        }
         val controller = runtime.getWebExtensionController()
         controller.list().accept({ extensions ->
             runOnUiThread {
@@ -3407,6 +3411,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun installExtensionPrompt() {
+        if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
+            toast("Firefox extensions can only be installed from a GeckoView tab")
+            return
+        }
         val input = EditText(this).apply { hint = "https://…/extension.xpi"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("Install signed extension")
             .setMessage("Enter an HTTPS .xpi URL. GeckoView verifies Mozilla signing and asks before granting permissions.")
@@ -3784,13 +3792,15 @@ class MainActivity : ComponentActivity() {
             getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
         ))
         val aboutActions = mutableListOf<Pair<String, () -> Unit>>(
-            getString(R.string.extensions) to { showExtensions() },
             getString(R.string.about_nova) to {
                 val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: getString(R.string.version_unknown)
                 AlertDialog.Builder(this).setTitle(getString(R.string.about_nova)).setMessage(getString(R.string.about_nova_version, version))
                     .setPositiveButton(android.R.string.ok, null).show()
             }
         )
+        if (currentTab()?.engineType == BrowserEngineType.GECKOVIEW) {
+            aboutActions.add(0, getString(R.string.extensions) to { showExtensions() })
+        }
         if (BuildConfig.DEBUG) aboutActions.add("Cefrium Engine Lab" to {
             runCatching { startActivity(Intent().setClassName(packageName, "$packageName.CefriumEngineProbeActivity")) }
                 .onFailure { toast("Engine Lab is unavailable in this build") }
