@@ -44,19 +44,22 @@ internal object CloudCrypto {
     }
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
+        require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
+        require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
         val salt = unb64(envelope.getString("salt"))
         val iv = unb64(envelope.getString("iv"))
-        require(salt.size == 16 && iv.size == 12) { "Invalid encrypted backup" }
+        val ciphertext = unb64(envelope.getString("ciphertext"))
+        require(salt.size == 16 && iv.size == 12 && ciphertext.size >= 16) { "Invalid encrypted backup" }
         val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
         val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
         spec.clearPassword()
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
-            String(cipher.doFinal(unb64(envelope.getString("ciphertext"))), Charsets.UTF_8)
+            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
         } finally { keyBytes.fill(0) }
     }
 }
