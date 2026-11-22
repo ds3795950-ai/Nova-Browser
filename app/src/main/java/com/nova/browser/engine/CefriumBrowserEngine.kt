@@ -43,13 +43,7 @@ class CefriumBrowserEngine(
     desktopMode: Boolean = false
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
-    override val capabilities = setOf(
-        BrowserEngineCapability.DOWNLOADS,
-        BrowserEngineCapability.SITE_PERMISSIONS,
-        BrowserEngineCapability.READER_MODE,
-        BrowserEngineCapability.DESKTOP_MODE,
-        BrowserEngineCapability.VPN_PROXY
-    )
+    override val capabilities = BrowserEngineCapabilitySets.CEFRIUM
     private val browser = CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()
@@ -146,6 +140,24 @@ class CefriumBrowserEngine(
         CefriumVpnController.registerProfile(profile)
     }
 
+    /** Loads trusted app-provided HTML under an explicit HTTP(S) origin (also used by tests). */
+    fun loadHtmlWithBaseUrl(html: String, baseUrl: String) {
+        checkOpen()
+        val parsed = Uri.parse(baseUrl)
+        require((parsed.scheme == "https" || parsed.scheme == "http") && !parsed.host.isNullOrBlank()) {
+            "HTML base URL must be an absolute HTTP(S) origin"
+        }
+        require(html.length <= MAX_READER_HTML_CHARS) { "HTML content exceeds Nova's safe rendering limit" }
+        browser.loadHtmlWithBaseUrl(html, baseUrl)
+    }
+
+    /** Executes a bounded script in the current page; callers must not pass untrusted code. */
+    fun evaluateJavaScript(script: String, callback: ValueCallback<String?>) {
+        checkOpen()
+        require(script.length <= MAX_SCRIPT_CHARS) { "JavaScript input is too large" }
+        browser.evaluateJavaScript(script, callback)
+    }
+
     fun setDesktopMode(enabled: Boolean) {
         checkOpen()
         browser.setUserAgentOverride(if (enabled) DESKTOP_USER_AGENT else null)
@@ -186,6 +198,7 @@ class CefriumBrowserEngine(
                 val title = payload.optString("title").ifBlank { "Reader view" }
                 val content = payload.optString("html")
                 check(content.isNotBlank()) { "No readable article content was found" }
+                check(content.length <= MAX_READER_HTML_CHARS) { "Article is too large for safe Reader Mode extraction" }
                 val safeBase = escapeHtml(originalUrl)
                 val html = buildString {
                     append("<!doctype html><html><head><meta charset=\"utf-8\">")
@@ -245,6 +258,8 @@ class CefriumBrowserEngine(
     }
 
     private companion object {
+        const val MAX_READER_HTML_CHARS = 1_500_000
+        const val MAX_SCRIPT_CHARS = 64_000
         const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
 

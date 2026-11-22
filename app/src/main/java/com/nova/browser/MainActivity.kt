@@ -37,6 +37,7 @@ import com.nova.browser.engine.BrowserEngineProfilePolicy
 import com.nova.browser.engine.BrowserEnginePreferenceStore
 import com.nova.browser.engine.BrowserEngine
 import com.nova.browser.engine.BrowserEngineCapability
+import com.nova.browser.engine.BrowserEngineCapabilityPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.BrowserProfileKind
@@ -85,6 +86,7 @@ class MainActivity : ComponentActivity() {
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
+    private val guestContextCleanupLock = Any()
     private val novaDownloads: NovaDownloadManager by lazy {
         NovaDownloadManager(this) { items -> runOnUiThread { updateDownloadSummary(items) } }
             .also { it.resumeInterrupted() }
@@ -176,10 +178,13 @@ class MainActivity : ComponentActivity() {
         runtime.settings.setLoginAutofillEnabled(true)
         configureExtensionPermissions()
         NovaBrowserVpnController.initialize(this, runtime)
+        // Retry every queued Guest-context deletion, plus the context left by a process death.
+        // Persist the replacement ID and cleanup queue before starting asynchronous deletion.
         val previousGuestContext = prefs.getString("guest_context_id", null)
-        if (!previousGuestContext.isNullOrBlank()) runtime.storageController.clearDataForSessionContext(previousGuestContext)
+        val contextsToClear = queueGuestContextCleanup(previousGuestContext.orEmpty())
         guestContextId = "nova-guest-${UUID.randomUUID()}"
-        prefs.edit().putString("guest_context_id", guestContextId).apply()
+        prefs.edit().putString("guest_context_id", guestContextId).commit()
+        contextsToClear.forEach(::clearGuestContextData)
         buildBrowserUi()
         restoreTabs()
         if (tabs.isEmpty()) createTab(false, HOME_URL)
@@ -1566,8 +1571,33 @@ class MainActivity : ComponentActivity() {
         val tab = currentTab() ?: return
         if (!tab.lastUrl.startsWith("http")) { toast("Open a webpage first"); return }
         val engine = runCatching { ensureBrowserEngine(tab) }.getOrNull()
-        if (engine == null || BrowserEngineCapability.TRANSLATION !in engine.capabilities) {
-            toast("Translation is unavailable in this browser engine")
+        if (engine == null) { toast("Browser engine is unavailable for translation"); return }
+        val profile = when {
+            tab.isGuest -> BrowserProfileKind.GUEST
+            tab.isPrivate -> BrowserProfileKind.PRIVATE
+            else -> BrowserProfileKind.NORMAL
+        }
+        val route = BrowserEngineCapabilityPolicy.resolve(
+            currentEngine = engine.type,
+            profile = profile,
+            required = BrowserEngineCapability.TRANSLATION,
+            currentCapabilities = engine.capabilities
+        )
+        if (!route.available) {
+            toast("Translation is unavailable: ${route.reason}")
+            return
+        }
+        if (route.requiresSwitch) {
+            AlertDialog.Builder(this)
+                .setTitle("Switch to GeckoView for translation?")
+                .setMessage("Translation is not supported by Cefrium. Nova must reload this tab in GeckoView. Cookies, website storage and sign-in sessions are not transferred; you may need to sign in again. The original Cefrium profile remains untouched.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Switch and translate") { _, _ ->
+                    if (currentTab() !== tab || tab.isPrivate || tab.isGuest) return@setPositiveButton
+                    switchCurrentTabToGecko("translation")
+                    translatePage()
+                }
+                .show()
             return
         }
         val languages = arrayOf(
@@ -1599,10 +1629,39 @@ class MainActivity : ComponentActivity() {
 
     private fun cleanupGuestContextIfIdle() {
         if (tabs.none { it.isGuest } && guestContextId.isNotBlank()) {
-            runtime.storageController.clearDataForSessionContext(guestContextId)
-            guestContextId = "nova-guest-${UUID.randomUUID()}"
-            prefs.edit().putString("guest_context_id", guestContextId).apply()
+            val oldContext = guestContextId
+            val nextContext = "nova-guest-${UUID.randomUUID()}"
+            // Queue the old ID before rotating the active Guest ID. A crash between these
+            // operations still leaves the old ID discoverable on the next launch.
+            queueGuestContextCleanup(oldContext)
+            prefs.edit().putString("guest_context_id", nextContext).commit()
+            guestContextId = nextContext
+            clearGuestContextData(oldContext)
         }
+    }
+
+    private fun queueGuestContextCleanup(contextId: String): Set<String> = synchronized(guestContextCleanupLock) {
+        val pending = prefs.getStringSet(KEY_GUEST_CONTEXT_CLEANUP_PENDING, emptySet()).orEmpty().toSet()
+        val updated = GuestContextCleanupPolicy.queue(pending, contextId)
+        if (updated != pending) prefs.edit().putStringSet(KEY_GUEST_CONTEXT_CLEANUP_PENDING, updated).commit()
+        updated
+    }
+
+    private fun completeGuestContextCleanup(contextId: String) = synchronized(guestContextCleanupLock) {
+        val pending = prefs.getStringSet(KEY_GUEST_CONTEXT_CLEANUP_PENDING, emptySet()).orEmpty().toSet()
+        val remaining = GuestContextCleanupPolicy.complete(pending, contextId)
+        if (remaining != pending) prefs.edit().putStringSet(KEY_GUEST_CONTEXT_CLEANUP_PENDING, remaining).commit()
+    }
+
+    private fun clearGuestContextData(contextId: String) {
+        if (contextId.isBlank()) return
+        runtime.storageController.clearDataForSessionContext(contextId).accept(
+            { _ -> completeGuestContextCleanup(contextId) },
+            { error ->
+                // Keep the ID queued. The next process launch retries it before a new Guest session.
+                android.util.Log.w("NovaGuestCleanup", "Guest context cleanup remains queued", error)
+            }
+        )
     }
 
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
@@ -2397,14 +2456,15 @@ class MainActivity : ComponentActivity() {
         tabs.forEach(::closeTabRuntime)
         tabs.clear()
         if (::runtime.isInitialized && guestContextId.isNotBlank()) {
-            // Guest data is ephemeral, but GeckoRuntime is process-wide and must not be
-            // shut down with an Activity. Downloads and a recreated Activity may still use it.
-            runtime.storageController.clearDataForSessionContext(guestContextId)
+            // Queue deletion before async cleanup so process death cannot lose the context ID.
+            queueGuestContextCleanup(guestContextId)
+            clearGuestContextData(guestContextId)
         }
         super.onDestroy()
     }
 
     companion object {
+        private const val KEY_GUEST_CONTEXT_CLEANUP_PENDING = "guest_context_cleanup_pending"
         @Volatile private var sharedRuntime: GeckoRuntime? = null
 
         private const val HOME_URL = "about:blank"
