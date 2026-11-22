@@ -152,9 +152,8 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
-                if (tab?.lastUrl == HOME_URL) finish()
-                else if (tab?.canGoBack == true) tab.browserEngine?.goBack()
-                else finish()
+                // Home is a real history entry: Back returns to the page left behind.
+                if (tab?.canGoBack == true) tab.browserEngine?.goBack() else finish()
             }
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
@@ -207,6 +206,8 @@ class MainActivity : ComponentActivity() {
         addressBar = EditText(this).apply {
             hint = "Search or enter address"
             isSingleLine = true
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             textSize = 15f
             setTextColor(0xFFFFFFFF.toInt())
             setHintTextColor(0xFFB9AEC8.toInt())
@@ -238,8 +239,8 @@ class MainActivity : ComponentActivity() {
         homeButton.minimumHeight = dp(48)
         addressRow.addView(homeButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         addressRow.addView(addressBar, LinearLayout.LayoutParams(0, dp(48), 1f))
-        searchEngineButton = actionButton("$searchEngine ▾") { chooseSearchEngine() }
-        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+        searchEngineButton = actionButton("${engineLabel()} ▾") { chooseSearchEngine() }
+        refreshSearchEngineButton()
         searchEngineButton.minWidth = dp(64)
         searchEngineButton.minimumWidth = dp(64)
         addressRow.addView(searchEngineButton, LinearLayout.LayoutParams(dp(72), dp(48)))
@@ -356,63 +357,61 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         root.requestFocus()
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        applySystemInsets()
     }
 
     private fun createHomePanel(): LinearLayout {
-        val panel = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(20), dp(28), dp(20), dp(20))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt())
-            )
         }
         val dragon = TextView(this).apply {
-            text = "🐉"
-            textSize = 58f
-            gravity = Gravity.CENTER
-            contentDescription = "Nova dragon emblem"
-            setPadding(0, 0, 0, dp(8))
+            text = "🐉"; textSize = 58f; gravity = Gravity.CENTER
+            contentDescription = "Nova dragon emblem"; setPadding(0, 0, 0, dp(8))
         }
         val title = TextView(this).apply {
-            text = "NOVA"
-            textSize = 32f
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.18f
-            setTextColor(0xFFF1E9FA.toInt())
-            gravity = Gravity.CENTER
+            text = "NOVA"; textSize = 32f; typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.18f; setTextColor(0xFFF1E9FA.toInt()); gravity = Gravity.CENTER
         }
         val subtitle = TextView(this).apply {
-            text = "Your browser. Your space."
-            textSize = 13f
-            setTextColor(0xFFB9AEC8.toInt())
-            gravity = Gravity.CENTER
+            text = "Your browser. Your space."; textSize = 13f
+            setTextColor(0xFFB9AEC8.toInt()); gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, dp(24))
         }
         val shortcutTitle = TextView(this).apply {
-            text = "QUICK ACCESS"
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.12f
-            setTextColor(0xFFD8CBE8.toInt())
-            gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, dp(8))
+            text = "QUICK ACCESS"; textSize = 11f; typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f; setTextColor(0xFFD8CBE8.toInt())
+            gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(8))
+        }
+        val shortcutRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+        }
+        shortcutRow.addView(actionButton("Google") { navigate("https://www.google.com") })
+        shortcutRow.addView(actionButton("YouTube") { navigate("https://m.youtube.com") })
+        shortcutRow.addView(actionButton("Wikipedia") { navigate("https://www.wikipedia.org") })
+        shortcutRow.addView(actionButton("GitHub") { navigate("https://github.com") })
+        val shortcutScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false; isFillViewport = true
+            addView(shortcutRow, android.view.ViewGroup.LayoutParams(-2, -2))
         }
         homeShortcuts = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+            addView(shortcutTitle, LinearLayout.LayoutParams(-1, -2))
+            addView(shortcutScroll, LinearLayout.LayoutParams(-1, -2))
         }
-        homeShortcuts.addView(actionButton("Google") { navigate("https://www.google.com") })
-        homeShortcuts.addView(actionButton("YouTube") { navigate("https://m.youtube.com") })
-        homeShortcuts.addView(actionButton("Wikipedia") { navigate("https://www.wikipedia.org") })
-        homeShortcuts.addView(actionButton("GitHub") { navigate("https://github.com") })
-        panel.addView(dragon)
-        panel.addView(title)
-        panel.addView(subtitle)
-        panel.addView(shortcutTitle)
-        panel.addView(homeShortcuts)
-        return panel
+        content.addView(dragon); content.addView(title); content.addView(subtitle)
+        content.addView(homeShortcuts, LinearLayout.LayoutParams(-1, -2))
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xFF171020.toInt(), 0xFF241532.toInt(), 0xFF100D15.toInt()))
+            addView(scroll, LinearLayout.LayoutParams(-1, -1))
+        }
     }
 
     private fun showHomeScreen() {
@@ -428,9 +427,48 @@ class MainActivity : ComponentActivity() {
             activeTab?.isPrivate == true -> "Private session"
             else -> "Ready · $searchEngine"
         }
-        searchEngineButton.text = "$searchEngine ▾"
-        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+        refreshSearchEngineButton()
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
+    }
+
+    private fun engineLabel(): String = when (searchEngine) {
+        "DuckDuckGo" -> "DDG"
+        "Brave Search" -> "Brave"
+        else -> searchEngine
+    }
+
+    private fun refreshSearchEngineButton() {
+        searchEngineButton.text = "${engineLabel()} ▾"
+        searchEngineButton.contentDescription = "Choose search engine. Current: $searchEngine"
+    }
+
+    private fun updateAddressBarPrivacy() {
+        val incognito = currentTab()?.let { it.isPrivate || it.isGuest } == true
+        val options = EditorInfo.IME_ACTION_GO or
+            (if (incognito) EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING else 0)
+        if (addressBar.imeOptions != options) addressBar.imeOptions = options
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applySystemInsets() {
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or
+                    android.view.WindowInsets.Type.displayCutout())
+                val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
+                view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            } else {
+                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            }
+            insets
+        }
+        root.requestApplyInsets()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.setSystemBarsAppearance(0,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+        }
     }
 
     private fun dismissAddressBarInput() {
@@ -443,9 +481,11 @@ class MainActivity : ComponentActivity() {
 
     private fun goHome() {
         currentTab()?.let { tab ->
+            val wasOnPage = tab.lastUrl != HOME_URL
             tab.lastUrl = HOME_URL
             tab.title = "Nova Home"
             tab.needsReload = false
+            if (wasOnPage) tab.browserEngine?.loadUrl(HOME_URL)
             if (GuestModePolicy.mayPersistBrowsingData(tab.isPrivate, tab.isGuest)) persistTabs()
         }
         showHomeScreen()
@@ -721,6 +761,7 @@ class MainActivity : ComponentActivity() {
         if (engine.type == BrowserEngineType.GECKOVIEW) engine.attachTo(browserView)
         showPrimaryEngineView(engine.view)
         engine.setActive(true, true)
+        updateAddressBarPrivacy()
     }
 
     private fun createGuestTab() {
@@ -885,6 +926,13 @@ class MainActivity : ComponentActivity() {
                 }
                 override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                     if (url.isNullOrBlank()) return
+                    if (url == HOME_URL) {
+                        tab.lastUrl = HOME_URL
+                        tab.title = "Nova Home"
+                        if (GuestModePolicy.mayPersistBrowsingData(tab.isPrivate, tab.isGuest)) persistTabs()
+                        if (currentTab() === tab) showHomeScreen()
+                        return
+                    }
                     tab.lastUrl = url
                     (tab.browserEngine as? GeckoViewBrowserEngine)?.let { engine ->
                         engine.updateState(engine.state.copy(url = url))
@@ -893,7 +941,8 @@ class MainActivity : ComponentActivity() {
                     tab.title = Uri.parse(url).host ?: url.take(48)
                     if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url, tab); persistTabs() }
                     if (currentTab() === tab) {
-                        addressBar.setText(url)
+                        if (homePanel.visibility == View.VISIBLE) showBrowserPage()
+                        if (!addressBar.hasFocus()) addressBar.setText(url)
                         pageStatus.text = when { tab.isGuest -> "Guest Mode · temporary data"; tab.isPrivate -> "Private session"; else -> "Secure browsing session" }
                     }
                 }
@@ -1117,6 +1166,7 @@ class MainActivity : ComponentActivity() {
 
     private fun reloadPage() {
         val tab = currentTab() ?: return
+        if (tab.lastUrl == HOME_URL) { toast("Nothing to reload on the home screen"); return }
         val restoring = tab.needsReload
         val engine = ensureBrowserEngine(tab)
         if (!restoring) engine.reload()
@@ -2571,7 +2621,7 @@ class MainActivity : ComponentActivity() {
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
         runtime.settings.setForceUserScalableEnabled(true)
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
-        searchEngineButton.text = "$searchEngine ▾"
+        refreshSearchEngineButton()
     }
 
     private fun JSONArray?.toStringSet(): Set<String> {
