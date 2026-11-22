@@ -89,16 +89,16 @@ internal class NovaExtensionManagerUi(
                     var updating = false
                     val check = CheckBox(activity).apply {
                         text = when {
-                            extension == null -> "\${addon.name} · Not installed"
-                            extension?.metaData?.enabled == true -> "\${addon.name} · On"
-                            else -> "\${addon.name} · Off"
+                            extension == null -> "${addon.name} · Not installed"
+                            extension?.metaData?.enabled == true -> "${addon.name} · On"
+                            else -> "${addon.name} · Off"
                         }
                         isChecked = extension?.metaData?.enabled == true
                         setOnCheckedChangeListener { _, enabled ->
                             if (updating) return@setOnCheckedChangeListener
                             val current = extension
                             if (current == null && enabled) {
-                                val url = "https://addons.mozilla.org/firefox/downloads/latest/\${addon.slug}/latest.xpi"
+                                val url = "https://addons.mozilla.org/firefox/downloads/latest/${addon.slug}/latest.xpi"
                                 geckoController.install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
                                     .accept({ installedExtension ->
                                         activity.runOnUiThread {
@@ -106,14 +106,14 @@ internal class NovaExtensionManagerUi(
                                                 updating = true
                                                 isChecked = false
                                                 updating = false
-                                                text = "\${addon.name} · Not installed"
-                                                showMessage("Could not install \${addon.name}")
+                                                text = "${addon.name} · Not installed"
+                                                showMessage("Could not install ${addon.name}")
                                             } else {
                                                 extension = installedExtension
                                                 installedByName[key] = installedExtension
                                                 configureDelegates(installedExtension)
-                                                text = "\${addon.name} · On"
-                                                showMessage("\${addon.name} installed and enabled")
+                                                text = "${addon.name} · On"
+                                                showMessage("${addon.name} installed and enabled")
                                             }
                                         }
                                     }, { error ->
@@ -121,8 +121,8 @@ internal class NovaExtensionManagerUi(
                                             updating = true
                                             isChecked = false
                                             updating = false
-                                            text = "\${addon.name} · Not installed"
-                                            showMessage("Could not install \${addon.name}: \${error?.localizedMessage ?: "Unknown error"}")
+                                            text = "${addon.name} · Not installed"
+                                            showMessage("Could not install ${addon.name}: ${error?.localizedMessage ?: "Unknown error"}")
                                         }
                                     })
                             } else if (current != null && enabled && current.metaData?.enabled != true) {
@@ -130,15 +130,15 @@ internal class NovaExtensionManagerUi(
                                     .accept({
                                         activity.runOnUiThread {
                                             configureDelegates(current)
-                                            text = "\${addon.name} · On"
-                                            showMessage("\${addon.name} enabled")
+                                            text = "${addon.name} · On"
+                                            showMessage("${addon.name} enabled")
                                         }
                                     }, { error ->
                                         activity.runOnUiThread {
                                             updating = true
                                             isChecked = false
                                             updating = false
-                                            showMessage("Could not enable \${addon.name}: \${error?.localizedMessage ?: "Unknown error"}")
+                                            showMessage("Could not enable ${addon.name}: ${error?.localizedMessage ?: "Unknown error"}")
                                         }
                                     })
                             } else if (current != null && !enabled && current.metaData?.enabled == true) {
@@ -146,15 +146,15 @@ internal class NovaExtensionManagerUi(
                                     .accept({
                                         activity.runOnUiThread {
                                             extensionController.remove(current.id)
-                                            text = "\${addon.name} · Off"
-                                            showMessage("\${addon.name} disabled")
+                                            text = "${addon.name} · Off"
+                                            showMessage("${addon.name} disabled")
                                         }
                                     }, { error ->
                                         activity.runOnUiThread {
                                             updating = true
                                             isChecked = true
                                             updating = false
-                                            showMessage("Could not disable \${addon.name}: \${error?.localizedMessage ?: "Unknown error"}")
+                                            showMessage("Could not disable ${addon.name}: ${error?.localizedMessage ?: "Unknown error"}")
                                         }
                                     })
                             }
@@ -171,7 +171,7 @@ internal class NovaExtensionManagerUi(
                     .show()
             }
         }, { error ->
-            activity.runOnUiThread { showMessage("Could not load recommended add-ons: \${error?.localizedMessage ?: "Unknown error"}") }
+            activity.runOnUiThread { showMessage("Could not load recommended add-ons: ${error?.localizedMessage ?: "Unknown error"}") }
         })
     }
 
