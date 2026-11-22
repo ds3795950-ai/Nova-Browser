@@ -287,6 +287,7 @@ internal class NovaBrowserUiController(
     }
 
     private fun createHomePanel(homeShortcuts: LinearLayout): LinearLayout {
+        val palette = NovaThemeManager.palette(context)
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
         val content = LinearLayout(context).apply {
