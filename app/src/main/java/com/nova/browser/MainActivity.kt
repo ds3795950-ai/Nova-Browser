@@ -2192,39 +2192,84 @@ class MainActivity : ComponentActivity() {
         historyExportLauncher.launch(intent)
     }
 
-    /** Chrome/Brave-style overflow menu for frequently used browser actions. */
+    /** Two-column, tile-based quick actions menu. */
     private fun showQuickSettings() {
         val guest = currentTab()?.isGuest == true
         val labels = if (guest) {
-            arrayOf("New guest tab", "Back", "Forward", "Reload", "Share page", "Reader view", "Translate page", "Nova Shield", "Quick settings help")
+            listOf("New guest tab", "Back", "Forward", "Reload", "Share page", "Reader view", "Translate page", "Nova Shield", "Quick settings help")
         } else {
-            arrayOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Site permissions", "Settings")
+            listOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Site permissions", "Settings")
+        }
+        val actions: (String) -> Unit = { label ->
+            when (label) {
+                "New tab" -> createTab(false, HOME_URL)
+                "New private tab" -> createTab(true, HOME_URL)
+                "New guest tab" -> createGuestTab()
+                "Back" -> goBack()
+                "Forward" -> goForward()
+                "Reload" -> reloadPage()
+                "Bookmarks" -> showBookmarks()
+                "History" -> showHistory()
+                "Downloads" -> showDownloads()
+                "Share page" -> sharePage()
+                "Desktop site" -> toggleDesktopSite()
+                "Reader view" -> openReaderMode()
+                "Translate page" -> translatePage()
+                "Nova Shield" -> showShieldSettings()
+                "AI Assistant" -> showAiAssistant()
+                "Extensions" -> showExtensions()
+                "Site permissions" -> showSiteControls()
+                "Settings" -> showSettings()
+                "Quick settings help" -> toast("Quick settings gives fast access to common browser actions")
+            }
+        }
+
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        val grid = GridLayout(this).apply {
+            columnCount = 2
+            useDefaultMargins = false
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        labels.forEach { label ->
+            val tile = TextView(this).apply {
+                text = label
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setTextColor(Color.BLACK)
+                setPadding(dp(8), dp(16), dp(8), dp(16))
+                minHeight = dp(64)
+                isClickable = true
+                isFocusable = true
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(242, 245, 249))
+                    cornerRadius = dp(12).toFloat()
+                    setStroke(dp(1), Color.rgb(220, 225, 232))
+                }
+                setOnClickListener {
+                    (it.parent?.parent as? AlertDialog)?.dismiss()
+                    actions(label)
+                }
+            }
+            val params = GridLayout.LayoutParams(
+                GridLayout.spec(GridLayout.UNDEFINED, 1f),
+                GridLayout.spec(GridLayout.UNDEFINED, 1f)
+            ).apply {
+                width = 0
+                height = GridLayout.LayoutParams.WRAP_CONTENT
+                setMargins(dp(5), dp(5), dp(5), dp(5))
+            }
+            grid.addView(tile, params)
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(grid)
         }
         AlertDialog.Builder(this)
             .setTitle("Quick settings")
-            .setItems(labels) { _, index ->
-                when (labels[index]) {
-                    "New tab" -> createTab(false, HOME_URL)
-                    "New private tab" -> createTab(true, HOME_URL)
-                    "New guest tab" -> createGuestTab()
-                    "Back" -> goBack()
-                    "Forward" -> goForward()
-                    "Reload" -> reloadPage()
-                    "Bookmarks" -> showBookmarks()
-                    "History" -> showHistory()
-                    "Downloads" -> showDownloads()
-                    "Share page" -> sharePage()
-                    "Desktop site" -> toggleDesktopSite()
-                    "Reader view" -> openReaderMode()
-                    "Translate page" -> translatePage()
-                    "Nova Shield" -> showShieldSettings()
-                    "AI Assistant" -> showAiAssistant()
-                    "Extensions" -> showExtensions()
-                    "Site permissions" -> showSiteControls()
-                    "Settings" -> showSettings()
-                    "Quick settings help" -> toast("Quick settings gives fast access to common browser actions")
-                }
-            }.show()
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun showSettings() {
