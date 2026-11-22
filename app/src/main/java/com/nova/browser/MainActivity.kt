@@ -5488,7 +5488,6 @@ private fun showForgotPassword(prefillEmail: String = "") {
     }
 
     @Synchronized
-    @Synchronized
     private fun performCloudSync(passphrase: CharArray) {
         try {
             val userId = cloudSync.signedInUserId() ?: throw IllegalStateException("Sign in to Nova Cloud first")
