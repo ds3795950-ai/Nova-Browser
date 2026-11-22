@@ -1,79 +1,10 @@
-package com.nova.browser.engine
+package com.nova.browser
 
-import android.view.View
+import org.junit.Assert.assertEquals
+import org.junit.Test
 
-/** Rendering engine implementations supported by Nova. */
-enum class BrowserEngineType {
-    GECKOVIEW,
-    CEFRIUM
-}
-
-/** A small, engine-neutral snapshot for the browser chrome. */
-data class BrowserEngineState(
-    val url: String? = null,
-    val title: String? = null,
-    val isLoading: Boolean = false,
-    val progress: Int = 0,
-    val canGoBack: Boolean = false,
-    val canGoForward: Boolean = false,
-    val error: String? = null
-)
-
-/**
- * Optional features available from a concrete engine adapter. These describe engine capability,
- * not permission or privacy policy; Nova must still enforce its own profile and user settings.
- */
-enum class BrowserEngineCapability {
-    DOWNLOADS,
-    SITE_PERMISSIONS,
-    READER_MODE,
-    DESKTOP_MODE,
-    VPN_PROXY,
-    TRANSLATION,
-    PASSWORD_AUTOFILL,
-    NOVA_SHIELD,
-    EXTENSIONS
-}
-
-fun interface BrowserEngineListener {
-    fun onStateChanged(state: BrowserEngineState)
-}
-
-/**
- * Engine boundary for one browser tab. Tab storage, history, bookmarks, Shield and policy stay
- * outside this interface in Nova's app-level services. Implementations own only engine resources.
- */
-interface BrowserEngine : AutoCloseable {
-    val type: BrowserEngineType
-    val view: View
-    val state: BrowserEngineState
-
-    /** Features supported by this engine implementation. */
-    val capabilities: Set<BrowserEngineCapability>
-        get() = emptySet()
-
-    /** Centralized feature check; callers must still enforce Nova's profile and user policies. */
-    fun supports(capability: BrowserEngineCapability): Boolean = capability in capabilities
-
-    fun loadUrl(url: String)
-    fun goBack()
-    fun goForward()
-    fun reload()
-    /** Attach an engine-owned view to a host pane. Engines with fixed views may ignore it. */
-    fun attachTo(view: View) {}
-
-    /** Detach the engine view without closing the tab or its browsing session. */
-    fun detach() {}
-
-    fun setActive(active: Boolean, focused: Boolean)
-    fun onHostPause()
-    fun onHostResume()
-
-    /** Releases the engine tab and its native resources. Safe to call more than once. */
-    override fun close()
-
-    @Test
-    fun duplicateTabIdsAreDeduplicatedBeforeApplyingTheLiveTabBudget() {
+class TabSessionRetentionPolicyTest {
+    @Test fun duplicateTabIdsAreDeduplicatedBeforeApplyingTheLiveTabBudget() {
         val retained = TabSessionRetentionPolicy.retainedTabIds(
             tabLastAccess = listOf("active" to 1L, "background" to 3L, "background" to 9L, "older" to 2L),
             activeTabId = "active",
@@ -83,4 +14,23 @@ interface BrowserEngine : AutoCloseable {
         assertEquals(setOf("active", "background"), retained)
     }
 
+    @Test fun activeAndSplitTabsAreAlwaysRetained() {
+        val retained = TabSessionRetentionPolicy.retainedTabIds(
+            tabLastAccess = listOf("active" to 1L, "split" to 2L, "recent" to 100L),
+            activeTabId = "active",
+            splitTabId = "split",
+            maxLiveTabs = 1
+        )
+        assertEquals(setOf("active", "split"), retained)
+    }
+
+    @Test fun mostRecentlyUsedBackgroundTabsWinRemainingSlots() {
+        val retained = TabSessionRetentionPolicy.retainedTabIds(
+            tabLastAccess = listOf("active" to 1L, "old" to 2L, "newer" to 9L, "middle" to 5L),
+            activeTabId = "active",
+            splitTabId = null,
+            maxLiveTabs = 3
+        )
+        assertEquals(setOf("active", "newer", "middle"), retained)
+    }
 }
