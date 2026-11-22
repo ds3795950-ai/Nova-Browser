@@ -1177,6 +1177,7 @@ class MainActivity : ComponentActivity() {
                 requestPermissions(missing.toTypedArray(), REQUEST_SITE_PERMISSIONS)
             }
 
+            @OptIn(org.mozilla.geckoview.ExperimentalGeckoViewApi::class)
             override fun onContentPermissionRequest(session: GeckoSession, perm: GeckoSession.PermissionDelegate.ContentPermission): GeckoResult<Int> {
                 if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
                 if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
