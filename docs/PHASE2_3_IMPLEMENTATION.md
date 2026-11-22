@@ -23,7 +23,7 @@ Branch: `feature/phase-1-dual-engine-foundation`
 - Cefrium surface browsers use the SDK's built-in file chooser for `<input type=file>`; Nova does not replace it with an unverified custom picker.
 
 ### Remaining production work
-- `MainActivity.BrowserTab` still retains a `GeckoSession?` for Gecko-specific delegates and features; the common interface is not yet the sole production tab owner.
+- `MainActivity.BrowserTab` now stores the engine-neutral `BrowserEngine?` and does not retain a `GeckoSession`. `MainActivity` still installs Gecko-specific delegates and uses a narrow Gecko-session accessor for features without cross-engine equivalents; moving those delegate responsibilities fully behind the Gecko adapter remains outstanding.
 - Split-pane can host either GeckoView or Cefrium in the secondary pane. Gecko-specific extension APIs, translation, Reader and some prompts remain engine-specific; keep those actions on GeckoView until capability adapters exist.
 - Add Cefrium equivalents for Nova Shield and Protected DNS before allowing Cefrium on protected routes. Cefrium downloads are now published to `Downloads/Nova` and registered in Nova's persisted download list. Cefrium password save/fill is not exposed by the current SDK's documented public API; origins with saved logins continue to use GeckoView's encrypted vault and autofill.
 - Private and Guest are both GeckoView-only. Do not add a Cefrium Private or Guest profile.
