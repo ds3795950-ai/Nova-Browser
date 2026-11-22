@@ -20,12 +20,3 @@ object BrowserEngineProfilePolicy {
 
     fun isEphemeral(profile: BrowserProfileKind): Boolean = profile != BrowserProfileKind.NORMAL
 }
-
-
-/** Cefrium 0.21.0 ships native libraries for these Android ABIs only. */
-object CefriumRuntimeAvailability {
-    private val supportedAbis = setOf("arm64-v8a", "x86_64")
-
-    fun supportsAny(deviceAbis: Iterable<String>): Boolean =
-        deviceAbis.any { it in supportedAbis }
-}

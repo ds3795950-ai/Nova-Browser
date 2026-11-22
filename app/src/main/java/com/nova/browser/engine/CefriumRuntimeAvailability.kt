@@ -5,7 +5,7 @@ package com.nova.browser.engine
  * packaged by the app's Gradle ABI splits and the pinned Cefrium SDK release.
  */
 object CefriumRuntimeAvailability {
-    private val supportedAbis = setOf("arm64-v8a", "armeabi-v7a", "x86_64")
+    private val supportedAbis = setOf("arm64-v8a", "x86_64")
 
     fun supportsAny(deviceAbis: List<String>): Boolean =
         deviceAbis.any { it in supportedAbis }

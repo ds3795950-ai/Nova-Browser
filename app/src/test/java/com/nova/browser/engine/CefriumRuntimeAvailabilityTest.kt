@@ -5,27 +5,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CefriumRuntimeAvailabilityTest {
-    @Test fun supportsPackagedArm64Abi() {
-        assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("arm64-v8a")))
-    }
-
-    @Test fun supportsPackaged32BitArmAbi() {
-        assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("armeabi-v7a")))
-    }
-
-    @Test fun supportsPackagedX64EmulatorAbi() {
+    @Test fun acceptsEveryPublishedAbiEvenWhenOtherAbisPrecedeIt() {
+        assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("armeabi-v7a", "arm64-v8a")))
         assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("x86_64")))
     }
 
-    @Test fun rejectsUnsupportedOnlyAbis() {
+    @Test fun rejectsAbisWithoutCefriumNativeLibraries() {
+        assertFalse(CefriumRuntimeAvailability.supportsAny(listOf("armeabi-v7a")))
         assertFalse(CefriumRuntimeAvailability.supportsAny(listOf("x86", "riscv64")))
-    }
-
-    @Test fun acceptsDeviceWithAnySupportedAbi() {
-        assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("x86", "arm64-v8a")))
-    }
-
-    @Test fun rejectsEmptyAbiList() {
         assertFalse(CefriumRuntimeAvailability.supportsAny(emptyList()))
     }
 }

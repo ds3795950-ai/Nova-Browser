@@ -18,15 +18,3 @@ class BrowserEngineProfilePolicyTest {
     }
 }
 
-
-class CefriumRuntimeAvailabilityTest {
-    @Test fun supportsPublishedNativeAbis() {
-        assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("arm64-v8a", "armeabi-v7a")))
-        assertTrue(CefriumRuntimeAvailability.supportsAny(listOf("x86_64")))
-    }
-
-    @Test fun rejectsUnsupportedOrEmptyAbiLists() {
-        assertFalse(CefriumRuntimeAvailability.supportsAny(listOf("armeabi-v7a", "x86")))
-        assertFalse(CefriumRuntimeAvailability.supportsAny(emptyList()))
-    }
-}
