@@ -14,7 +14,7 @@ internal object CefriumVpnStatusPolicy {
         allWebRtcProtected: Boolean
     ): String {
         if (profileCount == 0) return if (!hasCredentials)
-            "Connecting to 1VPN… · new Cefrium profiles will receive a fail-closed proxy"
+            "Connecting to 1VPN… · fail-closed proxy target will be applied to new Cefrium profiles"
         else "Applying 1VPN proxy to Cefrium profiles…"
         if (!hasCredentials) return if (allTrafficBlocked && allWebRtcProtected)
             "1VPN credentials unavailable; Cefrium browsing is blocked by the fail-closed proxy"
