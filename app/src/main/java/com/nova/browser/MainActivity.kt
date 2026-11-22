@@ -1890,8 +1890,24 @@ class MainActivity : ComponentActivity() {
             store = NovaAiSecureStore(this),
             requestPageText = { callback ->
                 val active = currentTab()
-                if (active == null || active.lastUrl == HOME_URL || active.lastUrl.startsWith("about:")) callback(null)
-                else callback(aiPageText[active.id])
+                val session = active?.session
+                if (active == null || session == null || active.lastUrl == HOME_URL ||
+                    active.lastUrl.startsWith("about:") || active.lastUrl.startsWith("chrome:")) {
+                    callback(null)
+                } else {
+                    // Read on demand so summarisation works for pages that were already open
+                    // before the built-in reader extension finished installing.
+                    session.evaluateJS(
+                        "(function(){return document.body ? document.body.innerText.slice(0,24000) : '';})()"
+                    ).accept({ value ->
+                        runOnUiThread {
+                            val extracted = (value as? String)?.take(24000)?.takeIf { it.isNotBlank() }
+                            callback(extracted ?: aiPageText[active.id])
+                        }
+                    }, {
+                        runOnUiThread { callback(aiPageText[active.id]) }
+                    })
+                }
             },
             persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
             notify = ::toast
@@ -2180,7 +2196,7 @@ class MainActivity : ComponentActivity() {
     private fun showQuickSettings() {
         val guest = currentTab()?.isGuest == true
         val labels = if (guest) {
-            arrayOf("New guest tab", "Back", "Forward", "Reload", "Share page", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Quick settings help")
+            arrayOf("New guest tab", "Back", "Forward", "Reload", "Share page", "Reader view", "Translate page", "Nova Shield", "Quick settings help")
         } else {
             arrayOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Password manager", "Site permissions", "Settings")
         }
