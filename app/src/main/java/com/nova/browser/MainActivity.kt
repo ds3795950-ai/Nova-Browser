@@ -110,7 +110,8 @@ class MainActivity : ComponentActivity() {
     private val uploadRequestCode = 4102
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
     private lateinit var addressBar: AutoCompleteTextView
-    private var addressSuggestionUrls: List<String> = emptyList()
+    private var addressSuggestionItems: List<BrowserSuggestion> = emptyList()
+    private lateinit var addressSuggestionsAdapter: ArrayAdapter<String>
     private lateinit var tabLabel: TextView
     private lateinit var pageStatus: TextView
     private lateinit var root: LinearLayout
@@ -155,6 +156,7 @@ class MainActivity : ComponentActivity() {
         var hasCrashed: Boolean = false,
         var isErrorPage: Boolean = false,
         var thumbnail: Bitmap? = null,
+        var engine: BrowserEngine? = null,
         var desktopSite: Boolean = false,
         var readerOriginalUrl: String? = null,
         var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
@@ -174,7 +176,7 @@ class MainActivity : ComponentActivity() {
                 val tab = currentTab()
                 if (findBar != null) { closeFindBar(); return }
                 if (splitTabId != null) { exitSplitScreen(); return }
-                if (tab?.canGoBack == true && homeScroll.visibility != View.VISIBLE) { tab.session?.goBack(); return }
+                if (tab?.canGoBack == true && homeScroll.visibility != View.VISIBLE) { tab.engine?.goBack(); return }
                 if (tab != null && tab.lastUrl != HOME_URL) { goHome(); return }
                 if (tabs.size > 1) { closeTabAt(activeIndex); return }
                 moveTaskToBack(true)
@@ -251,7 +253,7 @@ class MainActivity : ComponentActivity() {
             hint = getString(R.string.address_bar_hint)
             contentDescription = getString(R.string.address_bar_accessibility)
             isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_NO_AUTO_CORRECT
             textSize = 15f
             setTextColor(getColor(R.color.nova_text_primary))
             setHintTextColor(getColor(R.color.nova_text_secondary))
@@ -272,6 +274,23 @@ class MainActivity : ComponentActivity() {
                     true
                 } else false
             }
+        }
+        addressSuggestionsAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
+        addressBar.threshold = 1
+        addressBar.setAdapter(addressSuggestionsAdapter)
+        addressBar.setOnItemClickListener { _, _, position, _ ->
+            val selected = addressSuggestionItems.getOrNull(position) ?: return@setOnItemClickListener
+            addressBar.setText(selected.url)
+            addressBar.setSelection(addressBar.text.length)
+            addressBar.dismissDropDown()
+        }
+        addressBar.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateAddressSuggestions(s?.toString().orEmpty()) }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        addressBar.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) updateAddressSuggestions(addressBar.text?.toString().orEmpty()) else addressBar.dismissDropDown()
         }
         addressRow.minimumHeight = dp(48)
         addressBar.minimumHeight = dp(48)
@@ -337,9 +356,9 @@ class MainActivity : ComponentActivity() {
         }
         val secondaryControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(actionButton("Back") { tabs.firstOrNull { it.id == splitTabId }?.session?.goBack() })
-            addView(actionButton("Forward") { tabs.firstOrNull { it.id == splitTabId }?.session?.goForward() })
-            addView(actionButton("Reload") { tabs.firstOrNull { it.id == splitTabId }?.session?.reload() })
+            addView(actionButton("Back") { tabs.firstOrNull { it.id == splitTabId }?.engine?.goBack() })
+            addView(actionButton("Forward") { tabs.firstOrNull { it.id == splitTabId }?.engine?.goForward() })
+            addView(actionButton("Reload") { tabs.firstOrNull { it.id == splitTabId }?.engine?.reload() })
             addView(secondaryAddressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
             addView(actionButton("Close split") { exitSplitScreen() })
@@ -556,7 +575,6 @@ class MainActivity : ComponentActivity() {
         dismissAddressBarInput()
         val activeTab = currentTab()
         if (activeTab != null) updateTabChrome(activeTab)
-        tabLabel.text = getString(R.string.tab_home_suffix, tabLabel.text)
         resetPageStatus(when {
             activeTab?.isGuest == true -> getString(R.string.guest_session_status)
             activeTab?.isPrivate == true -> getString(R.string.private_session_status)
@@ -738,15 +756,15 @@ class MainActivity : ComponentActivity() {
             toast("Normal and Private tabs are unavailable in Guest Mode")
             return
         }
-        currentTab()?.session?.setActive(false)
-        currentTab()?.session?.setFocused(false)
+        currentTab()?.engine?.setActive(false)
+        currentTab()?.engine?.setFocused(false)
         val tab = BrowserTab(null, isPrivate, isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
         tabs.add(tab)
         activeIndex = tabs.lastIndex
         val session = ensureSession(tab)
         browserView.setSession(session)
-        session.setActive(true)
-        session.setFocused(true)
+        tab.engine?.setActive(true)
+        tab.engine?.setFocused(true)
         tab.lastAccess = System.nanoTime()
         if (!addressBar.hasFocus()) addressBar.setText(url)
         updateTabChrome(tab)
@@ -768,7 +786,10 @@ class MainActivity : ComponentActivity() {
     private fun tabKey(session: GeckoSession): String = tabs.firstOrNull { it.session === session }?.id ?: ""
 
     private fun ensureSession(tab: BrowserTab): GeckoSession {
-        tab.session?.let { return it }
+        tab.session?.let { existing ->
+            if (tab.engine == null) tab.engine = GeckoBrowserEngine(existing)
+            return existing
+        }
         val settings = GeckoSessionSettings.Builder()
             .usePrivateMode(tab.isPrivate || tab.isGuest)
             .contextId(if (tab.isGuest) guestContextId else null)
@@ -777,6 +798,7 @@ class MainActivity : ComponentActivity() {
             .build()
         val session = GeckoSession(settings)
         tab.session = session
+        tab.engine = GeckoBrowserEngine(session)
         configureSession(session, tab)
         session.open(runtime)
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
@@ -1230,6 +1252,7 @@ class MainActivity : ComponentActivity() {
                     title = getString(R.string.new_tab),
                     desktopSite = source.desktopSite
                 )
+                newTab.engine = GeckoBrowserEngine(newSession)
                 tabs.add(newTab)
                 activeIndex = tabs.lastIndex
                 configureSession(newSession, newTab)
@@ -1287,10 +1310,11 @@ class MainActivity : ComponentActivity() {
             .take(4).toSet()
         tabs.forEach { tab ->
             if (tab !in keep && tab.session != null && tab.id != splitTabId) {
-                tab.session?.setActive(false)
-                tab.session?.setFocused(false)
-                tab.session?.close()
+                tab.engine?.setActive(false)
+                tab.engine?.setFocused(false)
+                tab.engine?.close()
                 tab.session = null
+                tab.engine = null
                 tab.needsReload = true
             }
         }
@@ -1475,8 +1499,8 @@ class MainActivity : ComponentActivity() {
         }
         currentTab()?.let { previous ->
             if (homeScroll.visibility != View.VISIBLE) captureTabThumbnail(previous)
-            previous.session?.setActive(false)
-            previous.session?.setFocused(false)
+            previous.engine?.setActive(false)
+            previous.engine?.setFocused(false)
         }
         activeIndex = index
         val tab = tabs[index]
@@ -1484,8 +1508,8 @@ class MainActivity : ComponentActivity() {
         if (splitTabId == tab.id) exitSplitScreen()
         val session = ensureSession(tab)
         browserView.setSession(session)
-        session.setActive(true)
-        session.setFocused(true)
+        tab.engine?.setActive(true)
+        tab.engine?.setFocused(true)
         if (!addressBar.hasFocus()) addressBar.setText(tab.lastUrl)
         updateTabChrome(tab)
         resetPageStatus(when { tab.isGuest -> getString(R.string.guest_session_status); tab.isPrivate -> getString(R.string.private_session_status); else -> getString(R.string.normal_session_status) }, 0)
@@ -1524,8 +1548,8 @@ class MainActivity : ComponentActivity() {
 
     private fun exitSplitScreen() {
         val second = tabs.firstOrNull { it.id == splitTabId }
-        second?.session?.setFocused(false)
-        second?.session?.setActive(false)
+        second?.engine?.setFocused(false)
+        second?.engine?.setActive(false)
         secondaryPane.visibility = View.GONE
         splitTabId = null
         browserView.visibility = View.VISIBLE
@@ -1561,6 +1585,35 @@ class MainActivity : ComponentActivity() {
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
     }
 
+
+    private fun updateAddressSuggestions(query: String) {
+        if (!::addressBar.isInitialized || !::addressSuggestionsAdapter.isInitialized || !addressBar.hasFocus()) return
+        val typed = query.trim()
+        if (typed.isBlank()) {
+            addressSuggestionItems = emptyList()
+            addressSuggestionsAdapter.clear()
+            addressBar.dismissDropDown()
+            return
+        }
+        val candidates = mutableListOf<BrowserSuggestion>()
+        val tab = currentTab()
+        if (tab?.isPrivate != true && tab?.isGuest != true) {
+            readHistory().asSequence().take(80).forEach { entry ->
+                candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
+            }
+        }
+        readBookmarks().asSequence().take(80).forEach { entry ->
+            candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
+        }
+        val ranked = BrowserUiState.filterSuggestions(typed, candidates, 6)
+        val searchUrl = BrowserUrlResolver.resolve(typed, searchEngine)
+        val searchSuggestion = searchUrl?.let { BrowserSuggestion(getString(R.string.search_for_query, typed), it) }
+        addressSuggestionItems = (ranked + listOfNotNull(searchSuggestion)).distinctBy { it.url }.take(7)
+        addressSuggestionsAdapter.clear()
+        addressSuggestionsAdapter.addAll(addressSuggestionItems.map { it.label })
+        if (addressSuggestionItems.isNotEmpty()) addressBar.showDropDown() else addressBar.dismissDropDown()
+    }
+
     private fun submitAddressBar() {
         val query = addressBar.text?.toString()?.trim().orEmpty()
         if (query.isEmpty()) return
@@ -1589,20 +1642,20 @@ class MainActivity : ComponentActivity() {
     private fun goBack() {
         val tab = currentTab() ?: return
         if (homeScroll.visibility == View.VISIBLE) { toast("Already on the home screen"); return }
-        if (tab.canGoBack) tab.session?.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
+        if (tab.canGoBack) tab.engine?.goBack() else if (tab.lastUrl == HOME_URL) toast("Already on the home screen") else toast("No previous page")
     }
 
     private fun goForward() {
         val tab = currentTab() ?: return
         if (homeScroll.visibility == View.VISIBLE) { toast("Open a page before going forward"); return }
-        if (tab.canGoForward) tab.session?.goForward() else toast("No next page")
+        if (tab.canGoForward) tab.engine?.goForward() else toast("No next page")
     }
 
-    private fun reloadPage() { currentTab()?.let { ensureSession(it).reload() } }
+    private fun reloadPage() { currentTab()?.let { ensureSession(it); it.engine?.reload() } }
 
     private fun toggleStopReload() {
         val tab = currentTab() ?: return
-        if (tab.isLoading) tab.session?.stop() else ensureSession(tab).reload()
+        if (tab.isLoading) tab.engine?.stop() else { ensureSession(tab); tab.engine?.reload() }
     }
 
     private fun captureTabThumbnail(tab: BrowserTab) {
@@ -1735,7 +1788,8 @@ class MainActivity : ComponentActivity() {
         val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
         if (removed.id == splitTabId) exitSplitScreen()
-        removed.session?.close()
+        removed.engine?.close()
+        removed.session = null; removed.engine = null
         removed.thumbnail?.recycle(); removed.thumbnail = null
         cleanupGuestContextIfIdle()
         if (removed.isGuest && wasGuestActive && tabs.none { it.isGuest }) {
@@ -2284,8 +2338,8 @@ class MainActivity : ComponentActivity() {
         val sites = desktopSites
         tab.desktopSite = if (host in sites) { sites.remove(host); false } else { sites.add(host); true }
         prefs.edit().putStringSet("desktop_sites", sites).apply()
-        tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
-        tab.session = null; tab.needsReload = true
+        tab.engine?.setActive(false); tab.engine?.setFocused(false); tab.engine?.close()
+        tab.session = null; tab.engine = null; tab.needsReload = true
         val session = ensureSession(tab)
         browserView.setSession(session); session.setActive(true); session.setFocused(true)
         session.loadUri(tab.lastUrl)
@@ -2361,8 +2415,8 @@ class MainActivity : ComponentActivity() {
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
         val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
         if (desired != tab.desktopSite) {
-            tab.session?.let { it.setActive(false); it.setFocused(false); it.close() }
-            tab.session = null
+            tab.engine?.setActive(false); tab.engine?.setFocused(false); tab.engine?.close()
+            tab.session = null; tab.engine = null
             tab.desktopSite = desired
             tab.needsReload = false
             val newSession = ensureSession(tab)
@@ -2389,7 +2443,8 @@ class MainActivity : ComponentActivity() {
         guestIndices.forEach { index ->
             val removed = tabs.removeAt(index)
             if (removed.id == splitTabId) exitSplitScreen()
-            removed.session?.close()
+            removed.engine?.close()
+            removed.session = null; removed.engine = null
         }
         activeIndex = tabs.indexOfFirst { it.id == activeIdBeforeClose }.takeIf { it >= 0 } ?: (activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0))
         cleanupGuestContextIfIdle()
@@ -2863,7 +2918,8 @@ class MainActivity : ComponentActivity() {
                 tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
                     val removed = tabs.removeAt(index)
                     if (removed.id == splitTabId) exitSplitScreen()
-                    removed.session?.close()
+                    removed.engine?.close()
+                    removed.session = null; removed.engine = null
                     removed.thumbnail?.recycle(); removed.thumbnail = null
                 }
                 cleanupGuestContextIfIdle()
@@ -3141,13 +3197,13 @@ class MainActivity : ComponentActivity() {
         pendingFileResult = null
         persistTabs()
         if (isChangingConfigurations) {
-            tabs.forEach { it.session?.setFocused(false) }
+            tabs.forEach { it.engine?.setFocused(false) }
             retainedTabsForConfiguration = tabs.toList()
             retainedActiveIndex = activeIndex
             retainedSplitTabId = splitTabId
             retainedGuestContextId = guestContextId
         } else {
-            tabs.forEach { it.session?.close(); it.thumbnail?.recycle(); it.thumbnail = null }
+            tabs.forEach { it.engine?.close(); it.session = null; it.engine = null; it.thumbnail?.recycle(); it.thumbnail = null }
             if (::runtime.isInitialized && guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
         }
         tabs.clear()

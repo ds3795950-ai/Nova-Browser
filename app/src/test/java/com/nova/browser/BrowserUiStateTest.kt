@@ -4,6 +4,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class BrowserUiStateTest {
+    @Test fun suggestionsFilterRankAndDeduplicateLocalHistoryAndBookmarks() {
+        val candidates = listOf(
+            BrowserSuggestion("Example Docs", "https://example.com/docs"),
+            BrowserSuggestion("Example", "https://example.com"),
+            BrowserSuggestion("Other", "https://other.test"),
+            BrowserSuggestion("Example Docs duplicate", "https://example.com/docs")
+        )
+        assertEquals(
+            listOf("https://example.com", "https://example.com/docs"),
+            BrowserUiState.filterSuggestions("example", candidates).map { it.url }
+        )
+        assertEquals(emptyList<BrowserSuggestion>(), BrowserUiState.filterSuggestions(" ", candidates))
+    }
+
     @Test fun modeNumberingIsIndependentAcrossNormalPrivateAndGuestTabs() {
         val modes = listOf(BrowserMode.NORMAL, BrowserMode.PRIVATE, BrowserMode.NORMAL, BrowserMode.GUEST, BrowserMode.PRIVATE)
         assertEquals(2, BrowserUiState.modeOrdinal(modes, 2))

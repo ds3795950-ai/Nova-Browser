@@ -3,8 +3,26 @@ package com.nova.browser
 internal enum class BrowserMode { NORMAL, PRIVATE, GUEST }
 internal enum class BrowserSecurityState { SECURE, NOT_SECURE, CERTIFICATE_WARNING }
 internal data class BrowserStatusState(val text: String, val priority: Int)
+internal data class BrowserSuggestion(val label: String, val url: String)
 
 internal object BrowserUiState {
+    fun filterSuggestions(query: String, candidates: List<BrowserSuggestion>, limit: Int = 6): List<BrowserSuggestion> {
+        val needle = query.trim().lowercase()
+        if (needle.isBlank() || limit <= 0) return emptyList()
+        return candidates.asSequence()
+            .filter { it.label.contains(needle, ignoreCase = true) || it.url.contains(needle, ignoreCase = true) }
+            .distinctBy { it.url }
+            .sortedWith(compareBy<BrowserSuggestion> {
+                when {
+                    it.label.startsWith(needle, ignoreCase = true) -> 0
+                    it.url.startsWith(needle, ignoreCase = true) -> 1
+                    else -> 2
+                }
+            }.thenBy { it.label.lowercase() })
+            .take(limit)
+            .toList()
+    }
+
     fun modeFor(isPrivate: Boolean, isGuest: Boolean): BrowserMode = when {
         isGuest -> BrowserMode.GUEST
         isPrivate -> BrowserMode.PRIVATE
