@@ -15,7 +15,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 6 | `MainActivity.kt`, `BrowserUiState.kt` | Distinct Private and Guest mode accents/chips. |
 | 7 | `MainActivity.kt`, `NovaVpnFirewallActivity.kt` | Layout dimensions converted to density-aware values. |
 | 8 | `MainActivity.kt` | Search-engine selector uses content-based sizing rather than a clipped fixed width. |
-| 9 | `MainActivity.kt`, `ShortcutFaviconLoader.kt` | Home shortcut tiles load and cache the site's own HTTPS `/favicon.ico` with bounded response/bitmap sizes; initials remain as fallback. Fetching is skipped in Private and Guest modes; no third-party favicon proxy is used. |
+| 9 | `MainActivity.kt`, `ShortcutFaviconLoader.kt` | Home shortcut tiles load and cache only the same host's HTTPS `/favicon.ico`, with redirects disabled, bounded response/bitmap sizes, credential-bearing URLs rejected and non-default HTTPS ports preserved; initials remain as fallback. Fetching is skipped in Private and Guest modes; no third-party favicon proxy is used. |
 | 10 | `MainActivity.kt`, `res/drawable-nodpi/ic_kali_dragon.webp` | Scrollable home panel and attributed Kali-dragon artwork with content description. |
 | 11 | `MainActivity.kt` | Tab actions use a horizontally scrollable row and are mode-aware. |
 | 12 | `MainActivity.kt` | Slim address chrome and bottom navigation row; secondary actions moved to overflow. |
@@ -26,7 +26,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 17 | `AndroidManifest.xml`, `MainActivity.kt` | `adjustResize` and unchanged soft-input state. |
 | 18 | `MainActivity.kt` | Gecko progress delegate drives the progress bar and loading/error state; stop/reload is available from the browser menu. |
 | 19 | `MainActivity.kt`, `BrowserUiState.kt` | Security state reflects secure, certificate-warning and not-secure pages; host is emphasized. |
-| 20 | `MainActivity.kt`, `RemoteSearchSuggestions.kt`, `res/values/strings.xml` | Local suggestions remain default. An explicit Privacy setting can opt into Google, Bing or DuckDuckGo suggestions; typed text is sent only to the selected provider while a Normal tab is focused. Private/Guest modes never request remote suggestions; unsupported providers return none. |
+| 20 | `MainActivity.kt`, `RemoteSearchSuggestions.kt`, `res/values/strings.xml` | Local suggestions remain default. An explicit Privacy setting can opt into Google, Bing or DuckDuckGo suggestions; typed text is sent only to the selected provider while the same Normal tab remains focused. The debounce callback rechecks consent, tab identity, mode, query and selected engine immediately before network I/O. Private/Guest modes never request remote suggestions; unsupported providers return none. |
 | 21 | `MainActivity.kt` | Page title and user rename override are stored separately. |
 | 22 | `MainActivity.kt` | Bookmark control reflects the current URL's saved state. |
 | 23 | `res/drawable/ic_*.xml`, `MainActivity.kt`, `res/values/strings.xml` | Main navigation icons use vector resources and descriptive accessibility labels. |
@@ -60,7 +60,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 
 ## Engine boundary
 
-`BrowserEngine` and `GeckoBrowserEngine` isolate browser-chrome navigation and lifecycle calls; `BrowserEngineCallbacks` now defines the event contract future adapters must translate. The repository and Gradle dependency graph contain no Cefrium SDK/module or artifact coordinates. A working Cefrium adapter, rendering surface, and migration of Gecko delegates cannot be honestly implemented or tested without that SDK/API. Normal tabs therefore remain Gecko-backed in this branch; the requested Gecko-only Private/Guest versus Cefrium normal-tab split is still blocked.
+`BrowserEngine` and `GeckoBrowserEngine` in this UI branch isolate browser-chrome navigation and lifecycle calls; `BrowserEngineCallbacks` defines the event contract. The separate `feature/phase-1-dual-engine-foundation` branch contains the Cefrium SDK/module and adapter, with Private/Guest locked to GeckoView. These branches diverged from `main`; GitHub rejected a direct merge into an isolated integration branch because of overlapping `MainActivity.kt`, manifest, downloads, sync and VPN changes. A manual three-way integration is still required before the UI polish and dual-engine architecture coexist in one build. This branch-local note does not mean the repository lacks a Cefrium implementation.
 
 ## Automated validation
 
