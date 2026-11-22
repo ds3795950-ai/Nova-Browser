@@ -1878,25 +1878,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showAiAssistant() {
-        val providers = AiAssistantRouter.Provider.values()
-        AlertDialog.Builder(this).setTitle("Choose browser AI")
-            .setItems(providers.map { it.label }.toTypedArray()) { _, selected ->
-                val provider = providers[selected]
-                val prompt = EditText(this).apply { hint = "Ask ${provider.label} anythingâ¦"; minLines = 2; setSingleLine(false) }
-                val includePage = CheckBox(this).apply { text = "Include current page URL in the prompt"; isChecked = false }
-                val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 0); addView(prompt); addView(includePage) }
-                AlertDialog.Builder(this).setTitle("Ask ${provider.label}")
-                    .setMessage("Your prompt will be sent to ${provider.label} when you press Send. If you enable the checkbox, Nova also includes only the current page URLânot the page contents.")
-                    .setView(content)
-                    .setPositiveButton("Send") { _, _ ->
-                        val question = prompt.text.toString().trim()
-                        if (question.isBlank()) { toast("Enter a question first"); return@setPositiveButton }
-                        val tab = currentTab()
-                        val page = if (includePage.isChecked) tab?.lastUrl else null
-                        val url = AiAssistantRouter.buildUrl(provider, question, page)
-                        createTab(isPrivate = tab?.isPrivate == true, url = url, isGuest = tab?.isGuest == true)
-                    }.setNegativeButton("Cancel", null).show()
-            }.setNegativeButton("Cancel", null).show()
+        if (denyGuestAccess("AI Assistant")) return
+        val tab = currentTab()
+        NovaAiAssistantUi(
+            context = this,
+            store = NovaAiSecureStore(this),
+            requestPageText = { callback ->
+                val active = currentTab()
+                val session = active?.session
+                if (session == null || active.lastUrl == HOME_URL || active.lastUrl.startsWith("about:")) callback(null)
+                else session.evaluateJS("(function(){return document.body ? document.body.innerText.slice(0,24000) : ''})()")
+                    .accept({ value -> callback(value?.toString()) }, { callback(null) })
+            },
+            persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
+            notify = ::toast
+        ).show()
     }
 
     private fun showExtensions() {

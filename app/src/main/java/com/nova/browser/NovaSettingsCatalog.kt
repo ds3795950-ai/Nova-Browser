@@ -13,7 +13,7 @@ internal object NovaSettingsCatalog {
     fun ownerItems(shortcutState: String): Array<String> = arrayOf(
         "Choose search engine", "Toggle home shortcuts (currently $shortcutState)",
         "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode",
-        "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager",
+        "Exit Reader view", "Nova Shield", "AI Assistant", "Extensions", "Password manager",
         "Site permissions", "Accessibility", "Export history", "About Nova",
         "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "Browser proxy & Shield · 1VPN"
     )
