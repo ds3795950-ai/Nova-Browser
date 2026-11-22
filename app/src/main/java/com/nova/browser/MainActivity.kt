@@ -957,6 +957,7 @@ class MainActivity : ComponentActivity() {
             .contextId(if (tab.isGuest) guestContextId else null)
             .userAgentMode(if (tab.desktopSite) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(if (tab.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+            .allowJavascript(isJavaScriptAllowed(BrowserEngineType.GECKOVIEW, tab.lastUrl))
             .build()
         val session = GeckoSession(settings)
         tab.session = session
@@ -1003,6 +1004,7 @@ class MainActivity : ComponentActivity() {
             onPermissionRequestCanceled = { cancelCefriumPermissionPrompt() },
             desktopMode = tab.desktopSite,
             existingBrowser = existingBrowser,
+            javaScriptEnabledForUrl = { url -> isJavaScriptAllowed(BrowserEngineType.CEFRIUM, url) },
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread {
                     if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(origin, permissions.toSet(), respond)
@@ -1321,6 +1323,7 @@ class MainActivity : ComponentActivity() {
         }
         selectEngineForNavigation(tab, url)
         val engine = ensureBrowserEngine(tab)
+        applyJavaScriptSetting(tab, url, reload = false)
         if (currentTab() === tab) {
             if (engine.type == BrowserEngineType.GECKOVIEW) engine.attachTo(browserView)
             showPrimaryEngineView(engine.view)
@@ -1850,6 +1853,7 @@ class MainActivity : ComponentActivity() {
                     .contextId(if (source.isGuest) guestContextId else null)
                     .userAgentMode(if (source.desktopSite) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
                     .viewportMode(if (source.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+                    .allowJavascript(isJavaScriptAllowed(BrowserEngineType.GECKOVIEW, uri))
                     .build()
                 val newSession = GeckoSession(newSettings)
                 val newTab = BrowserTab(
@@ -1875,6 +1879,10 @@ class MainActivity : ComponentActivity() {
                 if (!newTab.isPrivate && !newTab.isGuest) persistTabs()
                 showBrowserPage()
                 return GeckoResult.fromValue(newSession)
+            }
+            override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
+                session.settings.setAllowJavascript(isJavaScriptAllowed(BrowserEngineType.GECKOVIEW, request.uri))
+                return null
             }
             override fun onLoadError(session: GeckoSession, uri: String?, error: org.mozilla.geckoview.WebRequestError): GeckoResult<String> {
                 val failed = uri?.takeIf { it.isNotBlank() } ?: tab.lastUrl
@@ -3682,17 +3690,51 @@ class MainActivity : ComponentActivity() {
         toast("$label copied · clear your clipboard when finished")
     }
 
+    private fun javaScriptPreferenceKey(engine: BrowserEngineType, url: String): String? {
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val host = uri.host?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        val origin = "$scheme://$host${if (uri.port > 0) ":${uri.port}" else ""}"
+        return "javascript_enabled_${engine.name.lowercase()}_${Uri.encode(origin)}"
+    }
+
+    private fun isJavaScriptAllowed(engine: BrowserEngineType, url: String): Boolean {
+        val key = javaScriptPreferenceKey(engine, url) ?: return true
+        return prefs.getBoolean(key, true)
+    }
+
+    private fun applyJavaScriptSetting(tab: BrowserTab, url: String, reload: Boolean) {
+        val enabled = isJavaScriptAllowed(tab.engineType, url)
+        when (tab.engineType) {
+            BrowserEngineType.GECKOVIEW -> tab.session?.settings?.setAllowJavascript(enabled)
+            BrowserEngineType.CEFRIUM -> (tab.browserEngine as? CefriumBrowserEngine)?.setJavaScriptEnabled(enabled)
+        }
+        if (reload && tab.lastUrl.startsWith("http", true)) tab.browserEngine?.reload()
+    }
+
+    private fun toggleJavaScriptForCurrentSite(tab: BrowserTab) {
+        val key = javaScriptPreferenceKey(tab.engineType, tab.lastUrl)
+        if (key == null) { toast("JavaScript controls are available on HTTP and HTTPS websites"); return }
+        val nextEnabled = !isJavaScriptAllowed(tab.engineType, tab.lastUrl)
+        prefs.edit().putBoolean(key, nextEnabled).apply()
+        applyJavaScriptSetting(tab, tab.lastUrl, reload = true)
+        toast("JavaScript ${if (nextEnabled) "allowed" else "blocked"} for ${Uri.parse(tab.lastUrl).host} · reload started")
+    }
     private fun showSiteControls() {
         if (denyGuestAccess("Site controls")) return
         val tab = currentTab() ?: return
         val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
         if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
+        val jsLabel = "JavaScript · " + if (isJavaScriptAllowed(tab.engineType, tab.lastUrl)) "Allowed" else "Blocked"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             val uri = Uri.parse(tab.lastUrl)
             val origin = "${uri.scheme ?: "https"}://${uri.host ?: host}${if (uri.port > 0) ":${uri.port}" else ""}"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setItems(arrayOf("Clear this site's cookies and storage", "Open in GeckoView for detailed permissions")) { _, which ->
+                .setItems(arrayOf(jsLabel, "Clear this site's cookies and storage", "Open in GeckoView for detailed permissions")) { _, which ->
                     if (which == 0) {
+                        toggleJavaScriptForCurrentSite(tab)
+                    } else if (which == 1) {
                         AlertDialog.Builder(this).setMessage("Clear cookies, cache, local storage and service workers for $host? Other sites are not affected.")
                             .setPositiveButton("Clear site data") { _, _ ->
                                 runCatching {
@@ -3702,23 +3744,24 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
                             }.setNegativeButton("Cancel", null).show()
-                    } else switchCurrentTabToGecko("Detailed site permission controls require GeckoView")
+                    } else if (which == 2) switchCurrentTabToGecko("Detailed site permission controls require GeckoView")
                 }.setNegativeButton("Close", null).show()
             return
         }
         val perms = tab.contentPermissions.filter { it.permission != GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
         val rows = perms.map { "${sitePermissionLabel(it.permission)} · ${when (it.value) { GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"; GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"; else -> "Ask" }}" }.toTypedArray()
-        val options = rows + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
+        val options = arrayOf(jsLabel) + rows + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
         AlertDialog.Builder(this).setTitle("Site controls · $host")
             .setItems(options) { _, which ->
                 when {
-                    which < perms.size -> {
+                    which == 0 -> toggleJavaScriptForCurrentSite(tab)
+                    which <= perms.size -> {
                         val perm = perms[which]
                         val next = if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY else GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                         runtime.storageController.setPermission(perm, next)
                         toast("Site permission updated · reload the page")
                     }
-                    which == perms.size -> showShieldSettings()
+                    which == perms.size + 1 -> showShieldSettings()
                     else -> AlertDialog.Builder(this).setMessage("Clear cookies, caches, and site storage for $host? Other sites are not affected.")
                         .setPositiveButton("Clear site data") { _, _ ->
                             runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)

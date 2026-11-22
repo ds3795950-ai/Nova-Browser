@@ -56,7 +56,8 @@ class CefriumBrowserEngine(
     private val onPermissionRequestCanceled: () -> Unit = {},
     desktopMode: Boolean = false,
     existingBrowser: CefriumBrowser? = null,
-    initialNovaAddons: List<NovaScriptAddon> = emptyList()
+    initialNovaAddons: List<NovaScriptAddon> = emptyList(),
+    private val javaScriptEnabledForUrl: (String) -> Boolean = { true }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = setOf(
@@ -92,10 +93,14 @@ class CefriumBrowserEngine(
         // Use the typed 0.21 clients rather than deprecated one-listener-per-event APIs.
         browser.setPageVisible(false)
         browser.setFocus(false)
+        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl()))
         browserPaused = true
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
+                if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
+                    browser.setJavaScriptEnabled(javaScriptEnabledForUrl(url))
+                }
                 val scheme = Uri.parse(url).scheme?.lowercase()
                 return when (scheme) {
                     "http", "https", "about", "data", "blob", "javascript" -> false
@@ -198,6 +203,11 @@ class CefriumBrowserEngine(
     }
 
     fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
+
+    fun setJavaScriptEnabled(enabled: Boolean) {
+        checkOpen()
+        browser.setJavaScriptEnabled(enabled)
+    }
 
     fun setNovaScriptAddons(addons: List<NovaScriptAddon>) {
         checkOpen()
