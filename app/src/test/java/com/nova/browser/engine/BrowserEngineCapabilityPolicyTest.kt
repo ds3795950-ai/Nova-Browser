@@ -53,10 +53,16 @@ class BrowserEngineCapabilityPolicyTest {
     }
 
     @Test fun readerAndDownloadsStayOnEitherEngineWhenDeclared() {
-        listOf(BrowserEngineType.GECKOVIEW to BrowserEngineCapabilitySets.GECKOVIEW,
-            BrowserEngineType.CEFRIUM to BrowserEngineCapabilitySets.CEFRIUM).forEach { (engine, capabilities) ->
-            listOf(BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DOWNLOADS,
-                BrowserEngineCapability.SITE_PERMISSIONS, BrowserEngineCapability.DESKTOP_MODE).forEach { feature ->
+        listOf(
+            BrowserEngineType.GECKOVIEW to BrowserEngineCapabilitySets.GECKOVIEW,
+            BrowserEngineType.CEFRIUM to BrowserEngineCapabilitySets.CEFRIUM
+        ).forEach { (engine, capabilities) ->
+            listOf(
+                BrowserEngineCapability.READER_MODE,
+                BrowserEngineCapability.DOWNLOADS,
+                BrowserEngineCapability.SITE_PERMISSIONS,
+                BrowserEngineCapability.DESKTOP_MODE
+            ).forEach { feature ->
                 val route = BrowserEngineCapabilityPolicy.resolve(
                     engine, BrowserProfileKind.NORMAL, feature, capabilities
                 )
@@ -67,10 +73,15 @@ class BrowserEngineCapabilityPolicyTest {
     }
 
     @Test fun geckoOnlyFeaturesNeverBecomeAvailableOnCefrium() {
-        listOf(BrowserEngineCapability.TRANSLATION, BrowserEngineCapability.PASSWORD_AUTOFILL,
-            BrowserEngineCapability.NOVA_SHIELD, BrowserEngineCapability.EXTENSIONS).forEach { feature ->
+        listOf(
+            BrowserEngineCapability.TRANSLATION,
+            BrowserEngineCapability.PASSWORD_AUTOFILL,
+            BrowserEngineCapability.NOVA_SHIELD,
+            BrowserEngineCapability.EXTENSIONS
+        ).forEach { feature ->
             val route = BrowserEngineCapabilityPolicy.resolve(
-                BrowserEngineType.CEFRIUM, BrowserProfileKind.NORMAL, feature, BrowserEngineCapabilitySets.CEFRIUM
+                BrowserEngineType.CEFRIUM, BrowserProfileKind.NORMAL,
+                feature, BrowserEngineCapabilitySets.CEFRIUM
             )
             assertEquals("$feature must fall back to GeckoView", BrowserEngineType.GECKOVIEW, route.engine)
             assertTrue(route.requiresSwitch)
@@ -92,4 +103,32 @@ class BrowserEngineCapabilityPolicyTest {
         }
     }
 
+    @Test fun everyEngineCapabilityHasAnExplicitRouteOrAnExplicitUnavailableResult() {
+        val engines = listOf(
+            BrowserEngineType.GECKOVIEW to BrowserEngineCapabilitySets.GECKOVIEW,
+            BrowserEngineType.CEFRIUM to BrowserEngineCapabilitySets.CEFRIUM
+        )
+        engines.forEach { (engine, capabilities) ->
+            BrowserEngineCapability.values().forEach { feature ->
+                val route = BrowserEngineCapabilityPolicy.resolve(
+                    engine, BrowserProfileKind.NORMAL, feature, capabilities
+                )
+                when {
+                    feature in capabilities -> {
+                        assertEquals("$engine should keep its native $feature support", engine, route.engine)
+                        assertFalse(route.requiresSwitch)
+                    }
+                    engine == BrowserEngineType.CEFRIUM && feature in BrowserEngineCapabilitySets.GECKOVIEW -> {
+                        assertEquals("$feature should use GeckoView fallback", BrowserEngineType.GECKOVIEW, route.engine)
+                        assertTrue(route.requiresSwitch)
+                    }
+                    else -> {
+                        assertNull("$feature must be unavailable rather than falsely advertised on $engine", route.engine)
+                        assertFalse(route.requiresSwitch)
+                    }
+                }
+                assertTrue("Every route must explain its decision for $engine/$feature", route.reason.isNotBlank())
+            }
+        }
+    }
 }
