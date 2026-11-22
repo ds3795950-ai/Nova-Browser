@@ -20,7 +20,7 @@ android {
     namespace = "com.nova.browser"
     compileSdk {
         version = release(37) {
-            minorApiLevel = 1
+            minorApiLevel = 2
         }
     }
 
@@ -90,6 +90,8 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
     // GeckoView remains the compatibility/security fallback; Cefrium serves compatible Normal tabs.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
+    // Embedded Tor daemon; Guest Mode uses its loopback SOCKS5 listener only.
+    implementation("info.guardianproject:tor-android:0.4.9.17")
     implementation("com.cefrium:cefrium-sdk:0.21.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.mediarouter:mediarouter:1.7.0")
@@ -179,15 +181,27 @@ val prepare1VpnAssets by tasks.registering {
 
         val proxyRegistration = "browser.proxy.onRequest.addListener(m,{urls:[\"<all_urls>\"]})"
         check(background.contains(proxyRegistration)) { "Upstream 1VPN proxy registration changed; review before bundling." }
-        background = background.replace(
-            proxyRegistration,
-            "try{" + proxyRegistration + ";globalThis.__novaProxyReady=true}catch(e){globalThis.__novaProxyReady=false;console.error(e)}"
-        )
+        val torAwareProxyRegistration = """
+            var __novaTorAwareProxyRequest = function(details) {
+              if (globalThis.__novaTorGuestMode === true) {
+                var torPort = Number(globalThis.__novaTorSocksPort);
+                return {type: "socks", host: "127.0.0.1", port: torPort > 0 ? torPort : 1, socksVersion: 5, proxyDNS: true};
+              }
+              return m(details);
+            };
+            try {
+              browser.proxy.onRequest.addListener(__novaTorAwareProxyRequest, {urls: ["<all_urls>"]});
+              globalThis.__novaProxyReady = true;
+            } catch (e) { globalThis.__novaProxyReady = false; console.error(e); }
+        """.trimIndent()
+        background = background.replace(proxyRegistration, torAwareProxyRegistration)
 
         val novaBridge = """
             ;(function() {
               var nativePort = null;
               var webRtcProtected = false;
+              globalThis.__novaTorGuestMode = false;
+              globalThis.__novaTorSocksPort = 0;
               globalThis.__novaPublishProxyCredentials = function(credentials, challenger) {
                 try {
                   if (nativePort && credentials && credentials.username && credentials.password && challenger && challenger.host) {
@@ -238,9 +252,18 @@ val prepare1VpnAssets by tasks.registering {
               async function configure(message) {
                 var location = ["sgp", "ams", "lax"].indexOf(message.location) >= 0 ? message.location : "sgp";
                 var enabled = message.enabled === true;
+                globalThis.__novaTorGuestMode = message.torGuestMode === true;
+                var requestedTorPort = Number(message.torSocksPort);
+                globalThis.__novaTorSocksPort = Number.isInteger(requestedTorPort) && requestedTorPort > 0 && requestedTorPort <= 65535 ? requestedTorPort : 0;
                 await chrome.storage.local.set({ isConnected: enabled, currentLocation: location });
-                webRtcProtected = await setWebRtcProtection(enabled);
-                report(enabled ? "1VPN browser proxy enabled" : "VPN off", { enabled: enabled, location: location });
+                webRtcProtected = await setWebRtcProtection(enabled || globalThis.__novaTorGuestMode);
+                var torRoutingReady = !globalThis.__novaTorGuestMode || (globalThis.__novaProxyReady === true && globalThis.__novaTorSocksPort > 0 && webRtcProtected === true);
+                report(enabled ? "1VPN browser proxy enabled" : (globalThis.__novaTorGuestMode ? "Guest Tor routing active" : "VPN off"), {
+                  enabled: enabled,
+                  location: location,
+                  torGuestMode: globalThis.__novaTorGuestMode,
+                  torRoutingReady: torRoutingReady
+                });
               }
               function connectNative() {
                 try {

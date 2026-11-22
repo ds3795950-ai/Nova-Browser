@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
     private var bookmarkTransferMode: String? = null
     private var bookmarkTransferEngineType: BrowserEngineType? = null
     private var guestContextId: String = ""
+    private var guestTorStartPending: Boolean = false
     private val guestContextCleanupLock = Any()
     private val downloadManagers = mutableMapOf<BrowserEngineType, NovaDownloadManager>()
 
@@ -772,8 +773,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createGuestTab() {
-        createTab(isPrivate = false, url = HOME_URL, isGuest = true)
-        toast("Guest Mode started · temporary browsing data")
+        if (guestTorStartPending) {
+            toast("Guest Tor is already connecting")
+            return
+        }
+        guestTorStartPending = true
+        pageStatus.text = "Guest Mode · connecting to Tor…"
+        TorGuestRoutingController.start(
+            context = this,
+            onReady = {
+                guestTorStartPending = false
+                if (isFinishing || isDestroyed) {
+                    TorGuestRoutingController.stop()
+                    return@start
+                }
+                runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
+                    .onSuccess { toast("Guest Mode started · Tor routing active") }
+                    .onFailure {
+                        TorGuestRoutingController.stop()
+                        toast("Guest Mode could not start: ${it.localizedMessage ?: "browser initialization failed"}")
+                    }
+            },
+            onFailure = { reason ->
+                guestTorStartPending = false
+                if (tabs.any { it.isGuest }) {
+                    toast("Tor connection lost. Closing Guest Mode to prevent direct traffic.")
+                    closeGuestTabs()
+                } else {
+                    pageStatus.text = "Guest Mode unavailable · Tor required"
+                    toast("Guest Mode blocked: Tor is unavailable. No direct connection was made. $reason")
+                }
+            }
+        )
     }
 
     private fun isDesktopUrl(url: String): Boolean {
@@ -1914,6 +1945,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cleanupGuestContextIfIdle() {
+        if (tabs.none { it.isGuest }) TorGuestRoutingController.stop()
         if (tabs.none { it.isGuest } && guestContextId.isNotBlank()) {
             val oldContext = guestContextId
             val nextContext = "nova-guest-${UUID.randomUUID()}"
@@ -2144,11 +2176,11 @@ class MainActivity : ComponentActivity() {
 
     private fun openOrbotTorRouting() {
         if (currentTab()?.isGuest != true) {
-            toast("Tor routing status is available only in Guest Mode")
+            toast("Tor status is available only in Guest Mode")
             return
         }
-        AlertDialog.Builder(this).setTitle("Guest-only Tor is not available yet")
-            .setMessage("Nova Guest Mode currently provides local ephemeral isolation, not a Tor connection. Orbot's Android VPN selection applies to the whole Nova app rather than an individual Guest tab. Enabling Orbot for Nova could therefore route Normal and Private traffic too. To preserve the requested Guest-only boundary, Nova will not enable or launch Orbot from this screen.")
+        AlertDialog.Builder(this).setTitle("Nova Guest Tor · always on")
+            .setMessage("Guest Mode requires the embedded Tor service. Browsing is allowed only after Tor has built a circuit, the SOCKS5 proxy is active, remote DNS is enabled, and WebRTC leak protection is confirmed. If Tor or its proxy bridge stops, Guest Mode closes instead of falling back to your normal connection.\n\nStatus: ${TorGuestRoutingController.statusText()}")
             .setPositiveButton("OK", null)
             .show()
     }
@@ -2508,7 +2540,7 @@ class MainActivity : ComponentActivity() {
         if (currentTab()?.isGuest == true) {
             AlertDialog.Builder(this).setTitle("Guest Mode settings")
                 .setMessage("Normal tabs, saved passwords, downloads, exports and cloud account settings are hidden while Guest Mode is active.")
-                .setPositiveButton("Tor routing status") { _, _ -> openOrbotTorRouting() }
+                .setPositiveButton("Tor status · always on") { _, _ -> openOrbotTorRouting() }
                 .setNegativeButton("Exit Guest Mode") { _, _ -> confirmExitGuestMode() }
                 .setNeutralButton("Close", null).show()
             return
@@ -2796,6 +2828,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        guestTorStartPending = false
+        TorGuestRoutingController.stop()
         persistTabs()
         tabs.forEach(::closeTabRuntime)
         tabs.clear()
