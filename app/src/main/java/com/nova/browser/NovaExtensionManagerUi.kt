@@ -70,7 +70,10 @@ internal class NovaExtensionManagerUi(
         RecommendedAddon("Read Aloud", "read-aloud"),
         RecommendedAddon("Web Archives", "view-page-archive"),
         RecommendedAddon("Tomato Clock", "tomato-clock"),
-        RecommendedAddon("Search by Image", "search_by_image")
+        RecommendedAddon("Search by Image", "search_by_image"),
+        RecommendedAddon("Firefox Relay", "private-relay"),
+        RecommendedAddon("Google Search Fixer", "google-search-fixer"),
+        RecommendedAddon("Video Background Play Fix", "video-background-play-fix")
     )
     private fun addonKey(name: String?): String = name.orEmpty().lowercase().filter { it.isLetterOrDigit() }
 
