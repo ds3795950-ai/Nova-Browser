@@ -2253,11 +2253,12 @@ class MainActivity : ComponentActivity() {
                     val address = NovaCloudAuthController.normalizeEmail(input.text.toString())
                     if (!NovaCloudAuthController.isValidEmail(address)) { toast("Enter a valid email address"); return@setPositiveButton }
                     toast("Requesting sign-in codeâ¦")
-                    Thread {
-                        runCatching { cloudSync.sendEmailOtp(address) }
-                            .onSuccess { runOnUiThread { showCloudOtp(address) } }
-                            .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
-                    }.start()
+                    NovaCloudAuthController.runAsync({ cloudSync.sendEmailOtp(address) }) { result ->
+                        runOnUiThread {
+                            result.onSuccess { showCloudOtp(address) }
+                                .onFailure { toast("Could not send code: ${it.message ?: "Network error"}") }
+                        }
+                    }
                 }.setNegativeButton("Cancel", null).show()
             return
         }
@@ -2276,13 +2277,17 @@ class MainActivity : ComponentActivity() {
                     toast("Cloud sync paused; the local sync key was cleared and your cloud backup is unchanged")
                 }
             }.setNeutralButton("Sign out") { _, _ ->
-                Thread {
+                NovaCloudAuthController.runAsync({
                     cloudSync.signOut()
                     NovaAutoSync.cancel(this@MainActivity)
                     AutoSyncPassphraseStore.clear(this@MainActivity)
                     prefs.edit().putBoolean("cloud_sync_enabled", false).apply()
-                    runOnUiThread { toast("Signed out. Local browsing data is unchanged.") }
-                }.start()
+                }) { result ->
+                    runOnUiThread {
+                        result.onSuccess { toast("Signed out. Local browsing data is unchanged.") }
+                            .onFailure { toast("Could not sign out: ${it.message ?: "Try again"}") }
+                    }
+                }
             }.setNegativeButton("Close", null).show()
     }
 
@@ -2311,8 +2316,7 @@ class MainActivity : ComponentActivity() {
                 }
                 verifyButton.isEnabled = false
                 toast("Verifying code…")
-                Thread {
-                    val result = runCatching { cloudSync.verifyEmailOtp(email, code) }
+                NovaCloudAuthController.runAsync({ cloudSync.verifyEmailOtp(email, code) }) { result ->
                     runOnUiThread {
                         verifyButton.isEnabled = true
                         result.onSuccess {
@@ -2323,13 +2327,12 @@ class MainActivity : ComponentActivity() {
                             toast("Sign-in failed: ${it.message ?: "Check the code and try again"}")
                         }
                     }
-                }.start()
+                }
             }
             val resendButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
             resendButton.setOnClickListener {
                 resendButton.isEnabled = false
-                Thread {
-                    val result = runCatching { cloudSync.sendEmailOtp(email) }
+                NovaCloudAuthController.runAsync({ cloudSync.sendEmailOtp(email) }) { result ->
                     runOnUiThread {
                         resendButton.isEnabled = true
                         result.onSuccess {
@@ -2340,7 +2343,7 @@ class MainActivity : ComponentActivity() {
                             toast("Could not resend: ${it.message ?: "Try again shortly"}")
                         }
                     }
-                }.start()
+                }
             }
         }
         dialog.show()
