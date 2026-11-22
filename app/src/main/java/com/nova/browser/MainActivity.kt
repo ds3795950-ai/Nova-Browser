@@ -876,7 +876,7 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.share_page) to { sharePage() }
             actions += getString(R.string.nova_shield) to { showShieldSettings() }
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
-            if (tab.engineType == BrowserEngineType.GECKOVIEW) actions += getString(R.string.extensions) to { showExtensions() }
+            if (tab.engineType == BrowserEngineType.GECKOVIEW) actions += "Nova Add-ons" to { showExtensions() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
             actions += getString(R.string.site_permissions) to { showSiteControls() }
             actions += getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
@@ -3378,51 +3378,51 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showExtensions() {
-        if (denyGuestAccess("Extensions")) return
+        if (denyGuestAccess("Nova Add-ons")) return
         if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
-            toast("Firefox extensions are available only while this tab uses GeckoView. Switch this tab to GeckoView to manage them.")
+            toast("Nova Add-ons are not available in this engine yet")
             return
         }
         val controller = runtime.getWebExtensionController()
         controller.list().accept({ extensions ->
             runOnUiThread {
                 val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
-                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
+                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Nova Add-on"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}")
+                    .setMessage("Manage add-ons supported by the active Nova engine. Only compatible, signed packages can be installed. Availability and permissions depend on the engine.")
                     .setItems(rows) { _, which ->
                         val extension = installed[which]
                         val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
                         AlertDialog.Builder(this).setTitle(extension.metaData.name ?: extension.id)
                             .setItems(actions) { _, action ->
                                 when (actions[action]) {
-                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension disabled") }, { toast("Could not disable: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Extension enabled") }, { toast("Could not enable: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this extension and its data?")
-                                        .setPositiveButton("Uninstall") { _, _ -> controller.uninstall(extension).accept({ toast("Extension removed") }, { toast("Could not uninstall: ${it?.localizedMessage ?: "Unknown error"}") }) }
+                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Nova Add-on disabled") }, { toast("Could not disable add-on: ${it?.localizedMessage ?: "Unknown error"}") })
+                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Nova Add-on enabled") }, { toast("Could not enable add-on: ${it?.localizedMessage ?: "Unknown error"}") })
+                                    "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this Nova Add-on and its data?")
+                                        .setPositiveButton("Remove") { _, _ -> controller.uninstall(extension).accept({ toast("Nova Add-on removed") }, { toast("Could not remove add-on: ${it?.localizedMessage ?: "Unknown error"}") }) }
                                         .setNegativeButton("Cancel", null).show()
                                 }
                             }.setNegativeButton("Close", null).show()
                     }
-                    .setPositiveButton("Install signed XPI URL") { _, _ -> installExtensionPrompt() }
-                    .setNeutralButton("Browse add-ons") { _, _ -> createTab(false, "https://addons.mozilla.org/android/") }
+                    .setPositiveButton("Install Nova Add-on") { _, _ -> installExtensionPrompt() }
                     .setNegativeButton("Close", null).show()
             }
-        }, { error -> runOnUiThread { toast("Could not list extensions: ${error?.localizedMessage ?: "Unknown error"}") } })
+        }, { error -> runOnUiThread { toast("Could not list Nova Add-ons: ${error?.localizedMessage ?: "Unknown error"}") } })
     }
 
     private fun installExtensionPrompt() {
         if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
-            toast("Firefox extensions can only be installed from a GeckoView tab")
+            toast("Nova Add-ons cannot be installed in this engine yet")
             return
         }
-        val input = EditText(this).apply { hint = "https://…/extension.xpi"; setSingleLine(true) }
-        AlertDialog.Builder(this).setTitle("Install signed extension")
-            .setMessage("Enter an HTTPS .xpi URL. GeckoView verifies Mozilla signing and asks before granting permissions.")
+        val input = EditText(this).apply { hint = "https://…/package.xpi"; setSingleLine(true) }
+        AlertDialog.Builder(this).setTitle("Install Nova Add-on")
+            .setMessage("Enter a direct HTTPS .xpi package URL. Nova checks package compatibility and requests approval before granting permissions.")
             .setView(input).setPositiveButton("Install") { _, _ ->
                 val url = input.text.toString().trim()
-                if (!url.startsWith("https://") || !url.substringBefore('?').endsWith(".xpi", true)) { toast("Use a direct HTTPS .xpi URL"); return@setPositiveButton }
+                if (!url.startsWith("https://") || !url.substringBefore('?').endsWith(".xpi", true)) { toast("Use a direct HTTPS add-on package URL"); return@setPositiveButton }
                 runtime.getWebExtensionController().install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
-                    .accept({ toast("Extension installed: ${it?.metaData?.name ?: it?.id ?: "Extension"}") }, { toast("Extension install failed: ${it?.localizedMessage ?: "Unknown error"}") })
+                    .accept({ toast("Nova Add-on installed: ${it?.metaData?.name ?: it?.id ?: "Add-on"}") }, { toast("Nova Add-on installation failed: ${it?.localizedMessage ?: "Unknown error"}") })
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -3799,7 +3799,7 @@ class MainActivity : ComponentActivity() {
             }
         )
         if (currentTab()?.engineType == BrowserEngineType.GECKOVIEW) {
-            aboutActions.add(0, getString(R.string.extensions) to { showExtensions() })
+            aboutActions.add(0, "Nova Add-ons" to { showExtensions() })
         }
         if (BuildConfig.DEBUG) aboutActions.add("Cefrium Engine Lab" to {
             runCatching { startActivity(Intent().setClassName(packageName, "$packageName.CefriumEngineProbeActivity")) }
