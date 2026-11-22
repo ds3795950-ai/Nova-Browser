@@ -2,6 +2,8 @@ package com.nova.browser
 
 /** Pure validation and filename rules shared by the download pipeline and JVM tests. */
 object DownloadProtocol {
+    private const val MAX_NAME = 120
+
     data class ContentRange(val start: Long, val end: Long, val total: Long?)
 
     fun parseContentRange(value: String?): ContentRange? {
@@ -17,9 +19,15 @@ object DownloadProtocol {
     fun safeFileName(value: String): String {
         val leaf = value.substringAfterLast('/').substringAfterLast('\\')
             .replace(Regex("[\\p{Cntrl}]"), "_")
-            .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            .replace(Regex("[^\\p{L}\\p{N}._ -]"), "_")
             .trim().trim('.')
-            .take(120).trimEnd('.')
-        return leaf.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "nova-download.bin"
+        // Keep a short extension when shortening so long names still open with the right app.
+        val shortened = if (leaf.length <= MAX_NAME) leaf else {
+            val dot = leaf.lastIndexOf('.')
+            val extension = if (dot > 0 && leaf.length - dot <= 16) leaf.substring(dot) else ""
+            leaf.take(MAX_NAME - extension.length) + extension
+        }
+        val limited = shortened.trimEnd('.')
+        return limited.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "nova-download.bin"
     }
 }

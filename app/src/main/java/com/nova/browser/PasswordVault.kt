@@ -100,16 +100,19 @@ class PasswordVault(context: Context) {
         val entries = mutableListOf<Autocomplete.LoginEntry>()
         val metadata = JSONObject()
         for (i in 0 until credentials.length()) {
-            val item = credentials.getJSONObject(i)
-            val origin = item.getString("origin")
-            require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
-            val username = item.getString("username")
-            val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
-                .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
-                .httpRealm(item.optString("httpRealm").ifBlank { null })
-                .username(username).password(item.getString("password")).build()
-            entries.add(entry)
-            metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
+            // One malformed cloud entry must not block every future sync; skip it instead.
+            runCatching {
+                val item = credentials.getJSONObject(i)
+                val origin = item.getString("origin")
+                require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
+                val username = item.getString("username")
+                val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
+                    .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                    .httpRealm(item.optString("httpRealm").ifBlank { null })
+                    .username(username).password(item.getString("password")).build()
+                entries.add(entry)
+                metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
+            }
         }
         persist(entries)
         prefs.edit().putString(META_KEY, metadata.toString())
@@ -189,6 +192,14 @@ class PasswordVault(context: Context) {
     private fun credentialKey(origin: String, username: String) = "$origin|$username"
 
     companion object {
+        @Volatile private var sharedInstance: PasswordVault? = null
+
+        /** Process-wide instance so the UI and the background sync worker share one lock. */
+        fun shared(context: Context): PasswordVault =
+            sharedInstance ?: synchronized(this) {
+                sharedInstance ?: PasswordVault(context.applicationContext).also { sharedInstance = it }
+            }
+
         private const val KEY_BLOB = "encrypted_entries_v1"
         private const val META_KEY = "credential_updated_at_v1"
         private const val TOMBSTONES_KEY = "credential_tombstones_v1"

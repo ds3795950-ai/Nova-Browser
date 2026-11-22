@@ -34,6 +34,8 @@ jobs:
       - name: Assemble debug APK
         run: gradle :app:assembleDebug
       - name: Decode release keystore when all signing secrets are configured
+        # Never expose signing secrets to pull-request code.
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE_BASE64: ${{ secrets.NOVA_RELEASE_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.NOVA_RELEASE_STORE_PASSWORD }}
@@ -49,9 +51,9 @@ jobs:
           fi
       - name: Assemble release APK (signed when release secrets are configured)
         env:
-          NOVA_RELEASE_STORE_PASSWORD: ${{ secrets.NOVA_RELEASE_STORE_PASSWORD }}
-          NOVA_RELEASE_KEY_ALIAS: ${{ secrets.NOVA_RELEASE_KEY_ALIAS }}
-          NOVA_RELEASE_KEY_PASSWORD: ${{ secrets.NOVA_RELEASE_KEY_PASSWORD }}
+          NOVA_RELEASE_STORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.NOVA_RELEASE_STORE_PASSWORD || '' }}
+          NOVA_RELEASE_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.NOVA_RELEASE_KEY_ALIAS || '' }}
+          NOVA_RELEASE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.NOVA_RELEASE_KEY_PASSWORD || '' }}
         run: gradle :app:assembleRelease
       - name: Upload APK artifacts
         continue-on-error: true
@@ -59,7 +61,7 @@ jobs:
         with:
           name: nova-apks
           path: |
-            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7

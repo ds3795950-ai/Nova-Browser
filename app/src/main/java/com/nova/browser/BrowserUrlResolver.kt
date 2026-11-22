@@ -5,7 +5,7 @@ import java.net.URLEncoder
 /** Pure URL/search routing so provider behavior can be unit tested on the JVM. */
 object BrowserUrlResolver {
     private val hostLike = Regex(
-        "^(localhost|(\\d{1,3}\\.){3}\\d{1,3}|([\\p{L}\\p{N}]([\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?\\.)+(\\p{L}{2,}|xn--[a-z0-9-]+))" +
+        "^(localhost|(\\d{1,3}\\.){3}\\d{1,3}|([\\p{L}\\p{N}_]([\\p{L}\\p{N}_-]*[\\p{L}\\p{N}_])?\\.)+(\\p{L}{2,}|xn--[a-z0-9-]+)\\.?)" +
             "(:\\d{1,5})?([/?#]\\S*)?$",
         RegexOption.IGNORE_CASE
     )
