@@ -1,24 +1,28 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { remote } from 'webdriverio';
 
-const required = ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_ACCESS_KEY', 'BROWSERSTACK_APP_URL'];
+const localServer = process.env.APPIUM_SERVER_URL;
+const required = localServer
+  ? ['APPIUM_SERVER_URL', 'NOVA_APP_PATH']
+  : ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_ACCESS_KEY', 'BROWSERSTACK_APP_URL'];
 for (const key of required) {
   if (!process.env[key]) throw new Error('Missing environment variable: ' + key);
 }
 
 await mkdir('test-results', { recursive: true });
-const driver = await remote({
-  protocol: 'https',
-  hostname: 'hub-cloud.browserstack.com',
-  port: 443,
-  path: '/wd/hub',
-  logLevel: 'warn',
-  capabilities: {
-    platformName: 'Android',
-    'appium:automationName': 'UiAutomator2',
-    'appium:app': process.env.BROWSERSTACK_APP_URL,
-    'appium:appPackage': 'com.nova.browser',
-    'appium:appActivity': '.MainActivity',
+const server = new URL(localServer || 'https://hub-cloud.browserstack.com/wd/hub');
+const capabilities = {
+  platformName: 'Android',
+  'appium:automationName': 'UiAutomator2',
+  'appium:app': localServer ? process.env.NOVA_APP_PATH : process.env.BROWSERSTACK_APP_URL,
+  'appium:appPackage': 'com.nova.browser',
+  'appium:appActivity': '.MainActivity',
+  ...(localServer ? {
+    'appium:deviceName': process.env.ANDROID_DEVICE_NAME || 'emulator-5554',
+    'appium:udid': process.env.ANDROID_DEVICE_NAME || 'emulator-5554',
+    'appium:autoGrantPermissions': true,
+    'appium:newCommandTimeout': 180,
+  } : {
     'bstack:options': {
       userName: process.env.BROWSERSTACK_USERNAME,
       accessKey: process.env.BROWSERSTACK_ACCESS_KEY,
@@ -31,7 +35,15 @@ const driver = await remote({
       networkLogs: true,
       deviceLogs: true,
     },
-  },
+  }),
+};
+const driver = await remote({
+  protocol: server.protocol.replace(':', ''),
+  hostname: server.hostname,
+  port: Number(server.port || (server.protocol === 'https:' ? 443 : 80)),
+  path: server.pathname,
+  logLevel: 'warn',
+  capabilities,
 });
 
 const results = [];
