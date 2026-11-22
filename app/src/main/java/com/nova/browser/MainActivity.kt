@@ -209,6 +209,7 @@ class MainActivity : ComponentActivity() {
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        NovaThemeManager.applyBeforeCreate(this)
         super.onCreate(savedInstanceState)
         lastUiMode = resources.configuration.uiMode
         lastFontScale = resources.configuration.fontScale
@@ -4552,6 +4553,20 @@ private fun showQuickSettings() {
             }.show()
     }
 
+    private fun showAppearanceSettings() {
+        val modes = NovaThemeMode.values()
+        val labels = arrayOf("Follow device", "Light", "Dark")
+        val current = modes.indexOf(NovaThemeManager.currentMode(this)).coerceAtLeast(0)
+        AlertDialog.Builder(this).setTitle("Nova appearance")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                NovaThemeManager.setMode(this, modes[which])
+                dialog.dismiss()
+                recreate()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
     private fun showSettings() {
         if (currentTab()?.isGuest == true) {
             showBottomSheetMenu(getString(R.string.guest_settings), listOf(
@@ -4585,6 +4600,7 @@ private fun showQuickSettings() {
             },
             getString(R.string.clear_history) to { clearBrowsingHistory() },
             "Clear browsing data" to { showClearBrowsingData() },
+            "Appearance" to { showAppearanceSettings() },
             "Clear Cefrium profile data" to { clearCefriumProfileData() },
             getString(R.string.close_private_guest_tabs) to { closePrivateAndGuestTabs() },
             "Site Settings" to { showSiteSettingsHub() },
