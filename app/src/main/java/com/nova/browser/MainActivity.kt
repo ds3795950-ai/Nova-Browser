@@ -1663,29 +1663,41 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDefaultGeckoImageSettings() {
-        val values = intArrayOf(1, 3, 2) // Gecko: allow all, block third-party, block all.
-        val labels = arrayOf("Load all images", "Block third-party images", "Block all images")
-        val currentValue = prefs.getInt("site_default_geckoview_images", 1)
-        val selected = values.indexOf(currentValue).takeIf { it >= 0 } ?: 0
+        // Gecko 157 supports allow-all (1) and block-all (2); value 3 is not a third-party-only mode.
+        val values = intArrayOf(1, 2)
+        val labels = arrayOf("Load all images", "Block all images")
+        val selected = if (prefs.getInt("site_default_geckoview_images", 1) == 2) 1 else 0
         AlertDialog.Builder(this).setTitle("GeckoView images")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
-                prefs.edit().putInt("site_default_geckoview_images", values[which]).apply()
-                applyGeckoImageBehavior()
-                dialog.dismiss()
-                toast("Image loading · ${labels[which]}")
+                val next = values[which]
+                applyGeckoImageBehavior(next) { applied ->
+                    if (applied) {
+                        prefs.edit().putInt("site_default_geckoview_images", next).apply()
+                        dialog.dismiss()
+                        toast("Image loading · ${labels[which]}")
+                    } else {
+                        toast("Could not update GeckoView image settings")
+                    }
+                }
             }
             .setNegativeButton(getString(R.string.close), null).show()
     }
 
     @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
-    private fun applyGeckoImageBehavior() {
-        if (!::runtime.isInitialized) return
-        val value = prefs.getInt("site_default_geckoview_images", 1).takeIf { it in setOf(1, 2, 3) } ?: 1
+    private fun applyGeckoImageBehavior(
+        requestedValue: Int = prefs.getInt("site_default_geckoview_images", 1),
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        if (!::runtime.isInitialized) { onComplete?.invoke(false); return }
+        val value = if (requestedValue == 2) 2 else 1
         org.mozilla.geckoview.GeckoPreferenceController.setGeckoPref(
             "permissions.default.image",
             value,
             org.mozilla.geckoview.GeckoPreferenceController.PREF_BRANCH_USER
-        ).accept { }
+        ).accept(
+            { onComplete?.invoke(true) },
+            { _ -> runOnUiThread { onComplete?.invoke(false) } }
+        )
     }
 
     private fun showGeckoSitePermissionHub(origin: String) {
@@ -2051,6 +2063,7 @@ class MainActivity : ComponentActivity() {
                 requestPermissions(missing.toTypedArray(), REQUEST_SITE_PERMISSIONS)
             }
 
+            @OptIn(org.mozilla.geckoview.ExperimentalGeckoViewApi::class)
             @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
             override fun onContentPermissionRequest(session: GeckoSession, perm: GeckoSession.PermissionDelegate.ContentPermission): GeckoResult<Int> {
                 if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
@@ -2099,20 +2112,28 @@ class MainActivity : ComponentActivity() {
                     if ("camera" in tokensToAsk) add(getString(R.string.camera))
                     if ("microphone" in tokensToAsk) add(getString(R.string.microphone))
                 }.joinToString(getString(R.string.and_separator))
+                val normalizedOrigin = cefriumOriginForUrl(uri)
+                val explicitlyAskEveryTime = tokensToAsk.filter { token ->
+                    val key = normalizedOrigin?.let { "site_permission_geckoview_${token}_${Uri.encode(it)}" }
+                    key != null && prefs.getString(key, null)?.equals("ASK", ignoreCase = true) == true
+                }.toSet()
                 var completed = false
-                fun finish(allow: Boolean) {
+                fun finish(allow: Boolean, explicitDecision: String? = null) {
                     if (completed) return
                     completed = true
-                    if (allow && allowSiteOverride) tokensToAsk.forEach { saveGeckoPermissionDecision(uri, it, "ALLOW") }
-                    if (!allow && allowSiteOverride) tokensToAsk.forEach { saveGeckoPermissionDecision(uri, it, "BLOCK") }
+                    if (explicitDecision != null && allowSiteOverride) {
+                        tokensToAsk.filterNot { it in explicitlyAskEveryTime }
+                            .forEach { saveGeckoPermissionDecision(uri, it, explicitDecision) }
+                    }
                     if (allow) callback.grant(video?.firstOrNull(), audio?.firstOrNull()) else callback.reject()
                 }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(getString(R.string.media_permission_title))
                     .setMessage(getString(R.string.media_permission_message, host, requested))
-                    .setPositiveButton(getString(R.string.allow)) { _, _ -> finish(true) }
-                    .setNegativeButton(getString(R.string.block)) { _, _ -> finish(false) }
+                    .setPositiveButton(getString(R.string.allow)) { _, _ -> finish(true, "ALLOW") }
+                    .setNegativeButton(getString(R.string.block)) { _, _ -> finish(false, "BLOCK") }
                     .create()
+                // Dismissal (Back, outside tap, or Activity teardown) rejects only this request.
                 registerPromptDialog(dialog) { finish(false) }
             }
         }
@@ -5386,6 +5407,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
             }.setNegativeButton("Cancel", null).show()
     }
 
+    @Synchronized
     private fun performCloudSync(passphrase: CharArray) {
         try {
             val userId = cloudSync.signedInUserId() ?: throw IllegalStateException("Sign in to Nova Cloud first")

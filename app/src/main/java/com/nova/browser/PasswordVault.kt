@@ -61,9 +61,11 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun delete(guid: String) {
         val entries = all()
-        val removed = entries.firstOrNull { it.guid == guid }
-        persist(entries.filterNot { it.guid == guid })
-        if (removed != null) {
+        val removed = entries.firstOrNull { it.guid == guid } ?: return
+        val remaining = entries.filterNot { it.guid == guid }
+        // Older vaults may exceed today's entry cap; permit a deletion that reduces that legacy count.
+        persist(remaining, allowOverLimitReduction = entries.size > MAX_ENTRIES)
+        run {
             val key = credentialKey(removed.origin, removed.username)
             val metadata = readJsonPreference(META_KEY)
             val tombstones = readJsonPreference(TOMBSTONES_KEY)
@@ -146,8 +148,8 @@ class PasswordVault(context: Context) {
         if (store.containsAlias(alias)) store.deleteEntry(alias)
     }
 
-    private fun persist(entries: List<Autocomplete.LoginEntry>) {
-        require(entries.size <= MAX_ENTRIES) { "Password vault entry limit reached" }
+    private fun persist(entries: List<Autocomplete.LoginEntry>, allowOverLimitReduction: Boolean = false) {
+        require(entries.size <= MAX_ENTRIES || allowOverLimitReduction) { "Password vault entry limit reached" }
         val json = JSONArray()
         entries.forEach { login ->
             json.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
