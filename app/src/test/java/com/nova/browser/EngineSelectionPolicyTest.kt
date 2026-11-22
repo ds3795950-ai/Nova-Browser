@@ -16,6 +16,19 @@ class EngineSelectionPolicyTest {
         assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.AUTOMATIC, cefriumAvailable = true, cefriumCompatible = false)).engine)
     }
 
+    @Test fun explicitCefriumFallsBackWhenProtectionRequiresGecko() {
+        val result = EngineSelectionPolicy.resolve(
+            EngineSelectionRequest(
+                mode = BrowserEngineMode.CEFRIUM,
+                profile = BrowserProfileKind.NORMAL,
+                cefriumAvailable = true,
+                cefriumCompatible = false
+            )
+        )
+        assertEquals(BrowserEngineType.GECKOVIEW, result.engine)
+        assertTrue(result.usedFallback)
+    }
+
     @Test fun explicitNormalModeIsRespected() {
         assertEquals(BrowserEngineType.GECKOVIEW, EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.GECKOVIEW, cefriumAvailable = true)).engine)
         assertEquals(BrowserEngineType.CEFRIUM, EngineSelectionPolicy.resolve(EngineSelectionRequest(mode = BrowserEngineMode.CEFRIUM, cefriumAvailable = true)).engine)

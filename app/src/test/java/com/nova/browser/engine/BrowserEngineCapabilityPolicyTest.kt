@@ -34,6 +34,15 @@ class BrowserEngineCapabilityPolicyTest {
         }
     }
 
+    @Test fun extensionsFallBackToGeckoViewFromCefrium() {
+        val route = BrowserEngineCapabilityPolicy.resolve(
+            BrowserEngineType.CEFRIUM, BrowserProfileKind.NORMAL,
+            BrowserEngineCapability.EXTENSIONS, BrowserEngineCapabilitySets.CEFRIUM
+        )
+        assertEquals(BrowserEngineType.GECKOVIEW, route.engine)
+        assertTrue(route.requiresSwitch)
+    }
+
     @Test fun unsupportedFeatureReturnsUnavailableInsteadOfGuessing() {
         val route = BrowserEngineCapabilityPolicy.resolve(
             BrowserEngineType.GECKOVIEW, BrowserProfileKind.NORMAL,

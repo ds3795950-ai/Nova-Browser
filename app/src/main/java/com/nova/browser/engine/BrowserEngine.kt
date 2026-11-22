@@ -31,7 +31,8 @@ enum class BrowserEngineCapability {
     VPN_PROXY,
     TRANSLATION,
     PASSWORD_AUTOFILL,
-    NOVA_SHIELD
+    NOVA_SHIELD,
+    EXTENSIONS
 }
 
 fun interface BrowserEngineListener {

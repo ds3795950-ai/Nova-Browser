@@ -1129,18 +1129,24 @@ class MainActivity : ComponentActivity() {
             for (i in 0 until saved.length()) {
                 val item = saved.getJSONObject(i)
                 val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
+                val storedEngine = runCatching {
+                    BrowserEngineType.valueOf(item.optString("engine", "GECKOVIEW"))
+                }.getOrDefault(BrowserEngineType.GECKOVIEW)
                 val tab = BrowserTab(
                     isPrivate = false,
                     isGuest = false,
                     lastUrl = url,
                     group = item.optString("group", "Ungrouped"),
                     title = item.optString("title", "New tab"),
-                    engineType = runCatching { BrowserEngineType.valueOf(item.optString("engine", "GECKOVIEW")) }.getOrDefault(BrowserEngineType.GECKOVIEW),
+                    engineType = storedEngine,
                     desktopSite = isDesktopUrl(url),
                     needsReload = true,
                     readerOriginalUrl = item.optString("readerOriginalUrl")
                         .takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 )
+                // Preserve a saved explicit Gecko choice, but never restore Cefrium when the
+                // current Shield/password/profile policy now requires GeckoView.
+                if (storedEngine == BrowserEngineType.CEFRIUM) tab.engineType = resolveEngineForTab(tab)
                 tabs.add(tab)
             }
             if (tabs.isNotEmpty()) {
@@ -1647,21 +1653,14 @@ class MainActivity : ComponentActivity() {
         updated
     }
 
-    private fun completeGuestContextCleanup(contextId: String) = synchronized(guestContextCleanupLock) {
-        val pending = prefs.getStringSet(KEY_GUEST_CONTEXT_CLEANUP_PENDING, emptySet()).orEmpty().toSet()
-        val remaining = GuestContextCleanupPolicy.complete(pending, contextId)
-        if (remaining != pending) prefs.edit().putStringSet(KEY_GUEST_CONTEXT_CLEANUP_PENDING, remaining).commit()
-    }
-
     private fun clearGuestContextData(contextId: String) {
         if (contextId.isBlank()) return
-        runtime.storageController.clearDataForSessionContext(contextId).accept(
-            { _ -> completeGuestContextCleanup(contextId) },
-            { error ->
-                // Keep the ID queued. The next process launch retries it before a new Guest session.
+        // GeckoView exposes this as a fire-and-forget call, not a GeckoResult. Keep the ID in
+        // the durable retry set; reissuing a clear for an already-empty context is harmless.
+        runCatching { runtime.storageController.clearDataForSessionContext(contextId) }
+            .onFailure { error ->
                 android.util.Log.w("NovaGuestCleanup", "Guest context cleanup remains queued", error)
             }
-        )
     }
 
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
@@ -1713,7 +1712,7 @@ class MainActivity : ComponentActivity() {
         activeIndex = tabs.indexOfFirst { it.id == activeIdBeforeClose }.takeIf { it >= 0 } ?: (activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0))
         cleanupGuestContextIfIdle()
         if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex.coerceIn(tabs.indices))
-        toast("Guest session closed · cookies and site data cleared")
+        toast("Guest session closed · cleanup requested and queued for retry")
     }
 
     private fun chooseSearchEngine() {
@@ -1783,7 +1782,7 @@ class MainActivity : ComponentActivity() {
                         val mode = modes[which]
                         prefs.edit().putString("shield_mode", mode.name).apply()
                         NovaShield.apply(runtime, mode)
-                        if (mode != ShieldMode.OFF) switchCurrentTabToGecko("Nova Shield")
+                        if (mode != ShieldMode.OFF) switchNormalCefriumTabsToGecko("Nova Shield")
                         toast("Nova Shield: ${mode.name.lowercase().replaceFirstChar { it.uppercase() }}")
                     }
                     3 -> {
@@ -1893,6 +1892,32 @@ class MainActivity : ComponentActivity() {
 
     private fun showExtensions() {
         if (denyGuestAccess("Extensions")) return
+        val tab = currentTab() ?: return
+        val engine = runCatching { ensureBrowserEngine(tab) }.getOrNull() ?: run {
+            toast("Browser engine is unavailable for extensions")
+            return
+        }
+        val profile = if (tab.isPrivate) BrowserProfileKind.PRIVATE else BrowserProfileKind.NORMAL
+        val route = BrowserEngineCapabilityPolicy.resolve(
+            currentEngine = engine.type,
+            profile = profile,
+            required = BrowserEngineCapability.EXTENSIONS,
+            currentCapabilities = engine.capabilities
+        )
+        if (!route.available) { toast("Extensions are unavailable: ${route.reason}"); return }
+        if (route.requiresSwitch) {
+            AlertDialog.Builder(this)
+                .setTitle("Switch to GeckoView for extensions?")
+                .setMessage("Firefox-compatible extensions run only in GeckoView. Switching reloads this tab; cookies, website storage and sign-in sessions are not transferred. The Cefrium profile remains untouched.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Switch and continue") { _, _ ->
+                    if (currentTab() !== tab || tab.isPrivate || tab.isGuest) return@setPositiveButton
+                    switchCurrentTabToGecko("WebExtensions")
+                    showExtensions()
+                }
+                .show()
+            return
+        }
         val controller = runtime.getWebExtensionController()
         controller.list().accept({ extensions ->
             runOnUiThread {
@@ -1984,6 +2009,10 @@ class MainActivity : ComponentActivity() {
     private fun showSiteControls() {
         if (denyGuestAccess("Site controls")) return
         val tab = currentTab() ?: return
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            toast("Cefrium site permissions are prompt-only. Per-site Cefrium storage inspection and deletion are not supported yet; this screen will not clear GeckoView data and misreport success.")
+            return
+        }
         val host = runCatching { Uri.parse(tab.lastUrl).host }.getOrNull()
         if (host.isNullOrBlank()) { toast("Open a website to manage its permissions"); return }
         val perms = (tab.browserEngine as? GeckoViewBrowserEngine)?.contentPermissions.orEmpty()
@@ -2064,6 +2093,36 @@ class MainActivity : ComponentActivity() {
         showPrimaryEngineView(browserView)
         activateTab(tab)
         toast("Switched to GeckoView for $reason. This site may require you to sign in again; website data is not migrated yet.")
+    }
+
+    /** Shield is a runtime-wide protection policy, so every Normal Cefrium tab must leave Cefrium. */
+    private fun switchNormalCefriumTabsToGecko(reason: String) {
+        val affected = tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.CEFRIUM }
+        if (affected.isEmpty()) return
+        affected.forEach { tab ->
+            closeTabRuntime(tab)
+            if (tab.readerOriginalUrl != null) {
+                tab.lastUrl = tab.readerOriginalUrl!!
+                tab.readerOriginalUrl = null
+            }
+            tab.engineType = BrowserEngineType.GECKOVIEW
+            tab.needsReload = tab.lastUrl != HOME_URL
+        }
+
+        currentTab()?.let { active ->
+            val engine = ensureBrowserEngine(active)
+            engine.attachTo(browserView)
+            showPrimaryEngineView(engine.view)
+            engine.setActive(true, true)
+        }
+        tabs.firstOrNull { it.id == splitTabId }?.let { secondary ->
+            val engine = ensureBrowserEngine(secondary)
+            engine.attachTo(secondaryBrowserView)
+            showSecondaryEngineView(engine.view)
+            engine.setActive(true, false)
+        }
+        persistTabs()
+        toast("Nova Shield requires GeckoView. Moved ${affected.size} Normal tab(s) to GeckoView for $reason; website data stays in the original Cefrium profile and may require sign-in again.")
     }
 
     private fun switchCurrentTabEngine() {

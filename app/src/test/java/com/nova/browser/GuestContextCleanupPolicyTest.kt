@@ -1,7 +1,6 @@
 package com.nova.browser
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,16 +11,12 @@ class GuestContextCleanupPolicyTest {
         assertEquals(pending, GuestContextCleanupPolicy.queue(pending, "  "))
     }
 
-    @Test fun completionRemovesOnlyTheConfirmedContext() {
-        val pending = setOf("old-a", "old-b")
-        assertEquals(setOf("old-b"), GuestContextCleanupPolicy.complete(pending, "old-a"))
-    }
-
-    @Test fun failedCleanupRemainsQueuedUntilSuccessIsConfirmed() {
-        val pending = GuestContextCleanupPolicy.queue(emptySet(), "guest-context")
-        assertTrue("guest-context" in pending)
-        // Failure path deliberately does not call complete().
-        assertTrue("guest-context" in pending)
-        assertFalse("guest-context" in GuestContextCleanupPolicy.complete(pending, "guest-context"))
+    @Test fun allUnconfirmedContextIdsRemainQueuedForRetry() {
+        val pending = GuestContextCleanupPolicy.queue(
+            GuestContextCleanupPolicy.queue(emptySet(), "old-a"), "old-b"
+        )
+        // The Gecko API provides no completion callback; callers must not drop IDs on request.
+        assertTrue("old-a" in pending)
+        assertTrue("old-b" in pending)
     }
 }
