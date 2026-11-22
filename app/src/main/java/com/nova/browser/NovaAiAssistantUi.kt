@@ -3,6 +3,8 @@ package com.nova.browser
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.text.InputType
@@ -53,6 +55,7 @@ internal class NovaAiSecureStore(context:Context) {
 
 internal object NovaAiApi {
     private val pool=Executors.newFixedThreadPool(2)
+    private val main=Handler(Looper.getMainLooper())
     private fun enc(s:String)=java.net.URLEncoder.encode(s,"UTF-8")
     private fun call(method:String,url:String,headers:Map<String,String>,body:JSONObject?=null):JSONObject {
         val c=URL(url).openConnection() as HttpURLConnection
@@ -80,7 +83,7 @@ internal object NovaAiApi {
                 val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
                 id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
             }.distinct().sorted().ifEmpty{listOf(p.defaultModel)}
-        };done(r)
+        };main.post{done(r)}
     }}
     fun send(p:NovaAiProvider,key:String,model:String,history:List<NovaAiMessage>,done:(Result<String>)->Unit){pool.execute{
         val r=runCatching {
@@ -104,7 +107,7 @@ internal object NovaAiApi {
                         .optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty().ifBlank{error("Empty AI response")}
                 }
             }
-        };done(r)
+        };main.post{done(r)}
     }}
 }
 
