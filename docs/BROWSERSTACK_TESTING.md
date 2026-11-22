@@ -6,7 +6,7 @@ The workflow `.github/workflows/browserstack-home-search.yml` builds a debug And
 
 Add one repository secret under **Settings → Secrets and variables → Actions → New repository secret**:
 
-- `ROHANSAHA_NG...`: your BrowserStack username and access key, on separate lines in that order. The workflow also accepts a single-line pair separated by a space, colon, comma, semicolon or pipe.
+- `ROHANSAHA_NGXOSY`: your BrowserStack username and access key, on separate lines in that order. The workflow also accepts a single-line pair separated by a space, colon, comma, semicolon or pipe.
 
 Do not commit either credential or paste the access key into source files. The workflow parses the combined secret at runtime, masks both values, and never prints them.
 
