@@ -299,6 +299,18 @@ class CefriumBrowserEngine(
     fun startDownload(url: String) { if (!closed) browser.startDownload(url) }
     fun serializeNavigationState(): ByteArray? = if (closed) null else runCatching { browser.serializeNavigationState() }.getOrNull()
 
+    /** Executes JavaScript through Cefrium's typed callback API. */
+    fun evaluateJavaScript(script: String, onResult: (String?) -> Unit) {
+        checkOpen()
+        browser.evaluateJavaScript(script, ValueCallback { value -> onResult(value) })
+    }
+
+    /** Loads HTML with an explicit origin for deterministic local compatibility tests and Reader Mode. */
+    fun loadHtmlWithBaseUrl(html: String, baseUrl: String) {
+        checkOpen()
+        browser.loadHtmlWithBaseUrl(html, baseUrl)
+    }
+
     override fun loadUrl(url: String) {
         checkOpen()
         browser.loadUrl(url)
