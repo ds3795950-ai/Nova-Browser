@@ -120,12 +120,8 @@ class CefriumBrowserEngine(
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
-                if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
-                    browser.setJavaScriptEnabled(javaScriptEnabledForUrl(url))
-                    browser.setMediaPlaybackRequiresUserGesture(!autoplayAllowedForUrl(url))
-                    browser.setAdBlockEnabled(adBlockingEnabledForUrl(url))
-                    browser.setAudioMuted(!soundAllowedForUrl(url))
-                }
+                // These settings belong to the tab's top-level origin, not an embedded iframe.
+                if (request.isForMainFrame) applySiteSettingsForUrl(url)
                 val scheme = Uri.parse(url).scheme?.lowercase()
                 return when (scheme) {
                     "http", "https", "about", "data", "blob", "javascript" -> false
@@ -313,6 +309,7 @@ class CefriumBrowserEngine(
 
     override fun loadUrl(url: String) {
         checkOpen()
+        applySiteSettingsForUrl(url)
         browser.loadUrl(url)
     }
 
@@ -328,6 +325,7 @@ class CefriumBrowserEngine(
 
     override fun reload() {
         checkOpen()
+        applySiteSettingsForUrl(browser.getUrl())
         browser.reload()
     }
 
@@ -435,6 +433,14 @@ class CefriumBrowserEngine(
         novaAddonScriptHandlers.clear()
         closed = true
         browser.close()
+    }
+
+    private fun applySiteSettingsForUrl(url: String) {
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return
+        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(url))
+        browser.setMediaPlaybackRequiresUserGesture(!autoplayAllowedForUrl(url))
+        browser.setAdBlockEnabled(adBlockingEnabledForUrl(url))
+        browser.setAudioMuted(!soundAllowedForUrl(url))
     }
 
     private fun navigationHasUserGesture(request: com.cefrium.CefriumNavigationRequest): Boolean = runCatching {
