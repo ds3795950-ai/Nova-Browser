@@ -86,6 +86,8 @@ class MainActivity : ComponentActivity() {
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
     private val extensionController by lazy { NovaExtensionController() }
+    private var aiPageReaderExtension: WebExtension? = null
+    private val aiPageText = mutableMapOf<String, String>()
     private val extensionActions get() = extensionController.actions
     private var activeExtensionPopup: Dialog? = null
     private val detectedPageLanguages = mutableMapOf<String, String>()
@@ -145,6 +147,7 @@ class MainActivity : ComponentActivity() {
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = GeckoRuntime.create(this)
+        installAiPageReader()
         configureAddonManagerDelegate()
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
@@ -743,6 +746,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         session.open(runtime)
+        attachAiPageReader(session)
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 tab.canGoBack = canGoBack && tab.lastUrl != HOME_URL && browserPane.visibility == View.VISIBLE
@@ -1885,10 +1889,8 @@ class MainActivity : ComponentActivity() {
             store = NovaAiSecureStore(this),
             requestPageText = { callback ->
                 val active = currentTab()
-                val session = active?.session
-                if (session == null || active.lastUrl == HOME_URL || active.lastUrl.startsWith("about:")) callback(null)
-                else session.evaluateJS("(function(){return document.body ? document.body.innerText.slice(0,24000) : ''})()")
-                    .accept({ value -> callback(value?.toString()) }, { callback(null) })
+                if (active == null || active.lastUrl == HOME_URL || active.lastUrl.startsWith("about:")) callback(null)
+                else callback(aiPageText[active.id])
             },
             persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
             notify = ::toast
@@ -1907,6 +1909,40 @@ class MainActivity : ComponentActivity() {
             openAddonsSite = { createTab(false, "https://addons.mozilla.org/android/") },
             showMessage = ::toast
         ).show()
+    }
+
+    private fun installAiPageReader() {
+        runtime.getWebExtensionController()
+            .ensureBuiltIn("resource://android/assets/nova_ai_reader/", "nova-ai-reader@nova.browser")
+            .accept({ extension ->
+                aiPageReaderExtension = extension
+                tabs.forEach { tab -> tab.session?.let(::attachAiPageReader) }
+            }, { error ->
+                runOnUiThread { toast("AI page reader unavailable: " + (error?.localizedMessage ?: "extension install failed")) }
+            })
+    }
+
+    private fun attachAiPageReader(session: GeckoSession) {
+        val extension = aiPageReaderExtension ?: return
+        session.getWebExtensionController().setMessageDelegate(
+            extension,
+            object : WebExtension.MessageDelegate {
+                override fun onMessage(
+                    nativeApp: String,
+                    message: Any,
+                    sender: WebExtension.MessageSender
+                ): GeckoResult<Any>? {
+                    val payload = message as? JSONObject ?: return null
+                    if (payload.optString("type") == "nova_page_text") {
+                        val source = sender.session ?: session
+                        val tab = tabs.firstOrNull { it.session === source }
+                        if (tab != null) aiPageText[tab.id] = payload.optString("text").take(24000)
+                    }
+                    return null
+                }
+            },
+            "nova_ai_reader"
+        )
     }
 
     private fun configureAddonManagerDelegate() {
