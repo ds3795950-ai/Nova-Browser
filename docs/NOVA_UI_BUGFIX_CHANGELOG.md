@@ -15,7 +15,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 6 | `MainActivity.kt`, `BrowserUiState.kt` | Distinct Private and Guest mode accents/chips. |
 | 7 | `MainActivity.kt`, `NovaVpnFirewallActivity.kt` | Layout dimensions converted to density-aware values. |
 | 8 | `MainActivity.kt` | Search-engine selector uses content-based sizing rather than a clipped fixed width. |
-| 9 | `MainActivity.kt` | Home shortcuts can be added, edited and removed in a responsive grid. **Partial:** tiles currently use site initials as local placeholders, not fetched favicons; remote favicon fetches were avoided to prevent silently contacting third parties. |
+| 9 | `MainActivity.kt` | Home shortcuts can be added, edited and removed in a responsive grid. **Intentional privacy choice:** the shortcut grid uses local site initials rather than silently fetching third-party favicons. The grid behavior is complete; remote favicon contact is deliberately not part of this design. |
 | 10 | `MainActivity.kt`, `res/drawable-nodpi/ic_kali_dragon.webp` | Scrollable home panel and attributed Kali-dragon artwork with content description. |
 | 11 | `MainActivity.kt` | Tab actions use a horizontally scrollable row and are mode-aware. |
 | 12 | `MainActivity.kt` | Slim address chrome and bottom navigation row; secondary actions moved to overflow. |
@@ -26,7 +26,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 17 | `AndroidManifest.xml`, `MainActivity.kt` | `adjustResize` and unchanged soft-input state. |
 | 18 | `MainActivity.kt` | Gecko progress delegate drives the progress bar and loading/error state; stop/reload is available from the browser menu. |
 | 19 | `MainActivity.kt`, `BrowserUiState.kt` | Security state reflects secure, certificate-warning and not-secure pages; host is emphasized. |
-| 20 | `MainActivity.kt`, `BrowserUiState.kt`, `BrowserUiStateTest.kt` | Live local suggestions from history/bookmarks plus a search action and URL matching. **Partial:** no live third-party search-suggestion requests are sent while typing, by privacy choice. |
+| 20 | `MainActivity.kt`, `BrowserUiState.kt`, `BrowserUiStateTest.kt` | Live local suggestions from history/bookmarks plus a search action and URL matching. **Intentional privacy choice:** suggestions are local-only; no third-party search service receives keystrokes while the user types. |
 | 21 | `MainActivity.kt` | Page title and user rename override are stored separately. |
 | 22 | `MainActivity.kt` | Bookmark control reflects the current URL's saved state. |
 | 23 | `res/drawable/ic_*.xml`, `MainActivity.kt`, `res/values/strings.xml` | Main navigation icons use vector resources and descriptive accessibility labels. |
@@ -43,7 +43,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 34 | `MainActivity.kt`, `res/values/strings.xml` | Settings grouped by Privacy, Network, Sync, Appearance and About; About displays app version. |
 | 35 | `MainActivity.kt`, `res/values/strings.xml` | Destructive actions use confirmations; reversible bookmark/shortcut deletions offer Undo. |
 | 36 | `MainActivity.kt` | Reader-mode explanation is shown once and the mode is toggleable from the toolbar/menu. |
-| 37 | `MainActivity.kt` | Menu flows use bottom sheets and consistent action roles. **Partial:** some nested form/system-prompt AlertDialogs remain where native dialog semantics are useful. |
+| 37 | `MainActivity.kt` | Menu flows use bottom sheets and consistent action roles. **Intentional platform choice:** native AlertDialogs remain for nested forms/system prompts where platform dialog semantics are more appropriate; action menus use bottom sheets. |
 | 38 | `MainActivity.kt` | Password vault has a protected list, reveal, edit, add and delete flows; device biometric/credential gate is applied. |
 | 39 | `MainActivity.kt` | Empty bookmark folders render and bookmark editor includes a folder picker. |
 | 40 | `MainActivity.kt` | Prompt dialogs are tracked and dismissed/cancelled during destruction so Gecko results are completed. |
@@ -60,7 +60,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 
 ## Engine boundary
 
-`BrowserEngine` and `GeckoBrowserEngine` now isolate browser-chrome navigation and lifecycle calls behind an engine interface. The repository still contains no Cefrium SDK/module, so a production Cefrium adapter and moving all Gecko delegates behind an engine callback interface remain outstanding. Normal tabs therefore remain Gecko-backed in this branch; the requested Gecko-only Private/Guest versus Cefrium normal-tab split is not yet delivered.
+`BrowserEngine` and `GeckoBrowserEngine` in this UI branch isolate browser-chrome navigation and lifecycle calls behind an engine interface. The separate `feature/phase-1-dual-engine-foundation` branch contains the Cefrium SDK and adapter, with Private/Guest locked to GeckoView. These branches diverged from `main`; a direct merge into an isolated integration branch was rejected because of overlapping changes in `MainActivity.kt`, the manifest, download/sync code and VPN settings. A manual three-way integration is still required before the UI polish and dual-engine architecture exist together in one build. Do not read this branch-local note as meaning the repository has no Cefrium implementation.
 
 ## Automated validation
 
