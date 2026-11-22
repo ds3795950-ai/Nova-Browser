@@ -514,10 +514,42 @@ class MainActivity : ComponentActivity() {
         ).engine
     }
 
-    private fun ensureCefriumEngine(tab: BrowserTab): CefriumBrowserEngine {
+    private fun openCefriumPopupTab(parentTab: BrowserTab, popupBrowser: CefriumBrowser, popupUrl: String) {
+        if (tabs.none { it === parentTab } || parentTab.isPrivate || parentTab.isGuest) {
+            popupBrowser.close()
+            return
+        }
+        currentTab()?.let(::deactivateTabRuntime)
+        val safeUrl = popupUrl.takeIf {
+            it.isBlank() || it == "about:blank" || it.startsWith("https://", true) || it.startsWith("http://", true)
+        }?.takeIf { it.isNotBlank() } ?: HOME_URL
+        val popupTab = BrowserTab(
+            isPrivate = false,
+            isGuest = false,
+            lastUrl = safeUrl,
+            group = parentTab.group,
+            title = "Sign-in popup",
+            engineType = BrowserEngineType.CEFRIUM,
+            desktopSite = isDesktopUrl(safeUrl),
+            needsReload = false
+        )
+        tabs.add(popupTab)
+        ensureCefriumEngine(popupTab, popupBrowser)
+        activeIndex = tabs.lastIndex
+        popupTab.lastAccess = System.nanoTime()
+        activateTab(popupTab)
+        addressBar.setText(popupTab.lastUrl)
+        tabLabel.text = "Tab · ${activeIndex + 1}/${tabs.size}"
+        pageStatus.text = "Normal session · ${popupTab.group}"
+        showBrowserPage()
+        enforceSessionBudget()
+        persistTabs()
+    }
+
+    private fun ensureCefriumEngine(tab: BrowserTab, popupBrowser: CefriumBrowser? = null): CefriumBrowserEngine {
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
         check(!tab.isGuest && !tab.isPrivate) { "Private and Guest tabs must remain on GeckoView" }
-        val profile = CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
+        val profile = popupBrowser?.getProfile() ?: CefriumProfile.get(BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE)
         val engine = CefriumBrowserEngine(
             activity = this,
             profile = profile,
@@ -563,7 +595,21 @@ class MainActivity : ComponentActivity() {
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread { showCefriumPermissionPrompt(origin, permissions, respond) }
             },
-            desktopMode = tab.desktopSite
+            desktopMode = tab.desktopSite,
+            browserOverride = popupBrowser,
+            onPopupRequested = { popup, popupUrl, _ ->
+                if (tab.isPrivate || tab.isGuest) {
+                    popup.close()
+                    true
+                } else {
+                    openCefriumPopupTab(tab, popup, popupUrl)
+                    true
+                }
+            },
+            onPopupClosed = { popup ->
+                val popupTab = tabs.firstOrNull { (it.browserEngine as? CefriumBrowserEngine)?.ownsBrowser(popup) == true }
+                if (popupTab != null) closeTabAt(tabs.indexOf(popupTab)) else popup.close()
+            }
         )
         tab.browserEngine = engine
         if (tab.needsReload) {

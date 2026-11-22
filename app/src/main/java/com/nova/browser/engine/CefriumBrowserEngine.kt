@@ -40,11 +40,14 @@ class CefriumBrowserEngine(
     private val listener: BrowserEngineListener? = null,
     private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {},
     private val onPermissionRequest: (origin: String, permissions: List<String>, respond: (Boolean) -> Unit) -> Unit = { _, _, respond -> respond(false) },
-    desktopMode: Boolean = false
+    desktopMode: Boolean = false,
+    private val browserOverride: CefriumBrowser? = null,
+    private val onPopupRequested: ((CefriumBrowser, String, Boolean) -> Boolean)? = null,
+    private val onPopupClosed: ((CefriumBrowser) -> Unit)? = null
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = BrowserEngineCapabilitySets.CEFRIUM
-    private val browser = CefriumBrowser.createWithSurface(activity, profile)
+    private val browser = browserOverride ?: CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()
     private var currentState = BrowserEngineState(
@@ -110,6 +113,25 @@ class CefriumBrowserEngine(
         })
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
+            override fun onCreateWindow(
+                browser: CefriumBrowser,
+                popup: CefriumBrowser,
+                url: String,
+                userGesture: Boolean
+            ): Boolean {
+                if (!CefriumPopupPolicy.isSafeUserInitiatedRequest(url, userGesture)) {
+                    popup.close()
+                    return true
+                }
+                return runCatching { onPopupRequested?.invoke(popup, url.ifBlank { "about:blank" }, userGesture) == true }
+                    .getOrElse { popup.close(); true }
+            }
+
+            override fun onCloseWindow(browser: CefriumBrowser, popup: CefriumBrowser) {
+                val handler = onPopupClosed
+                if (handler != null) handler(popup) else popup.close()
+            }
+
             override fun onPermissionRequest(browser: CefriumBrowser, request: CefriumPermissionRequest) {
                 // Deny insecure/opaque origins and any permission kind Nova does not recognize.
                 val requested = CefriumSitePermissionPolicy.normalize(
@@ -146,6 +168,8 @@ class CefriumBrowserEngine(
         checkOpen()
         browser.reload()
     }
+
+    fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
 
     fun refreshVpnSettings() {
         checkOpen()
