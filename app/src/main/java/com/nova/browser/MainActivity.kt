@@ -252,6 +252,7 @@ class MainActivity : ComponentActivity() {
         tools.addView(actionButton("Reader") { openReaderMode() })
         tools.addView(actionButton("Translate") { translatePage() })
         tools.addView(actionButton("Share") { sharePage() })
+        tools.addView(actionButton("Quick settings") { showQuickSettings() })
         tools.addView(actionButton("Settings") { showSettings() })
         top.addView(toolbarScroll(tools), LinearLayout.LayoutParams(-1, dp(48)))
         val advancedTools = LinearLayout(this).apply {
@@ -1770,6 +1771,133 @@ class MainActivity : ComponentActivity() {
             addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, "nova-history.json")
         }
         startActivityForResult(intent, historyExportRequestCode)
+    }
+
+    private fun showQuickSettings() {
+        val tab = currentTab()
+        val isGuest = tab?.isGuest == true
+        val isRestricted = tab?.let { it.isPrivate || it.isGuest } == true
+        val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            addView(panel, android.view.ViewGroup.LayoutParams(-1, -2))
+        }
+        lateinit var dialog: AlertDialog
+
+        fun addHeading(label: String) {
+            panel.addView(TextView(this).apply {
+                text = label
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.08f
+                setTextColor(0xFFBFA9D8.toInt())
+                setPadding(dp(12), dp(12), dp(12), dp(6))
+            })
+        }
+
+        fun addDivider() {
+            panel.addView(View(this).apply { setBackgroundColor(0x332F263A) },
+                LinearLayout.LayoutParams(-1, dp(1)))
+        }
+
+        fun addSwitch(
+            title: String,
+            detail: String,
+            checked: Boolean,
+            enabled: Boolean = true,
+            onChanged: (Boolean) -> Unit
+        ) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(9), dp(8), dp(9))
+                isEnabled = enabled
+                alpha = if (enabled) 1f else 0.48f
+            }
+            val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            labels.addView(TextView(this).apply {
+                text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+                setTextColor(0xFFF1E9FA.toInt())
+            })
+            labels.addView(TextView(this).apply {
+                text = detail; textSize = 11f
+                setTextColor(0xFFB9AEC8.toInt())
+            })
+            val toggle = android.widget.Switch(this).apply {
+                isChecked = checked
+                isEnabled = enabled
+                contentDescription = title
+                setOnCheckedChangeListener { _, value -> onChanged(value) }
+            }
+            row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(toggle, LinearLayout.LayoutParams(-2, -2))
+            panel.addView(row, LinearLayout.LayoutParams(-1, -2))
+            addDivider()
+        }
+
+        fun addAction(title: String, detail: String, enabled: Boolean = true, action: () -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                isEnabled = enabled
+                alpha = if (enabled) 1f else 0.48f
+                isClickable = enabled
+                setOnClickListener { if (enabled) { dialog.dismiss(); action() } }
+            }
+            row.addView(TextView(this).apply {
+                text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+                setTextColor(0xFFF1E9FA.toInt())
+            })
+            row.addView(TextView(this).apply {
+                text = detail; textSize = 11f
+                setTextColor(0xFFB9AEC8.toInt())
+            })
+            panel.addView(row, LinearLayout.LayoutParams(-1, -2))
+            addDivider()
+        }
+
+        addHeading("PAGE")
+        addSwitch(
+            "Desktop site",
+            if (host == null) "Open a website to change its layout" else "Request the desktop version of this site",
+            checked = tab?.desktopSite == true,
+            enabled = tab != null && !isRestricted && host != null
+        ) { toggleDesktopSite() }
+        addAction("Reader mode", "Read supported articles with less clutter",
+            enabled = tab?.lastUrl?.startsWith("http") == true) { openReaderMode() }
+        addAction("Translate page", "Translate this page with GeckoView",
+            enabled = tab?.lastUrl?.startsWith("http") == true) { translatePage() }
+        addAction("Share page", "Send the current page to another app",
+            enabled = tab != null && tab.lastUrl != HOME_URL) { sharePage() }
+        addAction("Bookmark page", "Save or remove this page from bookmarks",
+            enabled = tab != null && !isRestricted && tab.lastUrl != HOME_URL) { toggleBookmark() }
+
+        addHeading("PRIVACY & PERMISSIONS")
+        addSwitch(
+            "Protected DNS",
+            "AdGuard DNS-over-HTTPS for Nova only · not a VPN",
+            checked = prefs.getBoolean("protected_dns_enabled", false),
+            enabled = !isRestricted
+        ) { enabled ->
+            prefs.edit().putBoolean("protected_dns_enabled", enabled).apply()
+            applyProtectedDns(enabled)
+            toast(if (enabled) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
+        }
+        addAction("Nova Shield", "Current mode: ${NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")).name}",
+            enabled = !isGuest) { showShieldSettings() }
+        addAction("Site permissions", "Review permissions and clear this site's data",
+            enabled = !isGuest && host != null) { showSiteControls() }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Quick settings")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .create()
+        dialog.show()
     }
 
     private fun showSettings() {
