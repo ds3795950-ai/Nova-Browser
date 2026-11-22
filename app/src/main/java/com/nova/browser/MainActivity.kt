@@ -876,6 +876,7 @@ class MainActivity : ComponentActivity() {
             actions += getString(if (tab.desktopSite) R.string.mobile_site else R.string.desktop_site) to { toggleDesktopSite() }
             actions += getString(if (tab.readerOriginalUrl != null) R.string.exit_reader_mode else R.string.reader_mode) to { if (tab.readerOriginalUrl != null) exitReaderMode() else openReaderMode() }
             actions += getString(R.string.translate_page) to { translatePage() }
+        actions += "Quick settings" to { showQuickSettings() }
             actions += getString(R.string.share_page) to { sharePage() }
             actions += getString(R.string.nova_shield) to { showShieldSettings() }
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
@@ -3819,6 +3820,133 @@ class MainActivity : ComponentActivity() {
         return entries.sortedWith(compareBy({ it.engine.name }, { it.origin }))
     }
 
+private fun showQuickSettings() {
+        val tab = currentTab()
+        val isGuest = tab?.isGuest == true
+        val isRestricted = tab?.let { it.isPrivate || it.isGuest } == true
+        val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            addView(panel, android.view.ViewGroup.LayoutParams(-1, -2))
+        }
+        lateinit var dialog: AlertDialog
+
+        fun addHeading(label: String) {
+            panel.addView(TextView(this).apply {
+                text = label
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.08f
+                setTextColor(0xFFBFA9D8.toInt())
+                setPadding(dp(12), dp(12), dp(12), dp(6))
+            })
+        }
+
+        fun addDivider() {
+            panel.addView(View(this).apply { setBackgroundColor(0x332F263A) },
+                LinearLayout.LayoutParams(-1, dp(1)))
+        }
+
+        fun addSwitch(
+            title: String,
+            detail: String,
+            checked: Boolean,
+            enabled: Boolean = true,
+            onChanged: (Boolean) -> Unit
+        ) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(9), dp(8), dp(9))
+                isEnabled = enabled
+                alpha = if (enabled) 1f else 0.48f
+            }
+            val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            labels.addView(TextView(this).apply {
+                text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+                setTextColor(0xFFF1E9FA.toInt())
+            })
+            labels.addView(TextView(this).apply {
+                text = detail; textSize = 11f
+                setTextColor(0xFFB9AEC8.toInt())
+            })
+            val toggle = android.widget.Switch(this).apply {
+                isChecked = checked
+                isEnabled = enabled
+                contentDescription = title
+                setOnCheckedChangeListener { _, value -> onChanged(value) }
+            }
+            row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(toggle, LinearLayout.LayoutParams(-2, -2))
+            panel.addView(row, LinearLayout.LayoutParams(-1, -2))
+            addDivider()
+        }
+
+        fun addAction(title: String, detail: String, enabled: Boolean = true, action: () -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                isEnabled = enabled
+                alpha = if (enabled) 1f else 0.48f
+                isClickable = enabled
+                setOnClickListener { if (enabled) { dialog.dismiss(); action() } }
+            }
+            row.addView(TextView(this).apply {
+                text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+                setTextColor(0xFFF1E9FA.toInt())
+            })
+            row.addView(TextView(this).apply {
+                text = detail; textSize = 11f
+                setTextColor(0xFFB9AEC8.toInt())
+            })
+            panel.addView(row, LinearLayout.LayoutParams(-1, -2))
+            addDivider()
+        }
+
+        addHeading("PAGE")
+        addSwitch(
+            "Desktop site",
+            if (host == null) "Open a website to change its layout" else "Request the desktop version of this site",
+            checked = tab?.desktopSite == true,
+            enabled = tab != null && !isRestricted && host != null
+        ) { toggleDesktopSite() }
+        addAction("Reader mode", "Read supported articles with less clutter",
+            enabled = tab?.lastUrl?.startsWith("http") == true) { openReaderMode() }
+        addAction("Translate page", "Translate this page with GeckoView",
+            enabled = tab?.lastUrl?.startsWith("http") == true) { translatePage() }
+        addAction("Share page", "Send the current page to another app",
+            enabled = tab != null && tab.lastUrl != HOME_URL) { sharePage() }
+        addAction("Bookmark page", "Save or remove this page from bookmarks",
+            enabled = tab != null && !isRestricted && tab.lastUrl != HOME_URL) { toggleBookmark() }
+
+        addHeading("PRIVACY & PERMISSIONS")
+        addSwitch(
+            "Protected DNS",
+            "AdGuard DNS-over-HTTPS for Nova only · not a VPN",
+            checked = prefs.getBoolean("protected_dns_enabled", false),
+            enabled = !isRestricted
+        ) { enabled ->
+            prefs.edit().putBoolean("protected_dns_enabled", enabled).apply()
+            applyProtectedDns(enabled)
+            toast(if (enabled) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
+        }
+        addAction("Nova Shield", "Current mode: ${NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")).name}",
+            enabled = !isGuest) { showShieldSettings() }
+        addAction("Site permissions", "Review permissions and clear this site's data",
+            enabled = !isGuest && host != null) { showSiteControls() }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Quick settings")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .create()
+        dialog.show()
+    }
+
     private fun showSiteSettingsHub() {
         if (denyGuestAccess("Site Settings")) return
         val host = currentTab()?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
@@ -4402,17 +4530,22 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Nova Cloud")) return
         val email = cloudSync.signedInEmail()
         if (email.isNullOrBlank()) {
-            val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; isSingleLine = true }
-            AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
-                .setView(input).setPositiveButton("Send code") { _, _ ->
-                    val address = input.text.toString().trim()
-                    toast("Requesting sign-in code…")
-                    Thread {
-                        runCatching { cloudSync.sendEmailOtp(address) }
-                            .onSuccess { runOnUiThread { showCloudOtp(address) } }
-                            .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
-                    }.start()
-                }.setNegativeButton("Cancel", null).show()
+            val options = arrayOf(
+                "Create account (email + password)",
+                "Sign in with password",
+                "Sign in with email code"
+            )
+            AlertDialog.Builder(this)
+                .setTitle("Nova Cloud")
+                .setItems(options) { _, which ->
+                    when (which) {
+                        0 -> showCloudSignUp()
+                        1 -> showCloudPasswordSignIn()
+                        2 -> showCloudOtpEmailEntry()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
             return
         }
         val enabled = prefs.getBoolean("cloud_sync_enabled", false)
@@ -4438,6 +4571,185 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread { toast("Signed out. Local browsing data is unchanged.") }
                 }.start()
             }.setNegativeButton("Close", null).show()
+    }
+
+private fun showCloudOtpEmailEntry() {
+        val input = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Sign in with email code")
+            .setMessage("We'll email you a one-time 6-digit code. No password is required.")
+            .setView(input)
+            .setPositiveButton("Send code") { _, _ ->
+                val address = input.text.toString().trim()
+                if (address.isBlank()) {
+                    toast("Enter your email address")
+                    return@setPositiveButton
+                }
+                toast("Requesting sign-in code\u2026")
+                Thread {
+                    runCatching { cloudSync.sendEmailOtp(address) }
+                        .onSuccess { runOnUiThread { showCloudOtp(address) } }
+                        .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
+                }.start()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+private fun showCloudSignUp() {
+        val pad = dp(16)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val emailInput = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "Password (min 8 characters)"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        val confirmInput = EditText(this).apply {
+            hint = "Confirm password"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        container.addView(emailInput)
+        container.addView(passwordInput)
+        container.addView(confirmInput)
+        AlertDialog.Builder(this)
+            .setTitle("Create Nova Cloud account")
+            .setMessage("Create an account to sync bookmarks, history, passwords and settings across your devices. Data is encrypted on this device before upload.")
+            .setView(container)
+            .setPositiveButton("Create account") { _, _ ->
+                val address = emailInput.text.toString().trim()
+                val password = passwordInput.text.toString()
+                val confirm = confirmInput.text.toString()
+                when {
+                    address.isBlank() -> toast("Enter your email address")
+                    password.length < 8 -> toast("Password must be at least 8 characters")
+                    password != confirm -> toast("Passwords do not match")
+                    else -> {
+                        toast("Creating account\u2026")
+                        Thread {
+                            runCatching { cloudSync.signUpWithPassword(address, password) }
+                                .onSuccess {
+                                    runOnUiThread {
+                                        toast("Account created and signed in")
+                                        showCloudAccount()
+                                    }
+                                }
+                                .onFailure { err ->
+                                    val msg = err.message ?: "Sign-up failed"
+                                    runOnUiThread {
+                                        if (msg.contains("confirm", ignoreCase = true) || msg.contains("check your email", ignoreCase = true)) {
+                                            AlertDialog.Builder(this)
+                                                .setTitle("Confirm your email")
+                                                .setMessage(msg)
+                                                .setPositiveButton("OK") { _, _ -> showCloudPasswordSignIn() }
+                                                .show()
+                                        } else {
+                                            toast(msg)
+                                        }
+                                    }
+                                }
+                        }.start()
+                    }
+                }
+            }
+            .setNeutralButton("Use email code") { _, _ -> showCloudOtpEmailEntry() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+private fun showCloudPasswordSignIn() {
+        val pad = dp(16)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val emailInput = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "Password"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        container.addView(emailInput)
+        container.addView(passwordInput)
+        AlertDialog.Builder(this)
+            .setTitle("Sign in to Nova Cloud")
+            .setView(container)
+            .setPositiveButton("Sign in") { _, _ ->
+                val address = emailInput.text.toString().trim()
+                val password = passwordInput.text.toString()
+                if (address.isBlank() || password.isEmpty()) {
+                    toast("Enter email and password")
+                    return@setPositiveButton
+                }
+                toast("Signing in\u2026")
+                Thread {
+                    runCatching { cloudSync.signInWithPassword(address, password) }
+                        .onSuccess {
+                            runOnUiThread {
+                                toast("Signed in to Nova Cloud")
+                                showCloudAccount()
+                            }
+                        }
+                        .onFailure { runOnUiThread { toast("Sign-in failed: ${it.message ?: "Check email and password"}") } }
+                }.start()
+            }
+            .setNeutralButton("Forgot password?") { _, _ ->
+                showForgotPassword(emailInput.text.toString().trim())
+            }
+            .setNegativeButton("Email code") { _, _ -> showCloudOtpEmailEntry() }
+            .show()
+    }
+
+private fun showForgotPassword(prefillEmail: String = "") {
+        val input = EditText(this).apply {
+            hint = "Email address"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            isSingleLine = true
+            if (prefillEmail.isNotBlank()) setText(prefillEmail)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Reset password")
+            .setMessage("We'll email a password-reset link to this address. Open the link on any device to choose a new password, then sign in here.")
+            .setView(input)
+            .setPositiveButton("Send reset link") { _, _ ->
+                val address = input.text.toString().trim()
+                if (address.isBlank()) {
+                    toast("Enter your email address")
+                    return@setPositiveButton
+                }
+                toast("Sending reset link\u2026")
+                Thread {
+                    runCatching { cloudSync.requestPasswordReset(address) }
+                        .onSuccess {
+                            runOnUiThread {
+                                AlertDialog.Builder(this)
+                                    .setTitle("Check your email")
+                                    .setMessage("If an account exists for $address, a password-reset link has been sent. Open it to set a new password, then return here to sign in.")
+                                    .setPositiveButton("OK") { _, _ -> showCloudPasswordSignIn() }
+                                    .show()
+                            }
+                        }
+                        .onFailure { runOnUiThread { toast("Could not send reset link: ${it.message ?: "Network error"}") } }
+                }.start()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showCloudOtp(email: String) {

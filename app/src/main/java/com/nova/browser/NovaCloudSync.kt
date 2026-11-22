@@ -75,6 +75,65 @@ class NovaCloudSync(context: Context) {
     @Volatile private var snapshotVersion: String? = null
     @Volatile private var vaultVersion: String? = null
 
+    /** Create a Supabase account using email and password. */
+    fun signUpWithPassword(email: String, password: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        require(password.length >= 8) { "Password must be at least 8 characters" }
+        require(password.length <= 72) { "Password is too long" }
+        val body = JSONObject().put("email", clean).put("password", password).toString()
+        val result = request("POST", "/auth/v1/signup", body)
+        val json = JSONObject(result)
+        if (json.has("access_token") && json.has("refresh_token")) {
+            persistSessionFromAuthResponse(result)
+        } else if (json.optJSONObject("user") != null) {
+            throw IllegalStateException("Account created. Check your email to confirm the address, then sign in.")
+        } else {
+            throw IllegalStateException("Sign-up failed. Try a different email or sign in instead.")
+        }
+    }
+
+    /** Sign in to Nova Cloud using email and password. */
+    fun signInWithPassword(email: String, password: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        require(password.isNotEmpty()) { "Enter your password" }
+        val result = request(
+            "POST",
+            "/auth/v1/token?grant_type=password",
+            JSONObject().put("email", clean).put("password", password).toString()
+        )
+        persistSessionFromAuthResponse(result)
+    }
+
+    /** Ask Supabase to send a password-recovery link without revealing whether the email exists. */
+    fun requestPasswordReset(email: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        request("POST", "/auth/v1/recover", JSONObject().put("email", clean).toString())
+    }
+
+    private fun persistSessionFromAuthResponse(raw: String) {
+        val session = JSONObject(raw)
+        require(session.has("access_token") && session.has("refresh_token")) {
+            "Supabase did not return a valid session"
+        }
+        session.put("expires_at", System.currentTimeMillis() / 1000 + session.optLong("expires_in", 3600))
+        val userId = session.optJSONObject("user")?.optString("id") ?: session.optString("user_id")
+        session.put("user_id", userId)
+        require(session.optString("user_id").isNotBlank()) { "Supabase session did not include a user ID" }
+        if (session.optJSONObject("user") == null && session.has("email")) {
+            session.put("user", JSONObject().put("email", session.getString("email")).put("id", userId))
+        }
+        saveSession(session)
+    }
+
     fun sendEmailOtp(email: String) {
         val clean = email.trim().lowercase()
         require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) { "Enter a valid email address" }
@@ -165,6 +224,8 @@ class NovaCloudSync(context: Context) {
 
     private fun request(method: String, path: String, body: String?, bearer: String? = null, prefer: String? = null): String {
         val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+            // Never forward an auth token to a redirect target.
+            instanceFollowRedirects = false
             requestMethod = method
             connectTimeout = 20_000
             readTimeout = 30_000
