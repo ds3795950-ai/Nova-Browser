@@ -5456,6 +5456,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
     }
 
     @Synchronized
+    @Synchronized
     private fun performCloudSync(passphrase: CharArray) {
         try {
             val userId = cloudSync.signedInUserId() ?: throw IllegalStateException("Sign in to Nova Cloud first")
@@ -5472,11 +5473,13 @@ private fun showForgotPassword(prefillEmail: String = "") {
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
-            // Apply to the local vault first, off the UI thread and inside this try/catch, so a bad bundle
-            // can neither crash the app nor be uploaded.
-            passwordVault.importSyncBundle(mergedVault)
+            // Validate without mutating local credentials. A failed upload must not apply remote
+            // deletions or partial merges to the device's existing vault.
+            passwordVault.validateSyncBundle(mergedVault)
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
+            // Commit the local merge only after the encrypted cloud write succeeds.
+            passwordVault.importSyncBundle(mergedVault)
             if (prefs.getBoolean("cloud_sync_enabled", false)) {
                 AutoSyncPassphraseStore.save(this, passphrase)
                 NovaAutoSync.schedule(this)

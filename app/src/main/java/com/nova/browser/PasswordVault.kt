@@ -98,7 +98,7 @@ class PasswordVault(context: Context) {
         return JSONObject().put("schema", 2).put("credentials", credentials).put("deleted", readJsonPreference(TOMBSTONES_KEY))
     }
 
-    @Synchronized fun importSyncBundle(bundle: JSONObject) {
+    private fun validatedSyncBundle(bundle: JSONObject): Triple<List<Autocomplete.LoginEntry>, JSONObject, JSONObject> {
         val merged = mergeSyncBundles(exportSyncBundle(), bundle)
         val credentials = merged.optJSONArray("credentials") ?: JSONArray()
         require(credentials.length() <= 2000) { "Cloud password vault is unexpectedly large" }
@@ -111,16 +111,30 @@ class PasswordVault(context: Context) {
             val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
             require(PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) { "Invalid saved login form action origin" }
             val username = item.getString("username")
-            val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
+            val password = item.getString("password")
+            val guid = item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() }
+            require(guid.length <= 128 && username.length <= 4096 && password.length <= 16_384) {
+                "Cloud password entry exceeds allowed limits"
+            }
+            val entry = Autocomplete.LoginEntry.Builder().guid(guid)
                 .origin(origin).formActionOrigin(formActionOrigin)
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
-                .username(username).password(item.getString("password")).build()
+                .username(username).password(password).build()
             entries.add(entry)
             metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
         }
+        return Triple(entries, metadata, merged.optJSONObject("deleted") ?: JSONObject())
+    }
+
+    @Synchronized fun validateSyncBundle(bundle: JSONObject) {
+        validatedSyncBundle(bundle)
+    }
+
+    @Synchronized fun importSyncBundle(bundle: JSONObject) {
+        val (entries, metadata, tombstones) = validatedSyncBundle(bundle)
         persist(entries)
         prefs.edit().putString(META_KEY, metadata.toString())
-            .putString(TOMBSTONES_KEY, (merged.optJSONObject("deleted") ?: JSONObject()).toString()).apply()
+            .putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
 
     @Synchronized fun importFromSync(array: JSONArray) {
