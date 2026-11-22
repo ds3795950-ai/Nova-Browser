@@ -19,6 +19,8 @@ import com.cefrium.CefriumExperimental
 import com.cefrium.CefriumDownloadClient
 import com.cefrium.CefriumChromeClient
 import com.cefrium.CefriumPermissionRequest
+import com.cefrium.CefriumPermission
+import com.cefrium.CefriumContentSetting
 import com.cefrium.CefriumNavigationClient
 import com.cefrium.CefriumProfile
 import com.cefrium.CefriumContextMenu
@@ -274,6 +276,26 @@ class CefriumBrowserEngine(
             novaAddonScriptHandlers[addon.id] = browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
         }
     }
+    /** Persist a per-origin website permission decision in this Cefrium profile. */
+    fun setSitePermission(origin: String, permission: String, decision: String) {
+        if (closed) return
+        val cefriumPermission = when (permission.uppercase()) {
+            "GEOLOCATION" -> CefriumPermission.GEOLOCATION
+            "CAMERA" -> CefriumPermission.CAMERA
+            "MICROPHONE" -> CefriumPermission.MICROPHONE
+            "NOTIFICATIONS" -> CefriumPermission.NOTIFICATIONS
+            "CLIPBOARD_READ" -> CefriumPermission.CLIPBOARD_READ
+            "NFC" -> CefriumPermission.NFC
+            else -> return
+        }
+        val contentSetting = when (decision.uppercase()) {
+            "ALLOW" -> CefriumContentSetting.ALLOW
+            "BLOCK" -> CefriumContentSetting.BLOCK
+            else -> CefriumContentSetting.ASK
+        }
+        browser.setContentSetting(origin, cefriumPermission, contentSetting)
+    }
+
     fun startDownload(url: String) { if (!closed) browser.startDownload(url) }
     fun serializeNavigationState(): ByteArray? = if (closed) null else runCatching { browser.serializeNavigationState() }.getOrNull()
 

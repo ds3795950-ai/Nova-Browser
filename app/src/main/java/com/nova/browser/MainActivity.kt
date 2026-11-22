@@ -1019,6 +1019,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         )
+        applyCefriumPermissionSettings(tab, engine)
         tab.browserEngine = engine
         tab.cefriumNavigationState = null // The live browser now owns the restored state.
         if (engine.didRestoreInitialNavigationState) {
@@ -1417,6 +1418,122 @@ class MainActivity : ComponentActivity() {
         if (splitTabId != null && changed.any { it.id == splitTabId }) restoreSplitPane()
     }
 
+    private fun cefriumOriginForUrl(url: String): String? {
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val host = uri.host?.lowercase() ?: return null
+        if (scheme !in listOf("http", "https")) return null
+        return "$scheme://$host${if (uri.port > 0) ":${uri.port}" else ""}"
+    }
+
+    private fun cefriumPermissionDefinitions(): List<Pair<String, String>> = listOf(
+        "GEOLOCATION" to "Location",
+        "CAMERA" to "Camera",
+        "MICROPHONE" to "Microphone",
+        "NOTIFICATIONS" to "Notifications",
+        "CLIPBOARD_READ" to "Clipboard",
+        "NFC" to "NFC"
+    )
+
+    private fun cefriumSitePermissionsKey(origin: String): String =
+        "site_permissions_cefrium_${Uri.encode(origin)}"
+
+    private fun cefriumPermissionDecision(origin: String, permission: String): String {
+        val stored = runCatching {
+            JSONObject(prefs.getString(cefriumSitePermissionsKey(origin), "{}") ?: "{}")
+                .optString(permission, "")
+                .uppercase()
+        }.getOrDefault("")
+        if (stored in setOf("ASK", "ALLOW", "BLOCK")) return stored
+        return (prefs.getString("site_default_permission_cefrium_${permission.lowercase()}", "ASK") ?: "ASK")
+            .uppercase().takeIf { it in setOf("ASK", "ALLOW", "BLOCK") } ?: "ASK"
+    }
+
+    private fun saveCefriumPermissionDecision(origin: String, permission: String, decision: String) {
+        val normalized = decision.uppercase().takeIf { it in setOf("ASK", "ALLOW", "BLOCK") } ?: "ASK"
+        val key = cefriumSitePermissionsKey(origin)
+        val settings = runCatching { JSONObject(prefs.getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
+        settings.put(permission, normalized)
+        prefs.edit().putString(key, settings.toString()).apply()
+        tabs.filter {
+            it.engineType == BrowserEngineType.CEFRIUM && !it.isGuest && !it.isPrivate &&
+                cefriumOriginForUrl(it.lastUrl) == origin
+        }.forEach { (it.browserEngine as? CefriumBrowserEngine)?.setSitePermission(origin, permission, normalized) }
+    }
+
+    private fun applyCefriumPermissionSettings(tab: BrowserTab, engine: CefriumBrowserEngine) {
+        val origin = cefriumOriginForUrl(tab.lastUrl) ?: return
+        cefriumPermissionDefinitions().forEach { (permission, _) ->
+            engine.setSitePermission(origin, permission, cefriumPermissionDecision(origin, permission))
+        }
+    }
+
+    private fun showCefriumSitePermissionSettings(origin: String) {
+        val host = Uri.parse(origin).host ?: origin
+        val definitions = cefriumPermissionDefinitions()
+        val labels = definitions.map { (permission, label) ->
+            val status = when (cefriumPermissionDecision(origin, permission)) {
+                "ALLOW" -> "Allowed"
+                "BLOCK" -> "Blocked"
+                else -> "Ask"
+            }
+            "$label · $status"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Site permissions · $host")
+            .setItems(labels) { _, which ->
+                val (permission, label) = definitions[which]
+                val options = arrayOf("Ask every time", "Block", "Allow")
+                val current = when (cefriumPermissionDecision(origin, permission)) {
+                    "BLOCK" -> 1
+                    "ALLOW" -> 2
+                    else -> 0
+                }
+                AlertDialog.Builder(this).setTitle("$label · $host")
+                    .setSingleChoiceItems(options, current) { dialog, selected ->
+                        val decision = arrayOf("ASK", "BLOCK", "ALLOW")[selected]
+                        saveCefriumPermissionDecision(origin, permission, decision)
+                        dialog.dismiss()
+                        showCefriumSitePermissionSettings(origin)
+                    }
+                    .setNegativeButton(getString(R.string.close), null)
+                    .show()
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun showDefaultCefriumPermissions() {
+        val definitions = cefriumPermissionDefinitions()
+        val labels = definitions.map { (permission, label) ->
+            val status = (prefs.getString("site_default_permission_cefrium_${permission.lowercase()}", "ASK") ?: "ASK").uppercase()
+            "$label · ${when (status) { "ALLOW" -> "Allowed"; "BLOCK" -> "Blocked"; else -> "Ask" }}"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Default Cefrium permissions")
+            .setItems(labels) { _, which ->
+                val (permission, label) = definitions[which]
+                val prefKey = "site_default_permission_cefrium_${permission.lowercase()}"
+                val currentValue = (prefs.getString(prefKey, "ASK") ?: "ASK").uppercase()
+                val current = when (currentValue) { "BLOCK" -> 1; "ALLOW" -> 2; else -> 0 }
+                AlertDialog.Builder(this).setTitle("$label default")
+                    .setSingleChoiceItems(arrayOf("Ask every time", "Block", "Allow"), current) { dialog, selected ->
+                        val decision = arrayOf("ASK", "BLOCK", "ALLOW")[selected]
+                        prefs.edit().putString(prefKey, decision).apply()
+                        tabs.filter { it.engineType == BrowserEngineType.CEFRIUM && !it.isPrivate && !it.isGuest }
+                            .forEach { tab ->
+                                val origin = cefriumOriginForUrl(tab.lastUrl) ?: return@forEach
+                                val siteOverrides = runCatching {
+                                    JSONObject(prefs.getString(cefriumSitePermissionsKey(origin), "{}") ?: "{}")
+                                }.getOrDefault(JSONObject())
+                                if (!siteOverrides.has(permission)) {
+                                    (tab.browserEngine as? CefriumBrowserEngine)?.setSitePermission(origin, permission, decision)
+                                }
+                            }
+                        dialog.dismiss()
+                        showDefaultCefriumPermissions()
+                    }
+                    .setNegativeButton(getString(R.string.close), null)
+                    .show()
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
     private fun showCefriumPermissionPrompt(origin: String, permissions: Set<String>, respond: (Boolean) -> Unit) {
         val normalized = CefriumSitePermissionPolicy.normalize(origin, permissions)
         if (normalized == null) { respond(false); return }
@@ -1428,23 +1545,31 @@ class MainActivity : ComponentActivity() {
             if ("GEOLOCATION" in normalized) add(Manifest.permission.ACCESS_FINE_LOCATION)
             if ("NOTIFICATIONS" in normalized && Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }
+        val decisions = normalized.map { cefriumPermissionDecision(origin, it) }
+        if (decisions.any { it == "BLOCK" }) { respond(false); return }
+        val mustAskInNova = decisions.any { it == "ASK" }
         var completed = false
         var handedToAndroid = false
         fun finish(granted: Boolean) {
             if (!completed) { completed = true; respond(granted) }
         }
+        fun requestAndroidPermissions() {
+            val missing = runtimePermissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isEmpty()) finish(true) else {
+                handedToAndroid = true
+                pendingCefriumPermissionDecision = { granted -> finish(granted) }
+                cefriumPermissionLauncher.launch(missing.toTypedArray())
+            }
+        }
+        if (!mustAskInNova) {
+            requestAndroidPermissions()
+            return
+        }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Allow site permissions?")
             .setMessage("$origin requests: ${labels.joinToString(", ")}. Only allow permissions you trust.")
             .setNegativeButton(getString(R.string.block)) { _, _ -> finish(false) }
-            .setPositiveButton(getString(R.string.allow)) { _, _ ->
-                val missing = runtimePermissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-                if (missing.isEmpty()) finish(true) else {
-                    handedToAndroid = true
-                    pendingCefriumPermissionDecision = { granted -> finish(granted) }
-                    cefriumPermissionLauncher.launch(missing.toTypedArray())
-                }
-            }
+            .setPositiveButton(getString(R.string.allow)) { _, _ -> requestAndroidPermissions() }
             .create()
         registerPromptDialog(dialog) { if (!handedToAndroid) finish(false) }
     }
@@ -3979,13 +4104,18 @@ private fun showQuickSettings() {
                 Triple("ads", "Ads and trackers", true),
                 Triple("sound", "Sound", true)
             ) else emptyList()
+        val permissionDefaults = if (engine == BrowserEngineType.CEFRIUM) arrayOf("Location, camera, microphone, notifications, clipboard and NFC permissions") else emptyArray()
         val labels = definitions.map { (key, name, fallback) ->
             val enabled = prefs.getBoolean("site_default_${engine.name.lowercase()}_$key", fallback)
             "$name · ${if (enabled) "Allowed" else "Blocked"}"
-        }.toTypedArray()
+        }.toTypedArray() + permissionDefaults
         val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
             .setItems(labels) { _, which ->
+                if (engine == BrowserEngineType.CEFRIUM && which == definitions.size) {
+                    showDefaultCefriumPermissions()
+                    return@setItems
+                }
                 val (key, name, fallback) = definitions[which]
                 val prefKey = "site_default_${engine.name.lowercase()}_$key"
                 val next = !prefs.getBoolean(prefKey, fallback)
@@ -4106,10 +4236,14 @@ private fun showQuickSettings() {
             }
             return "${definition.second} · ${if (value) "Allowed" else "Blocked"}"
         }
-        val permissionsOffset = if (entry.engine == BrowserEngineType.GECKOVIEW) 1 else 0
+        val permissionsOffset = if (entry.engine == BrowserEngineType.GECKOVIEW || entry.engine == BrowserEngineType.CEFRIUM) 1 else 0
         val resetIndex = definitions.size + permissionsOffset
-        val labels = definitions.map(::label).toTypedArray() +
-            (if (entry.engine == BrowserEngineType.GECKOVIEW) arrayOf("View saved permissions") else emptyArray()) +
+        val permissionAction = when (entry.engine) {
+            BrowserEngineType.GECKOVIEW -> arrayOf("View saved permissions")
+            BrowserEngineType.CEFRIUM -> arrayOf("Site permissions")
+            else -> emptyArray()
+        }
+        val labels = definitions.map(::label).toTypedArray() + permissionAction +
             arrayOf("Reset this site's settings", "Clear this site's data")
         AlertDialog.Builder(this).setTitle("$host · $engineLabel")
             .setItems(labels) { _, which ->
@@ -4139,6 +4273,9 @@ private fun showQuickSettings() {
                     }
                     entry.engine == BrowserEngineType.GECKOVIEW && which == definitions.size -> {
                         showGeckoSitePermissions(entry)
+                    }
+                    entry.engine == BrowserEngineType.CEFRIUM && which == definitions.size -> {
+                        showCefriumSitePermissionSettings(entry.origin)
                     }
                     which == resetIndex -> {
                         val encoded = Uri.encode(entry.origin)
@@ -4212,7 +4349,7 @@ private fun showQuickSettings() {
             val uri = Uri.parse(tab.lastUrl)
             val origin = "${uri.scheme ?: "https"}://${uri.host ?: host}${if (uri.port > 0) ":${uri.port}" else ""}"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Open in GeckoView for detailed permissions")) { _, which ->
+                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (which == 0) {
                         toggleJavaScriptForCurrentSite(tab)
                     } else if (which == 1) {
@@ -4233,7 +4370,7 @@ private fun showQuickSettings() {
                                     }
                                 }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
                             }.setNegativeButton("Cancel", null).show()
-                    } else if (which == 6) switchCurrentTabToGecko("Detailed site permission controls require GeckoView")
+                    } else if (which == 6) showCefriumSitePermissionSettings(origin)
                 }.setNegativeButton("Close", null).show()
             return
         }

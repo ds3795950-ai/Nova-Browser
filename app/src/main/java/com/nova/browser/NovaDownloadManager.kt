@@ -63,16 +63,14 @@ class NovaDownloadManager(
         bytes: Long
     ) {
         val parsedUrl = runCatching { URL(url) }.getOrNull()
-        require(parsedUrl?.protocol == "http" || parsedUrl?.protocol == "https") {
-            "Only completed HTTP(S) downloads can be added to Nova history"
-        }
+        val safeUrl = parsedUrl?.takeIf { it.protocol == "http" || it.protocol == "https" }?.toString().orEmpty()
         val uri = Uri.parse(savedUri)
         require(uri.scheme == "content") { "Completed download must be published through Android storage" }
         val safeName = sanitize(fileName).ifBlank { "nova-download.bin" }
         val size = bytes.coerceAtLeast(0L)
         put(Item(
             id = UUID.randomUUID().toString(),
-            url = url.take(8192),
+            url = safeUrl.take(8192),
             fileName = safeName,
             mimeType = mimeType.take(128).ifBlank { "application/octet-stream" },
             downloaded = size,
