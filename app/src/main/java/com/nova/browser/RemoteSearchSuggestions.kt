@@ -8,6 +8,7 @@ import java.net.URLEncoder
 /** Network suggestions are called only after the user explicitly enables them. */
 internal object RemoteSearchSuggestions {
     fun fetch(query: String, engine: String): List<String> {
+        if (Thread.currentThread().isInterrupted) return emptyList()
         val clean = query.trim().takeIf { it.length in 2..128 } ?: return emptyList()
         val encoded = URLEncoder.encode(clean, "UTF-8")
         val endpoint = when (engine) {
@@ -25,8 +26,12 @@ internal object RemoteSearchSuggestions {
             setRequestProperty("User-Agent", "NovaBrowser/0.4")
         }
         return try {
-            if (connection.responseCode != HttpURLConnection.HTTP_OK || connection.contentLengthLong > 64 * 1024) return emptyList()
+            if (Thread.currentThread().isInterrupted) return emptyList()
+            val responseCode = connection.responseCode
+            if (Thread.currentThread().isInterrupted) return emptyList()
+            if (responseCode != HttpURLConnection.HTTP_OK || connection.contentLengthLong > 64 * 1024) return emptyList()
             val text = connection.inputStream.bufferedReader().use { it.readText().take(64 * 1024) }
+            if (Thread.currentThread().isInterrupted) return emptyList()
             val json = JSONArray(text)
             when (engine) {
                 "DuckDuckGo" -> List(json.length()) { i -> json.optJSONObject(i)?.optString("phrase").orEmpty() }

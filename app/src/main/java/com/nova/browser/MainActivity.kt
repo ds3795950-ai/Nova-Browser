@@ -120,6 +120,7 @@ class MainActivity : ComponentActivity() {
     private var addressSuggestionItems: List<BrowserSuggestion> = emptyList()
     private val addressSuggestionHandler = Handler(Looper.getMainLooper())
     private var pendingRemoteSuggestion: Runnable? = null
+    private var activeRemoteSuggestionFuture: java.util.concurrent.Future<*>? = null
     private val remoteSuggestionExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var separatingFold: FoldingFeature? = null
     private lateinit var addressSuggestionsAdapter: ArrayAdapter<String>
@@ -1730,6 +1731,8 @@ class MainActivity : ComponentActivity() {
     private fun cancelPendingRemoteSuggestions() {
         pendingRemoteSuggestion?.let(addressSuggestionHandler::removeCallbacks)
         pendingRemoteSuggestion = null
+        activeRemoteSuggestionFuture?.cancel(true)
+        activeRemoteSuggestionFuture = null
     }
 
     private fun scheduleRemoteSuggestions(query: String, local: List<BrowserSuggestion>, searchSuggestion: BrowserSuggestion?) {
@@ -1750,8 +1753,10 @@ class MainActivity : ComponentActivity() {
                     active?.isGuest ?: true,
                     query
                 )) return@Runnable
-            remoteSuggestionExecutor.execute {
+            activeRemoteSuggestionFuture = remoteSuggestionExecutor.submit {
+                if (Thread.currentThread().isInterrupted) return@submit
                 val remote = RemoteSearchSuggestions.fetch(query, requestedSearchEngine)
+                if (Thread.currentThread().isInterrupted) return@submit
                 runOnUiThread {
                     val current = currentTab()
                     if (isDestroyed || current !== tab || !::addressBar.isInitialized || !addressBar.hasFocus() ||
@@ -3034,6 +3039,7 @@ class MainActivity : ComponentActivity() {
             getString(R.string.remote_search_suggestions, if (prefs.getBoolean("remote_search_suggestions", false)) "On" else "Off") to {
                 val enabled = !prefs.getBoolean("remote_search_suggestions", false)
                 prefs.edit().putBoolean("remote_search_suggestions", enabled).apply()
+                if (!enabled) cancelPendingRemoteSuggestions()
                 toast(getString(if (enabled) R.string.remote_suggestions_enabled else R.string.remote_suggestions_disabled))
                 if (::addressBar.isInitialized && addressBar.hasFocus()) updateAddressSuggestions(addressBar.text?.toString().orEmpty())
             },
@@ -3353,8 +3359,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        pendingRemoteSuggestion?.let(addressSuggestionHandler::removeCallbacks)
-        pendingRemoteSuggestion = null
+        cancelPendingRemoteSuggestions()
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()
         pendingAndroidPermissionCallback = null
