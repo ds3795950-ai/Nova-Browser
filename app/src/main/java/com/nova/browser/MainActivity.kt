@@ -2198,7 +2198,7 @@ class MainActivity : ComponentActivity() {
         val labels = if (guest) {
             arrayOf("New guest tab", "Back", "Forward", "Reload", "Share page", "Reader view", "Translate page", "Nova Shield", "Quick settings help")
         } else {
-            arrayOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Password manager", "Site permissions", "Settings")
+            arrayOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Site permissions", "Settings")
         }
         AlertDialog.Builder(this)
             .setTitle("Quick settings")
@@ -2220,7 +2220,6 @@ class MainActivity : ComponentActivity() {
                     "Nova Shield" -> showShieldSettings()
                     "AI Assistant" -> showAiAssistant()
                     "Extensions" -> showExtensions()
-                    "Password manager" -> showPasswordVault()
                     "Site permissions" -> showSiteControls()
                     "Settings" -> showSettings()
                     "Quick settings help" -> toast("Quick settings gives fast access to common browser actions")
