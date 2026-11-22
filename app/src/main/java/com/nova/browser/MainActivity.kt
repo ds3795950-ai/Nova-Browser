@@ -2547,12 +2547,17 @@ class MainActivity : ComponentActivity() {
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
         val items = mutableListOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS · AdGuard DNS", "VPN & Firewall · 1VPN")
+        val clearDataIndex = items.size.also { items.add("Clear browsing data") }
         val enginePreferenceIndex = items.size.also { items.add("Browser engine · ${enginePreferences.normalMode().name.lowercase().replaceFirstChar { it.uppercase() }}") }
         val siteEngineIndex = items.size.also { items.add("Remember this site's current engine") }
         val relatedSiteEngineIndex = items.size.also { items.add("Remember related sign-in domains") }
         val switchEngineIndex = items.size.also { items.add("Switch this tab's engine") }
         val engineProbeIndex = if (BuildConfig.DEBUG) items.size.also { items.add("Developer · Cefrium engine test") } else -1
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items.toTypedArray()) { _, which ->
+            if (which == clearDataIndex) {
+                showClearBrowsingData()
+                return@setItems
+            }
             if (which == enginePreferenceIndex) {
                 showBrowserEngineSettings()
                 return@setItems
@@ -2614,6 +2619,62 @@ class MainActivity : ComponentActivity() {
         }.show()
     }
 
+
+    private fun showClearBrowsingData() {
+        if (currentTab()?.isPrivate == true) { toast("Clear owner browsing data from a Normal tab"); return }
+        if (denyGuestAccess("Clear browsing data")) return
+        val history = CheckBox(this).apply { text = "Browsing history · GeckoView and Cefrium"; isChecked = true }
+        val siteData = CheckBox(this).apply { text = "Cookies, site storage and authentication data · GeckoView only"; isChecked = true }
+        val cache = CheckBox(this).apply { text = "Browser cache · GeckoView only"; isChecked = true }
+        val siteSettings = CheckBox(this).apply { text = "Site permissions and settings · GeckoView only"; isChecked = false }
+        val passwords = CheckBox(this).apply { text = "Saved passwords · encrypted Nova vault"; isChecked = false }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            addView(history); addView(siteData); addView(cache); addView(siteSettings); addView(passwords)
+            addView(TextView(this@MainActivity).apply {
+                text = "Cefrium website storage cannot currently be cleared through its browser SDK, so this action will not claim to erase it. Downloaded files and download records are not deleted. GeckoView tabs are temporarily closed while selected data is cleared, then the active tab is reopened."
+                textSize = 12f
+                setPadding(0, dp(12), 0, 0)
+            })
+        }
+        AlertDialog.Builder(this).setTitle("Clear browsing data")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setPositiveButton("Clear selected") { _, _ ->
+                val selection = BrowsingDataSelection(history.isChecked, siteData.isChecked, cache.isChecked, siteSettings.isChecked, passwords.isChecked)
+                if (!selection.hasSelection()) { toast("Select at least one data type"); return@setPositiveButton }
+                if (selection.history) BrowserEngineType.values().forEach { clearBrowsingHistory(it) }
+                if (selection.savedPasswords) runCatching { passwordVault.clear() }
+                    .onSuccess { toast("Encrypted password vault cleared") }
+                    .onFailure { toast("Could not clear password vault: ${it.localizedMessage ?: "Unknown error"}") }
+                val flags = selection.geckoFlags()
+                if (flags != 0L) clearGeckoWebsiteData(flags, currentTab()?.id)
+                else toast("Selected Nova browsing data cleared")
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?) {
+        if (splitTabId != null) exitSplitScreen()
+        tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.GECKOVIEW }.forEach { tab ->
+            if (tab.browserEngine != null) { deactivateTabRuntime(tab); closeTabRuntime(tab) }
+            tab.needsReload = true
+        }
+        val finish = { succeeded: Boolean, message: String? ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val index = tabs.indexOfFirst { it.id == activeTabId }
+                if (index >= 0 && tabs[index].engineType == BrowserEngineType.GECKOVIEW) switchTab(index)
+                if (succeeded) toast("Selected GeckoView website data cleared")
+                else toast("GeckoView data clear failed: ${message ?: "Unknown error"}. Closed tabs will reopen when selected.")
+            }
+        }
+        runCatching {
+            runtime.storageController.clearData(flags).accept(
+                { finish(true, null) },
+                { error -> finish(false, error?.localizedMessage) }
+            )
+        }.onFailure { finish(false, it.localizedMessage) }
+    }
 
     private fun showCloudAccount() {
         if (currentTab()?.isPrivate == true) { toast("Nova Cloud is unavailable in Private Mode"); return }
