@@ -292,6 +292,7 @@ internal class NovaAiAssistantUi(
         models = Spinner(context)
         modelAdapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(modelLabel(model)))
         models.adapter = modelAdapter
+        updateModelChoices(model)
 
         status = label("", 11f, muted).apply {
             setPadding(dp(5), 0, dp(5), dp(7))
@@ -518,7 +519,10 @@ internal class NovaAiAssistantUi(
             .setView(field)
             .setPositiveButton("Save") { _, _ ->
                 runCatching { store.setKey(provider, field.text.toString()) }
-                    .onSuccess { status.text = if (store.hasKey(provider)) "API key saved · ${provider.label}" else "API key removed" }
+                    .onSuccess {
+                        status.text = if (store.hasKey(provider)) "API key saved · ${provider.label}" else "API key removed"
+                        if (store.hasKey(provider)) refreshModels()
+                    }
                     .onFailure { notify("Could not save key: ${it.message}") }
             }
             .setNeutralButton("Remove") { _, _ ->
