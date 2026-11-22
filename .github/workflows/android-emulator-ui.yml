@@ -43,7 +43,7 @@ jobs:
       - name: Install Appium and WebdriverIO
         run: |
           npm install --no-save --package-lock=false webdriverio@9.33.1 appium@2.19.0
-          npx appium driver install uiautomator2
+          npx appium driver install --source=npm appium-uiautomator2-driver@4.2.9
 
       - name: Run UI regression on Android 15 emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -56,6 +56,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
             set -euo pipefail
+            mkdir -p test-results
+            trap 'mkdir -p test-results; cp /tmp/nova-appium.log test-results/appium.log 2>/dev/null || true' EXIT
             gradle --no-daemon :app:assembleDebug
             APP_FILE=app/build/outputs/apk/debug/app-debug.apk
             test -s "$APP_FILE"
@@ -80,8 +82,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nova-android-emulator-ui-${{ github.run_number }}
-          path: |
-            test-results/
-            /tmp/nova-appium.log
+          path: test-results/
           if-no-files-found: ignore
           retention-days: 7
