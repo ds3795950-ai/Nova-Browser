@@ -60,16 +60,16 @@ internal class NovaExtensionManagerUi(
         RecommendedAddon("uBlock Origin", "ublock-origin"),
         RecommendedAddon("Dark Reader", "darkreader"),
         RecommendedAddon("AdGuard AdBlocker", "adguard-adblocker"),
-        RecommendedAddon("Ghostery", "ghostery"),
+        RecommendedAddon("Ghostery – Privacy Ad Blocker", "ghostery"),
         RecommendedAddon("ClearURLs", "clearurls"),
         RecommendedAddon("FoxyProxy Standard", "foxyproxy-standard"),
         RecommendedAddon("Decentraleyes", "decentraleyes"),
         RecommendedAddon("NoScript Security Suite", "noscript"),
         RecommendedAddon("Privacy Badger", "privacy-badger17"),
         RecommendedAddon("YouTube High Definition", "youtube-high-definition"),
-        RecommendedAddon("Read Aloud", "read-aloud"),
+        RecommendedAddon("Read Aloud: A Text to Speech Voice Reader", "read-aloud"),
         RecommendedAddon("Web Archives", "view-page-archive"),
-        RecommendedAddon("Tomato Clock", "tomato-clock"),
+        RecommendedAddon("Tomato Clock - A Simple Pomodoro Timer", "tomato-clock"),
         RecommendedAddon("Search by Image", "search_by_image"),
         RecommendedAddon("Firefox Relay", "private-relay"),
         RecommendedAddon("Google Search Fixer", "google-search-fixer"),
@@ -88,7 +88,11 @@ internal class NovaExtensionManagerUi(
                 }
                 recommendedAddons.forEach { addon ->
                     val key = addonKey(addon.name)
-                    var extension = installedByName[key]
+                    var extension = installedByName[key] ?: installedByName.values.firstOrNull {
+                        val installedName = addonKey(it.metaData?.name)
+                        installedName.isNotBlank() &&
+                            (installedName.contains(key) || key.contains(installedName))
+                    }
                     var updating = false
                     val check = CheckBox(activity).apply {
                         text = when {
