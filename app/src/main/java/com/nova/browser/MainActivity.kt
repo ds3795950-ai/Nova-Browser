@@ -881,7 +881,7 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
             actions += "Nova Add-ons" to { showExtensions() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
-            actions += getString(R.string.site_permissions) to { showSiteControls() }
+            actions += "Site Settings" to { showSiteSettingsHub() }
             actions += getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
             actions += getString(R.string.protected_dns) to { showProtectedDnsSettings() }
             actions += getString(R.string.vpn_firewall) to { startActivity(Intent(this, NovaVpnFirewallActivity::class.java)) }
