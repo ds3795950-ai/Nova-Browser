@@ -859,6 +859,7 @@ class MainActivity : ComponentActivity() {
             val secondary = tab.id == splitTabId
             val shouldRecover = BrowserRendererRecoveryPolicy.shouldAutomaticallyRecover(tab.rendererRecoveryAttempts)
             tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.nextAttempt(tab.rendererRecoveryAttempts)
+            (tab.browserEngine as? GeckoViewBrowserEngine)?.markRendererTerminated()
             closeTabRuntime(tab)
             tab.needsReload = tab.lastUrl != HOME_URL
             if (shouldRecover) {

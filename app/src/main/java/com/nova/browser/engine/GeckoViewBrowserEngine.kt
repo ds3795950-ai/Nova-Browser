@@ -109,6 +109,18 @@ class GeckoViewBrowserEngine(
         }
     }
 
+    /** GeckoSession has already closed itself before onCrash/onKill reaches the host. */
+    fun markRendererTerminated() {
+        if (closed) return
+        // Do not call setActive/setFocused/close on the already-closed session. The next
+        // adapter will attach a fresh session to the same GeckoView host.
+        isAttached = false
+        active = false
+        focused = false
+        hostPaused = false
+        closed = true
+    }
+
     override fun close() {
         if (closed) return
         detach()
