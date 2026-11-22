@@ -158,6 +158,7 @@ class PasswordVault(context: Context) {
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
         val packed = cipher.iv + encrypted
+        require(packed.size <= MAX_VAULT_BYTES) { "Password vault data is too large" }
         val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")
         FileOutputStream(temporary).use { it.write(packed); it.fd.sync() }
         try {

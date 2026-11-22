@@ -1,5 +1,6 @@
 package com.nova.browser.engine
 import android.net.Uri
+import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -25,7 +26,7 @@ class NovaScriptAddonStore(context:android.content.Context) {
                     val a=row.optJSONArray("origins")?:continue
                     val rules=(0 until a.length()).map{a.optString(it)}.filter{validOrigin(it)}.toSet()
                     if(rules.isEmpty()) continue
-                    NovaScriptAddon(id,row.optString("name").take(64).ifBlank{"Nova Script Add-on"},rules,file.readText(Charsets.UTF_8),row.optBoolean("enabled",false))
+                    add(NovaScriptAddon(id,row.optString("name").take(64).ifBlank{"Nova Script Add-on"},rules,file.readText(Charsets.UTF_8),row.optBoolean("enabled",false)))
                 }
             }
         }.getOrDefault(emptyList())
@@ -41,9 +42,15 @@ class NovaScriptAddonStore(context:android.content.Context) {
         require(rules.size<=20){"Use no more than 20 website origins"}
         rules.forEach{require(validOrigin(it)){"Invalid origin: $it. Use https://example.com or https://*.example.org"}}
         val id=UUID.randomUUID().toString()
-        File(root,"$id.js").writeText(script,Charsets.UTF_8)
+        val scriptFile = File(root,"$id.js")
+        scriptFile.writeText(script,Charsets.UTF_8)
         val item=NovaScriptAddon(id,clean,rules.toSet(),script,true)
-        writeIndex(list()+item)
+        try {
+            writeIndex(list()+item)
+        } catch (error: Exception) {
+            scriptFile.delete()
+            throw error
+        }
         return item
     }
     @Synchronized fun setEnabled(id:String,enabled:Boolean) {
@@ -52,14 +59,22 @@ class NovaScriptAddonStore(context:android.content.Context) {
     }
     @Synchronized fun remove(id:String) {
         val items=list(); require(items.any{it.id==id}){"Add-on not found"}
-        File(root,"$id.js").delete(); writeIndex(items.filterNot{it.id==id})
+        writeIndex(items.filterNot{it.id==id})
+        File(root,"$id.js").delete()
     }
     private fun writeIndex(items:List<NovaScriptAddon>) {
         val rows=JSONArray()
         items.forEach{rows.put(JSONObject().put("id",it.id).put("name",it.name).put("enabled",it.enabled).put("origins",JSONArray(it.allowedOriginRules.toList().sorted())))}
-        val tmp=File(root,"index.json.tmp"); tmp.writeText(rows.toString(),Charsets.UTF_8)
-        if(index.exists()&&!index.delete()) throw IllegalStateException("Could not update add-on index")
-        if(!tmp.renameTo(index)) throw IllegalStateException("Could not save add-on index")
+        val atomic = AtomicFile(index)
+        var output: java.io.FileOutputStream? = null
+        try {
+            output = atomic.startWrite()
+            output.write(rows.toString().toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(output)
+        } catch (error: Exception) {
+            output?.let(atomic::failWrite)
+            throw IllegalStateException("Could not save add-on index", error)
+        }
     }
     private fun validOrigin(rule:String):Boolean {
         if(rule=="*"||rule.contains('@')||rule.contains('?')||rule.contains('#'))return false
