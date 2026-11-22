@@ -42,10 +42,10 @@ class GeckoViewBrowserEngine(
      * Installs the host-provided Gecko delegates exactly once before the session is used.
      * The adapter owns the registration boundary and guards against duplicate installation.
      */
-    fun installDelegates(installer: (GeckoSession) -> Unit) {
+    fun installDelegates(installer: GeckoSessionDelegateInstaller) {
         checkOpen()
         check(!delegatesInstalled) { "Gecko delegates have already been installed" }
-        installer(session)
+        installer.install(session)
         delegatesInstalled = true
     }
 

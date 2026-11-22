@@ -27,12 +27,12 @@
 
 ## Remaining Phase 2 work
 
-- Move Gecko-specific delegate installation and capability handling behind the Gecko adapter/factory so `MainActivity` no longer needs to know the Gecko session type.
+- Gecko session construction, one-time delegate registration ordering, and session opening are owned by `GeckoViewEngineFactory`; Gecko-specific callbacks are passed through a typed `GeckoSessionDelegateInstaller`. The callback implementations remain host-owned because they invoke Android UI, vault, download, and permission services.
 - The shared `BrowserEngine.supports()` contract now gates Reader Mode, downloads, and Shield entry points; translation and extensions use the capability-routing policy. Continue migrating remaining feature-specific checks to this contract as adapters are extracted.
-- Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
+- Add deterministic tests for engine selection, privacy-profile overrides, Cefrium availability/compatibility fallbacks, tab-session retention, and split-pane retention. Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
 - Do not mark Phase 2 verified until the Android build, unit tests, emulator smoke tests, and BrowserStack device suite pass.
 
 ## Verification status
 
 - Source integration: implemented in the current feature branch; CI/device verification is pending for this revision.
-- The existing Gecko delegates remain host-managed intentionally in this increment; the tab model and shared navigation/lifecycle are engine-neutral, but capability extraction is not complete.
+- The Gecko callback bodies remain host-managed intentionally, but the factory now owns session creation, delegate registration ordering, and opening. Shared navigation and lifecycle remain engine-neutral; Android UI callbacks still require host integration.

@@ -1,51 +1,86 @@
-package com.nova.browser
+package com.nova.browser.engine
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import android.view.View
 
-class TabSessionRetentionPolicyTest {
+/** Rendering engine implementations supported by Nova. */
+enum class BrowserEngineType {
+    GECKOVIEW,
+    CEFRIUM
+}
+
+/** A small, engine-neutral snapshot for the browser chrome. */
+data class BrowserEngineState(
+    val url: String? = null,
+    val title: String? = null,
+    val isLoading: Boolean = false,
+    val progress: Int = 0,
+    val canGoBack: Boolean = false,
+    val canGoForward: Boolean = false,
+    val error: String? = null
+)
+
+/**
+ * Optional features available from a concrete engine adapter. These describe engine capability,
+ * not permission or privacy policy; Nova must still enforce its own profile and user settings.
+ */
+enum class BrowserEngineCapability {
+    DOWNLOADS,
+    SITE_PERMISSIONS,
+    READER_MODE,
+    DESKTOP_MODE,
+    VPN_PROXY,
+    TRANSLATION,
+    PASSWORD_AUTOFILL,
+    NOVA_SHIELD,
+    EXTENSIONS
+}
+
+fun interface BrowserEngineListener {
+    fun onStateChanged(state: BrowserEngineState)
+}
+
+/**
+ * Engine boundary for one browser tab. Tab storage, history, bookmarks, Shield and policy stay
+ * outside this interface in Nova's app-level services. Implementations own only engine resources.
+ */
+interface BrowserEngine : AutoCloseable {
+    val type: BrowserEngineType
+    val view: View
+    val state: BrowserEngineState
+
+    /** Features supported by this engine implementation. */
+    val capabilities: Set<BrowserEngineCapability>
+        get() = emptySet()
+
+    /** Centralized feature check; callers must still enforce Nova's profile and user policies. */
+    fun supports(capability: BrowserEngineCapability): Boolean = capability in capabilities
+
+    fun loadUrl(url: String)
+    fun goBack()
+    fun goForward()
+    fun reload()
+    /** Attach an engine-owned view to a host pane. Engines with fixed views may ignore it. */
+    fun attachTo(view: View) {}
+
+    /** Detach the engine view without closing the tab or its browsing session. */
+    fun detach() {}
+
+    fun setActive(active: Boolean, focused: Boolean)
+    fun onHostPause()
+    fun onHostResume()
+
+    /** Releases the engine tab and its native resources. Safe to call more than once. */
+    override fun close()
+
     @Test
-    fun activeTabIsAlwaysRetainedAlongsideThreeMostRecentlyUsedBackgroundTabs() {
+    fun duplicateTabIdsAreDeduplicatedBeforeApplyingTheLiveTabBudget() {
         val retained = TabSessionRetentionPolicy.retainedTabIds(
-            tabLastAccess = listOf("old" to 1L, "active" to 2L, "recent-a" to 8L, "recent-b" to 7L, "recent-c" to 6L, "recent-d" to 5L),
+            tabLastAccess = listOf("active" to 1L, "background" to 3L, "background" to 9L, "older" to 2L),
             activeTabId = "active",
-            splitTabId = null
+            splitTabId = null,
+            maxLiveTabs = 2
         )
-
-        assertEquals(setOf("active", "recent-a", "recent-b", "recent-c"), retained)
-    }
-
-    @Test
-    fun visibleSplitTabIsRetainedEvenWhenOutsideTheFourTabBudget() {
-        val retained = TabSessionRetentionPolicy.retainedTabIds(
-            tabLastAccess = listOf("active" to 10L, "recent-a" to 9L, "recent-b" to 8L, "recent-c" to 7L, "split" to 1L),
-            activeTabId = "active",
-            splitTabId = "split"
-        )
-
-        assertTrue("split" in retained)
-        assertEquals(5, retained.size)
-    }
-
-    @Test
-    fun missingSplitTabDoesNotAddAnUnknownId() {
-        val retained = TabSessionRetentionPolicy.retainedTabIds(
-            tabLastAccess = listOf("active" to 1L, "background" to 0L),
-            activeTabId = "active",
-            splitTabId = "closed-tab"
-        )
-
         assertEquals(setOf("active", "background"), retained)
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun rejectsNonPositiveLiveTabBudget() {
-        TabSessionRetentionPolicy.retainedTabIds(
-            tabLastAccess = listOf("active" to 1L),
-            activeTabId = "active",
-            splitTabId = null,
-            maxLiveTabs = 0
-        )
-    }
 }

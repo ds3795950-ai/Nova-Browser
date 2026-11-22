@@ -43,6 +43,8 @@ import com.nova.browser.engine.BrowserEngineCapabilityPolicy
 import com.nova.browser.engine.BrowserRendererRecoveryPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.GeckoViewBrowserEngine
+import com.nova.browser.engine.GeckoViewEngineFactory
+import com.nova.browser.engine.GeckoSessionDelegateInstaller
 import com.nova.browser.engine.BrowserProfileKind
 import android.widget.GridLayout
 import android.widget.ScrollView
@@ -910,7 +912,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            session.open(runtime)
             session.navigationDelegate = object : GeckoSession.NavigationDelegate {
                 override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                     tab.canGoBack = canGoBack
@@ -1025,10 +1026,15 @@ class MainActivity : ComponentActivity() {
             .userAgentMode(if (tab.desktopSite) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(if (tab.desktopSite) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .build()
-        val session = GeckoSession(settings)
-        val engine = GeckoViewBrowserEngine(session, browserView)
+        val engine = GeckoViewEngineFactory(runtime).create(
+            settings = settings,
+            initialView = browserView,
+            delegateInstaller = GeckoSessionDelegateInstaller { configuredSession ->
+                installGeckoDelegates(tab, configuredSession)
+            }
+        )
         tab.browserEngine = engine
-        engine.installDelegates { configuredSession -> installGeckoDelegates(tab, configuredSession) }
+        val session = engine.session
         if (tab.needsReload) {
             if (tab.lastUrl != HOME_URL) tab.browserEngine?.loadUrl(tab.lastUrl)
             tab.needsReload = false
