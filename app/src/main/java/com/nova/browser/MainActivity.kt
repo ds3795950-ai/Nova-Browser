@@ -595,8 +595,8 @@ class MainActivity : ComponentActivity() {
 
     private fun goHome() {
         currentTab()?.let { tab ->
-            tab.session?.stop()
-            tab.session?.loadUri(HOME_URL)
+            tab.engine?.stop()
+            tab.engine?.loadUrl(HOME_URL)
             tab.lastUrl = HOME_URL
             tab.title = "Nova Home"
             tab.needsReload = false
@@ -1402,6 +1402,8 @@ class MainActivity : ComponentActivity() {
 
     private fun handleTabCrash(session: GeckoSession) {
         val tab = tabs.firstOrNull { it.session === session } ?: return
+        tab.engine?.close()
+        tab.engine = null
         tab.session = null
         tab.needsReload = true
         tab.hasCrashed = true
@@ -1580,7 +1582,7 @@ class MainActivity : ComponentActivity() {
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         prepareDesktopModeForNavigation(tab, target)
         tab.lastUrl = target
-        ensureSession(tab).loadUri(target)
+        ensureSession(tab); tab.engine?.loadUrl(target)
         if (!secondaryAddressBar.hasFocus()) secondaryAddressBar.setText(target)
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
     }
@@ -1632,7 +1634,7 @@ class MainActivity : ComponentActivity() {
         updateTabChrome(tab)
         resetPageStatus(when { tab.isGuest -> getString(R.string.guest_history_disabled); tab.isPrivate -> getString(R.string.private_history_disabled); else -> getString(R.string.loading_page) }, if (tab.isGuest || tab.isPrivate) 0 else 3)
         try {
-            ensureSession(tab).loadUri(target)
+            ensureSession(tab); tab.engine?.loadUrl(target)
         } catch (error: Exception) {
             setPageStatus(getString(R.string.navigation_error), 5)
             toast("Could not open page: ${error?.localizedMessage ?: "Unknown error"}")
@@ -2534,7 +2536,7 @@ class MainActivity : ComponentActivity() {
                         val allow = permission.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                         runtime.storageController.setPermission(permission, if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
                         toast(if (allow) "Trackers allowed for $host · reload the page" else "Tracking protection restored for $host · reload the page")
-                        tab.session?.reload()
+                        tab.engine?.reload()
                     }
                     4 -> {
                         val session = tab?.session
