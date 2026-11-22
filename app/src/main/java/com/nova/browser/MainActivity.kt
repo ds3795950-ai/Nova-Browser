@@ -3813,19 +3813,78 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showAllSiteSettings() {
-        val entries = storedSiteRuleEntries()
+        val entries = storedSiteRuleEntries().toMutableSet()
+        runtime.storageController.getAllPermissions().accept({ permissions ->
+            runOnUiThread {
+                permissions.filter { !it.privateMode && it.contextId.isNullOrBlank() }.forEach { permission ->
+                    val uri = runCatching { Uri.parse(permission.uri) }.getOrNull() ?: return@forEach
+                    val scheme = uri.scheme?.lowercase()
+                    val host = uri.host?.lowercase()
+                    if (scheme in listOf("http", "https") && !host.isNullOrBlank()) {
+                        val origin = "${scheme}://$host${if (uri.port > 0) ":${uri.port}" else ""}"
+                        entries.add(SiteRuleEntry(BrowserEngineType.GECKOVIEW, origin))
+                    }
+                }
+                showAllSiteSettingsList(entries.toList())
+            }
+        }, {
+            runOnUiThread { showAllSiteSettingsList(entries.toList()) }
+        })
+    }
+
+    private fun showAllSiteSettingsList(entries: List<SiteRuleEntry>) {
         if (entries.isEmpty()) {
             AlertDialog.Builder(this).setTitle("All sites")
-                .setMessage("No saved site-specific settings yet. Open a website and change one of its settings to add it here.")
+                .setMessage("No saved site-specific settings or permissions yet. Open a website and change one of its settings to add it here.")
                 .setPositiveButton(android.R.string.ok, null).show()
             return
         }
-        val labels = entries.map {
+        val sorted = entries.sortedWith(compareBy({ it.engine.name }, { it.origin }))
+        val labels = sorted.map {
             "${it.origin}  ·  ${if (it.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"}"
         }.toTypedArray()
         AlertDialog.Builder(this).setTitle("All sites")
-            .setItems(labels) { _, which -> showSiteRuleDetails(entries[which]) }
+            .setItems(labels) { _, which -> showSiteRuleDetails(sorted[which]) }
             .setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun showGeckoSitePermissions(entry: SiteRuleEntry) {
+        runtime.storageController.getAllPermissions().accept({ permissions ->
+            val matching = permissions.filter { permission ->
+                if (permission.privateMode || !permission.contextId.isNullOrBlank()) return@filter false
+                runCatching {
+                    val uri = Uri.parse(permission.uri)
+                    val origin = "${uri.scheme}://${uri.host}${if (uri.port > 0) ":${uri.port}" else ""}"
+                    origin == entry.origin
+                }.getOrDefault(false)
+            }
+            runOnUiThread {
+                if (matching.isEmpty()) {
+                    toast("No saved GeckoView permissions for ${Uri.parse(entry.origin).host}")
+                    showSiteRuleDetails(entry)
+                } else {
+                    val labels = matching.map { permission ->
+                        "${sitePermissionLabel(permission.permission)} · " + when (permission.value) {
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"
+                            else -> "Ask"
+                        }
+                    }.toTypedArray()
+                    AlertDialog.Builder(this).setTitle("Permissions · ${Uri.parse(entry.origin).host}")
+                        .setItems(labels) { _, which ->
+                            val permission = matching[which]
+                            val next = if (permission.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                                GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                            else GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                            runtime.storageController.setPermission(permission, next)
+                            toast("Permission updated · reload the site")
+                            showGeckoSitePermissions(entry)
+                        }.setNegativeButton(getString(R.string.close), null).show()
+                }
+            }
+        }, { error ->
+            runOnUiThread { toast("Could not read saved permissions: ${error?.localizedMessage ?: "Unknown error"}") }
+        })
     }
 
     private fun siteRuleKey(entry: SiteRuleEntry, setting: String): String {
@@ -3852,7 +3911,8 @@ class MainActivity : ComponentActivity() {
             return "${definition.second} · ${if (value) "Allowed" else "Blocked"}"
         }
         val labels = definitions.map(::label).toTypedArray() +
-            "Reset this site's settings" + "Clear this site's data"
+            (if (entry.engine == BrowserEngineType.GECKOVIEW) arrayOf("View saved permissions") else emptyArray()) +
+            arrayOf("Reset this site's settings", "Clear this site's data")
         AlertDialog.Builder(this).setTitle("$host · $engineLabel")
             .setItems(labels) { _, which ->
                 when {
@@ -3879,7 +3939,10 @@ class MainActivity : ComponentActivity() {
                         toast("$host · ${definition.second} ${if (next) "allowed" else "blocked"}")
                         showSiteRuleDetails(entry)
                     }
-                    which == definitions.size -> {
+                    entry.engine == BrowserEngineType.GECKOVIEW && which == definitions.size -> {
+                        showGeckoSitePermissions(entry)
+                    }
+                    which == definitions.size + if (entry.engine == BrowserEngineType.GECKOVIEW) 1 else 0 -> {
                         val encoded = Uri.encode(entry.origin)
                         val engineToken = entry.engine.name.lowercase() + "_"
                         val editor = prefs.edit()
