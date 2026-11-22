@@ -55,7 +55,8 @@ class CefriumBrowserEngine(
     private val onBeforeUnloadDialog: (String, Boolean, (Boolean) -> Unit) -> Unit = { _, _, answer -> answer(false) },
     private val onPermissionRequestCanceled: () -> Unit = {},
     desktopMode: Boolean = false,
-    existingBrowser: CefriumBrowser? = null
+    existingBrowser: CefriumBrowser? = null,
+    initialNovaAddons: List<NovaScriptAddon> = emptyList()
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = setOf(
@@ -82,6 +83,7 @@ class CefriumBrowserEngine(
         progress = browser.getProgress()
     )
     private var closed = false
+    private val novaAddonScriptHandlers = mutableMapOf<String, CefriumBrowser.ScriptHandler>()
 
     override val state: BrowserEngineState
         get() = currentState
@@ -140,6 +142,7 @@ class CefriumBrowserEngine(
             }
         })
         browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
+        setNovaScriptAddons(initialNovaAddons)
         if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
@@ -195,6 +198,30 @@ class CefriumBrowserEngine(
     }
 
     fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
+
+    fun setNovaScriptAddons(addons: List<NovaScriptAddon>) {
+        checkOpen()
+        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
+        novaAddonScriptHandlers.clear()
+        addons.filter { it.enabled }.forEach { addon ->
+            require(addon.allowedOriginRules.isNotEmpty()) { "Nova Add-on requires an origin allowlist" }
+            val idLiteral = org.json.JSONObject.quote(addon.id)
+            val nameLiteral = org.json.JSONObject.quote(addon.name)
+            val wrapped = """
+                (() => {
+                  try {
+                    globalThis.__novaAddonLoaded = globalThis.__novaAddonLoaded || Object.create(null);
+                    if (globalThis.__novaAddonLoaded[$idLiteral]) return;
+                    globalThis.__novaAddonLoaded[$idLiteral] = true;
+                    ${addon.script}
+                  } catch (error) {
+                    console.error("[Nova Add-on: " + $nameLiteral + "]", error);
+                  }
+                })();
+            """.trimIndent()
+            novaAddonScriptHandlers[addon.id] = browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
+        }
+    }
     fun startDownload(url: String) { if (!closed) browser.startDownload(url) }
     fun serializeNavigationState(): ByteArray? = if (closed) null else runCatching { browser.serializeNavigationState() }.getOrNull()
 
@@ -318,6 +345,8 @@ class CefriumBrowserEngine(
     override fun close() {
         if (closed) return
         detach()
+        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
+        novaAddonScriptHandlers.clear()
         closed = true
         browser.close()
     }

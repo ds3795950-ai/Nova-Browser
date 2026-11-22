@@ -96,6 +96,7 @@ import com.nova.browser.engine.EngineSelectionPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.CefriumSitePermissionPolicy
 import com.nova.browser.engine.GeckoViewBrowserEngine
+import com.nova.browser.engine.NovaScriptAddonStore
 
 /** Nova browser core. Normal tabs may use Cefrium; Private and Guest remain GeckoView-only. */
 class MainActivity : ComponentActivity() {
@@ -170,6 +171,7 @@ class MainActivity : ComponentActivity() {
     private var lastFontScale = 1f
     private var searchEngine = "Google"
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
+    private val novaScriptAddonStore by lazy { NovaScriptAddonStore(this) }
 
     private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
@@ -876,7 +878,7 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.share_page) to { sharePage() }
             actions += getString(R.string.nova_shield) to { showShieldSettings() }
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
-            if (tab.engineType == BrowserEngineType.GECKOVIEW) actions += "Nova Add-ons" to { showExtensions() }
+            actions += "Nova Add-ons" to { showExtensions() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
             actions += getString(R.string.site_permissions) to { showSiteControls() }
             actions += getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
@@ -977,6 +979,7 @@ class MainActivity : ComponentActivity() {
             activity = this,
             profile = profile,
             initialNavigationState = restoredNavigationState,
+            initialNovaAddons = novaScriptAddonStore.enabled(),
             listener = BrowserEngineListener { state -> runOnUiThread { applyCefriumState(tab, state) } },
             onDownloadCompleted = { download ->
                 runOnUiThread {
@@ -3379,6 +3382,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showExtensions() {
         if (denyGuestAccess("Nova Add-ons")) return
+        if (currentTab()?.engineType == BrowserEngineType.CEFRIUM) { showCefriumNovaAddons(); return }
         if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
             toast("Nova Add-ons are not available in this engine yet")
             return
@@ -3408,6 +3412,65 @@ class MainActivity : ComponentActivity() {
                     .setNegativeButton("Close", null).show()
             }
         }, { error -> runOnUiThread { toast("Could not list Nova Add-ons: ${error?.localizedMessage ?: "Unknown error"}") } })
+    }
+
+
+    private fun showCefriumNovaAddons() {
+        val addons=novaScriptAddonStore.list()
+        val rows=addons.map { "${it.name} · ${if(it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Nova Add-ons · ${addons.size}")
+            .setMessage("Nova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView.")
+            .setItems(rows) { _,which ->
+                val addon=addons[which]
+                val actions=if(addon.enabled)arrayOf("Disable","Remove")else arrayOf("Enable","Remove")
+                AlertDialog.Builder(this).setTitle(addon.name)
+                    .setMessage("Allowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}")
+                    .setItems(actions) { _,action ->
+                        when(actions[action]) {
+                            "Enable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,true)}
+                                .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on enabled · reload applied")}
+                                .onFailure{toast("Could not enable add-on: ${it.message}")}
+                            "Disable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,false)}
+                                .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on disabled · reload applied")}
+                                .onFailure{toast("Could not disable add-on: ${it.message}")}
+                            "Remove" -> AlertDialog.Builder(this).setMessage("Remove ${addon.name} and its local script?")
+                                .setPositiveButton("Remove"){_,_->runCatching{novaScriptAddonStore.remove(addon.id)}
+                                    .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on removed")}
+                                    .onFailure{toast("Could not remove add-on: ${it.message}")}}
+                                .setNegativeButton("Cancel",null).show()
+                        }
+                    }.setNegativeButton("Cancel",null).show()
+            }
+            .setPositiveButton("Add script add-on"){_,_->showAddNovaScriptAddon()}
+            .setNegativeButton("Close",null).show()
+    }
+
+    private fun showAddNovaScriptAddon() {
+        val name=EditText(this).apply{hint="Add-on name";isSingleLine=true}
+        val origins=EditText(this).apply{hint="https://example.com, https://*.example.org";minLines=2;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE}
+        val script=EditText(this).apply{hint="// JavaScript to run at document start";minLines=8;gravity=Gravity.TOP;typeface=Typeface.MONOSPACE;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS}
+        val content=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(8),dp(18),dp(8))
+            addView(TextView(this@MainActivity).apply{text="Name";textSize=12f});addView(name)
+            addView(TextView(this@MainActivity).apply{text="Allowed website origins (comma-separated)";textSize=12f});addView(origins)
+            addView(TextView(this@MainActivity).apply{text="JavaScript";textSize=12f});addView(script,LinearLayout.LayoutParams(-1,dp(190)))
+        }
+        AlertDialog.Builder(this).setTitle("Create Nova Script Add-on")
+            .setMessage("Only HTTPS origins are accepted (HTTP is allowed for localhost). Scripts run in the page's main JavaScript world, including matching frames, and can access page content.")
+            .setView(content).setPositiveButton("Install"){_,_->
+                runCatching{novaScriptAddonStore.add(name.text.toString(),origins.text.toString(),script.text.toString())}
+                    .onSuccess{refreshCefriumNovaAddons();toast("Nova Script Add-on installed")}
+                    .onFailure{toast("Could not install add-on: ${it.message ?: "Check the name, origins and script size"}")}
+            }.setNegativeButton("Cancel",null).show()
+    }
+
+    private fun refreshCefriumNovaAddons() {
+        val active=novaScriptAddonStore.enabled()
+        tabs.filter{it.engineType==BrowserEngineType.CEFRIUM}.forEach{tab->
+            val engine=tab.browserEngine as? CefriumBrowserEngine?:return@forEach
+            runCatching{engine.setNovaScriptAddons(active);if(tab.lastUrl!=HOME_URL)engine.reload()}
+                .onFailure{toast("Could not refresh Nova Add-ons: ${it.message}")}
+        }
     }
 
     private fun installExtensionPrompt() {
@@ -3798,9 +3861,7 @@ class MainActivity : ComponentActivity() {
                     .setPositiveButton(android.R.string.ok, null).show()
             }
         )
-        if (currentTab()?.engineType == BrowserEngineType.GECKOVIEW) {
-            aboutActions.add(0, "Nova Add-ons" to { showExtensions() })
-        }
+        aboutActions.add(0, "Nova Add-ons" to { showExtensions() })
         if (BuildConfig.DEBUG) aboutActions.add("Cefrium Engine Lab" to {
             runCatching { startActivity(Intent().setClassName(packageName, "$packageName.CefriumEngineProbeActivity")) }
                 .onFailure { toast("Engine Lab is unavailable in this build") }
