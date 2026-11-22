@@ -30,6 +30,21 @@ internal enum class NovaAiProvider(val label: String, val defaultModel: String) 
 }
 internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
 
+/** Curated premium-tier model IDs are shown even when a provider omits them from
+ * the account's model list. API model-list visibility is used as an availability
+ * signal; Nova does not claim to verify a consumer-app subscription. */
+private object NovaAiModelCatalog {
+    fun premium(provider: NovaAiProvider): List<String> = when (provider) {
+        NovaAiProvider.CHATGPT -> listOf("gpt-5-pro", "o3-pro")
+        NovaAiProvider.CLAUDE -> listOf("claude-opus-4-1", "claude-opus-4-5")
+        NovaAiProvider.GROK -> listOf("grok-4", "grok-4-heavy")
+        NovaAiProvider.GEMINI -> listOf("gemini-2.5-pro", "gemini-3-pro-preview")
+        NovaAiProvider.KIMI -> listOf("kimi-k2-thinking")
+        NovaAiProvider.DEEPSEEK -> listOf("deepseek-reasoner")
+    }
+}
+
+
 /** API credentials and chat history are encrypted at rest using an Android Keystore AES key. */
 internal class NovaAiSecureStore(context:Context) {
     private val p=context.getSharedPreferences("nova_ai_secure",Context.MODE_PRIVATE)
@@ -165,6 +180,25 @@ internal class NovaAiAssistantUi(
 ) {
     private var provider = NovaAiProvider.CHATGPT
     private var model = store.model(provider)
+    private var availableModelIds = emptySet<String>()
+    private var displayedModelIds = listOf(model)
+    private var changingModelSelection = false
+
+    private fun isPremiumModel(id: String) = id in NovaAiModelCatalog.premium(provider)
+    private fun isModelLocked(id: String) = isPremiumModel(id) && id !in availableModelIds
+    private fun modelLabel(id: String) = if (isModelLocked(id)) "🔒 $id · Provider access required" else id
+    private fun updateModelChoices(preferred: String = model) {
+        val choices = (listOf(preferred) + availableModelIds.sorted() + NovaAiModelCatalog.premium(provider))
+            .filter { it.isNotBlank() }.distinct()
+        displayedModelIds = choices
+        modelAdapter.clear()
+        modelAdapter.addAll(choices.map(::modelLabel))
+        modelAdapter.notifyDataSetChanged()
+        val index = choices.indexOf(preferred).coerceAtLeast(0)
+        changingModelSelection = true
+        models.setSelection(index)
+        changingModelSelection = false
+    }
     private val messages = mutableListOf<NovaAiMessage>()
     private lateinit var feed: LinearLayout
     private lateinit var scroll: ScrollView
@@ -256,7 +290,7 @@ internal class NovaAiAssistantUi(
         root.addView(providerRow)
 
         models = Spinner(context)
-        modelAdapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(model))
+        modelAdapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(modelLabel(model)))
         models.adapter = modelAdapter
 
         status = label("", 11f, muted).apply {
@@ -338,17 +372,28 @@ internal class NovaAiAssistantUi(
                 provider = NovaAiProvider.values()[position]
                 usageWarning.visibility = View.GONE
                 model = store.model(provider)
-                modelAdapter.clear()
-                modelAdapter.add(model)
-                modelAdapter.notifyDataSetChanged()
-                status.text = if (store.hasKey(provider)) "Ready · ${provider.label}" else "Add ${provider.label} API key to connect"
+                availableModelIds = emptySet()
+                updateModelChoices(model)
+                status.text = if (store.hasKey(provider)) "Checking provider model access…" else "Add ${provider.label} API key to connect"
+                if (store.hasKey(provider)) refreshModels()
             }
         }
         models.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                model = models.selectedItem?.toString() ?: store.model(provider)
+                if (changingModelSelection) return
+                val selectedIndex = models.selectedItemPosition
+                val selectedId = displayedModelIds.getOrNull(selectedIndex) ?: store.model(provider)
                 usageWarning.visibility = View.GONE
+                if (isModelLocked(selectedId)) {
+                    notify("🔒 $selectedId requires provider-side access. Enable API access or billing with ${provider.label}, then refresh models.")
+                    val currentIndex = displayedModelIds.indexOf(model).coerceAtLeast(0)
+                    changingModelSelection = true
+                    models.setSelection(currentIndex)
+                    changingModelSelection = false
+                    return
+                }
+                model = selectedId
                 store.setModel(provider, model)
             }
         }
@@ -358,9 +403,10 @@ internal class NovaAiAssistantUi(
             if (messages.isNotEmpty()) messages.forEach(::render)
         }
         if (messages.isEmpty()) showWelcome()
-        status.text = if (store.hasKey(provider)) "Connected · ChatGPT" else "Add a provider API key to start"
+        status.text = if (store.hasKey(provider)) "Checking provider model access…" else "Add a provider API key to start"
         dialog = AlertDialog.Builder(context).setView(root).setNegativeButton("Close", null).create()
         dialog?.show()
+        if (store.hasKey(provider)) refreshModels()
         dialog?.window?.setLayout(-1, -1)
         dialog?.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     }
@@ -489,17 +535,21 @@ internal class NovaAiAssistantUi(
             editKey()
             return
         }
-        status.text = "Fetching available models…"
-        NovaAiApi.models(provider, key) { result ->
+        status.text = "Checking models available to this API account…"
+        val requestedProvider = provider
+        NovaAiApi.models(requestedProvider, key) { result ->
+            if (provider != requestedProvider) return@models
             result.onSuccess { list ->
-                modelAdapter.clear()
-                modelAdapter.addAll(list)
-                modelAdapter.notifyDataSetChanged()
-                models.setSelection(list.indexOf(store.model(provider)).coerceAtLeast(0))
-                status.text = "${list.size} models available · ${provider.label}"
+                availableModelIds = list.toSet()
+                val preferred = if (model in availableModelIds || !isPremiumModel(model)) model else store.model(provider)
+                updateModelChoices(preferred)
+                model = preferred
+                status.text = "${availableModelIds.size} models available · premium models locked unless provider API access is confirmed"
             }.onFailure {
-                status.text = "Could not load models"
-                notify(it.message ?: "Model list unavailable")
+                availableModelIds = emptySet()
+                updateModelChoices(model)
+                status.text = "Could not verify model access · premium models remain locked"
+                notify(it.message ?: "Model access could not be checked")
             }
         }
     }
@@ -508,6 +558,10 @@ internal class NovaAiAssistantUi(
         if (busy) return
         val prompt = input.text.toString().trim()
         if (prompt.isBlank()) return
+        if (isModelLocked(model)) {
+            notify("🔒 $model is locked. Enable access to this model through ${provider.label}'s API account, then refresh the model list.")
+            return
+        }
         val key = runCatching { store.getKey(provider) }.getOrNull()
         if (key.isNullOrBlank()) {
             editKey()
