@@ -1616,8 +1616,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startDownload(input: String) {
-        if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
             toast("Downloads are disabled in private and Guest Mode because files remain on the device")
+            return
+        }
+        val engine = runCatching { ensureBrowserEngine(tab) }.getOrNull() ?: run {
+            toast("Browser engine is unavailable for downloads")
+            return
+        }
+        if (!engine.supports(BrowserEngineCapability.DOWNLOADS)) {
+            toast("Downloads are unavailable in the current browser engine")
             return
         }
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
@@ -1730,8 +1739,19 @@ class MainActivity : ComponentActivity() {
         val tab = currentTab() ?: return
         val url = tab.lastUrl
         if (!url.startsWith("http")) { toast("Open an article first"); return }
-        if (tab.engineType == BrowserEngineType.CEFRIUM) {
-            val engine = (tab.browserEngine as? CefriumBrowserEngine) ?: ensureCefriumEngine(tab)
+        val activeEngine = runCatching { ensureBrowserEngine(tab) }.getOrNull() ?: run {
+            toast("Browser engine is unavailable for Reader Mode")
+            return
+        }
+        if (!activeEngine.supports(BrowserEngineCapability.READER_MODE)) {
+            toast("Reader Mode is unavailable in the current browser engine")
+            return
+        }
+        if (activeEngine.type == BrowserEngineType.CEFRIUM) {
+            val engine = activeEngine as? CefriumBrowserEngine ?: run {
+                toast("Cefrium Reader Mode is unavailable for this tab")
+                return
+            }
             tab.readerOriginalUrl = url
             engine.loadReaderView(url) { success, detail ->
                 if (!success) {
@@ -1981,7 +2001,7 @@ class MainActivity : ComponentActivity() {
                     }
                     3 -> {
                         val activeEngine = tab?.browserEngine
-                        if (activeEngine == null || BrowserEngineCapability.NOVA_SHIELD !in activeEngine.capabilities) {
+                        if (activeEngine == null || !activeEngine.supports(BrowserEngineCapability.NOVA_SHIELD)) {
                             toast("Per-site Shield controls require GeckoView")
                             return@setItems
                         }
@@ -1996,7 +2016,7 @@ class MainActivity : ComponentActivity() {
                     }
                     4 -> {
                         val activeEngine = tab?.browserEngine
-                        if (activeEngine == null || BrowserEngineCapability.NOVA_SHIELD !in activeEngine.capabilities) {
+                        if (activeEngine == null || !activeEngine.supports(BrowserEngineCapability.NOVA_SHIELD)) {
                             toast("Protection logs require GeckoView")
                             return@setItems
                         }

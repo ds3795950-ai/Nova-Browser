@@ -52,6 +52,9 @@ interface BrowserEngine : AutoCloseable {
     val capabilities: Set<BrowserEngineCapability>
         get() = emptySet()
 
+    /** Centralized feature check; callers must still enforce Nova's profile and user policies. */
+    fun supports(capability: BrowserEngineCapability): Boolean = capability in capabilities
+
     fun loadUrl(url: String)
     fun goBack()
     fun goForward()

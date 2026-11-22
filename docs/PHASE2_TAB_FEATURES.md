@@ -28,7 +28,7 @@
 ## Remaining Phase 2 work
 
 - Move Gecko-specific delegate installation and capability handling behind the Gecko adapter/factory so `MainActivity` no longer needs to know the Gecko session type.
-- Add an explicit engine-capability contract for features such as translation, password autofill, downloads, permissions, reader mode, and Shield; use it instead of scattered concrete-engine checks.
+- The shared `BrowserEngine.supports()` contract now gates Reader Mode, downloads, and Shield entry points; translation and extensions use the capability-routing policy. Continue migrating remaining feature-specific checks to this contract as adapters are extracted.
 - Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
 - Do not mark Phase 2 verified until the Android build, unit tests, emulator smoke tests, and BrowserStack device suite pass.
 
