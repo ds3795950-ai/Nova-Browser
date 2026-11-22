@@ -996,7 +996,7 @@ class MainActivity : ComponentActivity() {
             } },
             onFullscreenChanged = { fullScreen -> runOnUiThread { setBrowserFullscreen(fullScreen, tab) } },
             onPopupRequested = { popup, popupUrl, userGesture ->
-                if (!siteSettingAllowed(BrowserEngineType.CEFRIUM, popupUrl, "popups", false)) { popup.close(); false }
+                if (!siteSettingAllowed(BrowserEngineType.CEFRIUM, tab.lastUrl, "popups", false)) { popup.close(); false }
                 else handleCefriumPopup(popup, popupUrl, userGesture)
             },
             onPopupClosed = { popup -> handleCefriumPopupClosed(popup) },
@@ -3910,6 +3910,8 @@ class MainActivity : ComponentActivity() {
             val value = prefs.getBoolean(siteRuleKey(entry, definition.first), definition.third)
             return "${definition.second} · ${if (value) "Allowed" else "Blocked"}"
         }
+        val permissionsOffset = if (entry.engine == BrowserEngineType.GECKOVIEW) 1 else 0
+        val resetIndex = definitions.size + permissionsOffset
         val labels = definitions.map(::label).toTypedArray() +
             (if (entry.engine == BrowserEngineType.GECKOVIEW) arrayOf("View saved permissions") else emptyArray()) +
             arrayOf("Reset this site's settings", "Clear this site's data")
@@ -3942,7 +3944,7 @@ class MainActivity : ComponentActivity() {
                     entry.engine == BrowserEngineType.GECKOVIEW && which == definitions.size -> {
                         showGeckoSitePermissions(entry)
                     }
-                    which == definitions.size + if (entry.engine == BrowserEngineType.GECKOVIEW) 1 else 0 -> {
+                    which == resetIndex -> {
                         val encoded = Uri.encode(entry.origin)
                         val engineToken = entry.engine.name.lowercase() + "_"
                         val editor = prefs.edit()
@@ -3965,6 +3967,14 @@ class MainActivity : ComponentActivity() {
             .setMessage("Delete cookies and site storage for $host in ${entry.engine.name}. The other engine's profile is not affected.")
             .setNegativeButton(getString(R.string.cancel), null)
             .setPositiveButton("Clear data") { _, _ ->
+                val encoded = Uri.encode(entry.origin)
+                val engineToken = entry.engine.name.lowercase() + "_"
+                val editor = prefs.edit()
+                prefs.all.keys.filter { key ->
+                    (key.startsWith("javascript_enabled_$engineToken") && key.endsWith(encoded)) ||
+                        (key.startsWith("site_") && key.contains("_$engineToken") && key.endsWith(encoded))
+                }.forEach(editor::remove)
+                editor.apply()
                 if (entry.engine == BrowserEngineType.CEFRIUM) {
                     runCatching {
                         CefriumProfile.get(enginePreferences.cefriumProfileName()).clearSiteData(entry.origin) {
