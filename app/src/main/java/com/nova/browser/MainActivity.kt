@@ -524,6 +524,8 @@ class MainActivity : ComponentActivity() {
             listener = { state ->
                 runOnUiThread {
                     if (tab.browserEngine?.state != state) return@runOnUiThread
+                    val previousUrl = tab.lastUrl
+                    state.url?.takeIf { it.isNotBlank() }?.let { tab.lastUrl = it }
                     if (!state.error.isNullOrBlank()) {
                         handleCefriumRendererTermination(tab, state.error)
                         return@runOnUiThread
@@ -531,8 +533,6 @@ class MainActivity : ComponentActivity() {
                     if (!state.isLoading && state.progress >= 100) {
                         tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.resetAfterSuccessfulPaint()
                     }
-                    val previousUrl = tab.lastUrl
-                    state.url?.takeIf { it.isNotBlank() }?.let { tab.lastUrl = it }
                     state.title?.takeIf { it.isNotBlank() }?.let { tab.title = it }
                     tab.canGoBack = state.canGoBack
                     tab.canGoForward = state.canGoForward
