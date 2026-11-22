@@ -25,7 +25,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 internal enum class NovaAiProvider(val label: String, val defaultModel: String) {
     CHATGPT("ChatGPT", "gpt-4o-mini"), CLAUDE("Claude", "claude-3-5-haiku-latest"),
-    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-2.0-flash")
+    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-2.0-flash"),
+    KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat")
 }
 internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
 
@@ -114,6 +115,8 @@ internal object NovaAiApi {
                 NovaAiProvider.GROK->"https://api.x.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
                 NovaAiProvider.CLAUDE->"https://api.anthropic.com/v1/models?limit=100" to mapOf("x-api-key" to key,"anthropic-version" to "2023-06-01")
                 NovaAiProvider.GEMINI->"https://generativelanguage.googleapis.com/v1beta/models?key=${enc(key)}" to emptyMap()
+                NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
+                NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/models" to mapOf("Authorization" to "Bearer $key")
             }
             val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.CLAUDE||p==NovaAiProvider.GEMINI)"models" else "data")
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
@@ -126,9 +129,14 @@ internal object NovaAiApi {
         val r=runCatching {
             val recent=history.takeLast(20)
             when(p){
-                NovaAiProvider.CHATGPT,NovaAiProvider.GROK->{
+                NovaAiProvider.CHATGPT,NovaAiProvider.GROK,NovaAiProvider.KIMI,NovaAiProvider.DEEPSEEK->{
                     val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",it.role).put("content",it.text))}
-                    val url=if(p==NovaAiProvider.GROK)"https://api.x.ai/v1/chat/completions" else "https://api.openai.com/v1/chat/completions"
+                    val url=when(p){
+                        NovaAiProvider.GROK->"https://api.x.ai/v1/chat/completions"
+                        NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/chat/completions"
+                        NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/chat/completions"
+                        else->"https://api.openai.com/v1/chat/completions"
+                    }
                     call("POST",url,mapOf("Authorization" to "Bearer $key"),JSONObject().put("model",model).put("messages",a))
                         .optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty().ifBlank{error("Empty AI response")}
                 }
