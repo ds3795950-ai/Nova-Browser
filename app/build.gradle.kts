@@ -6,6 +6,7 @@ import java.util.zip.ZipInputStream
 
 plugins {
     id("com.android.application")
+    id("com.cefrium") version "0.21.0"
 }
 
 val releaseStorePath = System.getenv("NOVA_RELEASE_KEYSTORE_PATH")
@@ -14,10 +15,6 @@ val releaseKeyAlias = System.getenv("NOVA_RELEASE_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("NOVA_RELEASE_KEY_PASSWORD")
 val releaseSigningReady = !releaseStorePath.isNullOrBlank() && file(releaseStorePath ?: "__missing_keystore__").isFile &&
     !releaseStorePassword.isNullOrBlank() && !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
-
-kotlin {
-    jvmToolchain(17)
-}
 
 android {
     namespace = "com.nova.browser"
@@ -30,6 +27,7 @@ android {
         versionCode = 4
         versionName ="0.4.0-performance"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         buildConfigField("String", "SUPABASE_URL", "\"https://ycgubmykjhikjyfbgycp.supabase.co\"")
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_ZF96tMq70_feRUTBZ2fV2A_XTM04aEP\"")
     }
@@ -39,7 +37,7 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a")
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = false
         }
     }
@@ -69,6 +67,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+    packaging { jniLibs { useLegacyPackaging = true } }
     buildFeatures { buildConfig = true }
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
@@ -88,10 +87,19 @@ dependencies {
     implementation("androidx.window:window:1.4.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
-    // GeckoView is the sole browser engine.
+    // GeckoView remains the Private/Guest engine and the privacy-preserving fallback.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
+    // Cefrium 0.21.0 supplies Chromium for eligible Normal tabs.
+    implementation("com.cefrium:cefrium-sdk:0.21.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
+    implementation("androidx.core:core:1.16.0")
+    implementation("androidx.browser:browser:1.8.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
 }
 
 
