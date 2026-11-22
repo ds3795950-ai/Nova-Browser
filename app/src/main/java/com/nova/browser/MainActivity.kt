@@ -1914,27 +1914,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun configureAddonManagerDelegate() {
-        runtime.getWebExtensionController().setAddonManagerDelegate(object : WebExtensionController.AddonManagerDelegate {
-            override fun onInstalled(extension: WebExtension) {
-                configureExtensionDelegates(extension)
-                toast("Extension installed: ${extension.metaData?.name ?: extension.id}")
-            }
-            override fun onReady(extension: WebExtension) {
-                configureExtensionDelegates(extension)
-            }
-            override fun onEnabled(extension: WebExtension) {
-                configureExtensionDelegates(extension)
-            }
-            override fun onDisabled(extension: WebExtension) {
-                extensionController.remove(extension.id)
-            }
-            override fun onUninstalled(extension: WebExtension) {
-                extensionController.remove(extension.id)
-            }
-            override fun onInstallationFailed(extension: WebExtension?, installException: WebExtension.InstallException) {
-                toast("Extension installation failed")
-            }
-        })
+        NovaExtensionLifecycleDelegate(
+            configureDelegates = ::configureExtensionDelegates,
+            removeAction = extensionController::remove,
+            showMessage = ::toast
+        ).attach(runtime.getWebExtensionController())
     }
 
     private fun configureExtensionDelegates(extension: WebExtension) {
