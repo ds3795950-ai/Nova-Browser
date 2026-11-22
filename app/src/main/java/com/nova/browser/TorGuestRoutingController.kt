@@ -31,6 +31,8 @@ internal object TorGuestRoutingController {
     private var startTimeout: Runnable? = null
     private var proxyTimeout: Runnable? = null
     private var proxyPoll: Runnable? = null
+    private var socksPortPoll: Runnable? = null
+    private var socksPortAttempts = 0
     private var onReady: (() -> Unit)? = null
     private var onFailure: ((String) -> Unit)? = null
     private var lastError = "Tor is not running"
@@ -61,7 +63,8 @@ internal object TorGuestRoutingController {
         stopInternal(disableProxy = true)
         state = State.STARTING
         lastError = "Starting embedded Tor…"
-        appContext = context.applicationContext
+        val applicationContext = context.applicationContext
+        appContext = applicationContext
         NovaBrowserVpnController.setTorRoutingStatusListener {
             mainHandler.post { checkProxyReadiness() }
         }
@@ -89,9 +92,9 @@ internal object TorGuestRoutingController {
             addAction(TorService.ACTION_ERROR)
         }
         try {
-            ContextCompat.registerReceiver(appContext!!, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            ContextCompat.registerReceiver(applicationContext, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
             receiverRegistered = true
-            isBound = appContext!!.bindService(Intent(appContext, TorService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
+            isBound = applicationContext.bindService(Intent(applicationContext, TorService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
             if (!isBound) {
                 fail("Android refused to bind the embedded Tor service")
                 return
@@ -133,9 +136,24 @@ internal object TorGuestRoutingController {
         if (state != State.STARTING) return
         val port = torService?.socksPort ?: 0
         if (!GuestTorRoutingPolicy.canEnableProxy(torBootstrapped = true, socksPort = port)) {
+            // Tor can announce its first circuit just before the control thread publishes
+            // net/listeners/socks. Retry briefly rather than treating that ordering as failure.
+            if (socksPortAttempts++ < 40) {
+                if (socksPortPoll == null) {
+                    socksPortPoll = Runnable {
+                        socksPortPoll = null
+                        onTorCircuitReady()
+                    }
+                    mainHandler.postDelayed(socksPortPoll!!, 250L)
+                }
+                return
+            }
             fail("Tor built a circuit but did not expose a valid local SOCKS port")
             return
         }
+        socksPortAttempts = 0
+        socksPortPoll?.let(mainHandler::removeCallbacks)
+        socksPortPoll = null
         socksPort = port
         state = State.WAITING_FOR_PROXY
         lastError = "Waiting for the GeckoView proxy bridge"
@@ -184,9 +202,12 @@ internal object TorGuestRoutingController {
         startTimeout?.let(mainHandler::removeCallbacks)
         proxyTimeout?.let(mainHandler::removeCallbacks)
         proxyPoll?.let(mainHandler::removeCallbacks)
+        socksPortPoll?.let(mainHandler::removeCallbacks)
         startTimeout = null
         proxyTimeout = null
         proxyPoll = null
+        socksPortPoll = null
+        socksPortAttempts = 0
     }
 
     private fun stopInternal(disableProxy: Boolean) {
