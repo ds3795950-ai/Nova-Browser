@@ -1258,7 +1258,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Returns the engine selected for this tab, creating its runtime lazily. */
-    private fun ensureBrowserEngine(tab: BrowserTab): BrowserEngine {
+    private fun ensureBrowserEngine(tab: BrowserTab): com.nova.browser.engine.BrowserEngine {
         enforceCefriumCompatibility(tab)
         return when (tab.engineType) {
             BrowserEngineType.CEFRIUM -> ensureCefriumEngine(tab)
