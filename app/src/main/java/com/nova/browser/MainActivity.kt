@@ -99,9 +99,7 @@ class MainActivity : ComponentActivity() {
     private var activeIndex = 0
     private var searchEngine = "Google"
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
-
-    private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
-    private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long, val id: String = UUID.randomUUID().toString())
+    private val browserData by lazy { NovaBrowserDataRepository(applicationContext) }
 
     private data class BrowserTab(
         var session: GeckoSession?,
@@ -1442,65 +1440,18 @@ class MainActivity : ComponentActivity() {
 
     private fun closeCurrentTab() = closeTabAt(activeIndex)
 
-    private fun readBookmarks(): MutableList<BookmarkEntry> {
-        val raw = try {
-            NovaLocalDataStore.readBookmarksJson(this)
-        } catch (error: Exception) {
-            toast("Saved bookmarks could not be unlocked; encrypted data was preserved")
-            return mutableListOf()
-        } ?: return mutableListOf()
-        return runCatching {
-            val array = JSONArray(raw)
-            buildList {
-                for (i in 0 until array.length()) {
-                    val item = runCatching { array.getJSONObject(i) }.getOrNull() ?: continue
-                    val url = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: continue
-                    if (url.length <= MAX_URL_LENGTH_FOR_IMPORT) {
-                        add(BookmarkEntry(url, item.optString("title").take(512),
-                            item.optString("folder", "General").take(128), item.optLong("addedAt", 0L)))
-                    }
-                }
-            }.toMutableList()
-        }.getOrElse {
-            toast("Saved bookmarks are unreadable; encrypted recovery data was retained")
-            mutableListOf()
-        }
-    }
+    private fun readBookmarks(): MutableList<BookmarkEntry> =
+        browserData.readBookmarks().getOrElse {
+            toast("Saved bookmarks could not be unlocked or decoded; encrypted recovery data was preserved")
+            emptyList()
+        }.toMutableList()
 
     private fun saveBookmarks(items: List<BookmarkEntry>, trackDeletes: Boolean = true) {
         if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
             toast("Private and Guest tabs cannot modify bookmarks")
             return
         }
-        val safeItems = items.mapNotNull { item ->
-            val url = HistoryPolicy.sanitizeForStorage(item.url) ?: return@mapNotNull null
-            if (url.length > MAX_URL_LENGTH_FOR_IMPORT) return@mapNotNull null
-            item.copy(url = url, title = item.title.take(512), folder = item.folder.take(128))
-        }.take(MAX_BOOKMARK_IMPORT_COUNT)
-        if (trackDeletes) {
-            val previous = readBookmarks()
-            val retained = safeItems.map { it.url }.toSet()
-            val removed = previous.filterNot { it.url in retained }
-            if (removed.isNotEmpty()) {
-                val tombstones = try {
-                    JSONObject(NovaLocalDataStore.readBookmarkTombstonesJson(this) ?: "{}")
-                } catch (error: Exception) {
-                    toast("Bookmark deletion metadata could not be unlocked; changes were not saved")
-                    return
-                }
-                val deletedAt = System.currentTimeMillis()
-                removed.forEach { tombstones.put(it.url, maxOf(deletedAt, it.addedAt + 1L)) }
-                try {
-                    NovaLocalDataStore.writeBookmarkTombstonesJson(this, tombstones.toString())
-                } catch (error: Exception) {
-                    toast("Could not securely save bookmark deletion metadata")
-                    return
-                }
-            }
-        }
-        val array = JSONArray()
-        safeItems.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-        runCatching { NovaLocalDataStore.writeBookmarksJson(this, array.toString()) }
+        browserData.saveBookmarks(items, trackDeletes)
             .onFailure { toast("Could not save bookmarks securely: ${it.localizedMessage ?: "Unknown error"}") }
     }
 
@@ -1624,7 +1575,7 @@ class MainActivity : ComponentActivity() {
 
     private fun clearBrowsingHistory() {
         if (denyGuestAccess("Clearing owner history")) return
-        NovaLocalDataStore.clearHistoryAsync(applicationContext, System.currentTimeMillis(),
+        browserData.clearHistory(
             onComplete = {
                 runOnUiThread { if (!isFinishing && !isDestroyed) toast("Browsing history cleared") }
             },
@@ -1635,8 +1586,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addHistory(url: String) {
-        val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return
-        NovaLocalDataStore.appendHistoryAsync(applicationContext, safeUrl, Uri.parse(safeUrl).host ?: safeUrl) { _ ->
+        browserData.appendHistory(url) { _ ->
             runOnUiThread {
                 if (!isFinishing && !isDestroyed && !prefs.getBoolean("history_storage_warning_shown", false)) {
                     prefs.edit().putBoolean("history_storage_warning_shown", true).apply()
@@ -1646,40 +1596,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun readHistory(): List<HistoryEntry> {
-        val raw = try {
-            NovaLocalDataStore.readHistoryJson(this)
-        } catch (error: Exception) {
+    private fun readHistory(): List<HistoryEntry> =
+        browserData.readHistory().getOrElse {
             if (!prefs.getBoolean("history_storage_warning_shown", false)) {
                 prefs.edit().putBoolean("history_storage_warning_shown", true).apply()
-                toast("Browsing history could not be unlocked; encrypted data was preserved")
+                toast("Browsing history could not be unlocked or decoded; encrypted recovery data was preserved")
             }
-            return emptyList()
-        } ?: return emptyList()
-        return runCatching {
-            val array = JSONArray(raw)
-            buildList {
-                for (i in 0 until array.length()) {
-                    val entry = runCatching {
-                        val item = array.getJSONObject(i)
-                        val safeUrl = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: return@runCatching null
-                        HistoryEntry(
-                            safeUrl,
-                            item.optString("title"),
-                            item.optLong("visitedAt"),
-                            item.optString("id").ifBlank {
-                                UUID.nameUUIDFromBytes("$safeUrl|${item.optLong("visitedAt")}|$i".toByteArray()).toString()
-                            }
-                        )
-                    }.getOrNull()
-                    if (entry != null) add(entry)
-                }
-            }
-        }.getOrElse {
-            toast("Browsing history is unreadable; encrypted recovery data was retained")
             emptyList()
         }
-    }
 
     private fun showHistory() {
         if (currentTab()?.let { it.isPrivate || it.isGuest } == true) { toast("History is unavailable in private or Guest Mode"); return }

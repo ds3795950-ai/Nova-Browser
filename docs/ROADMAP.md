@@ -50,3 +50,8 @@ Status key: **IMPLEMENTED + CI VERIFIED** means source is committed and the GitH
 - Never place Supabase service-role/secret keys in Android code, Gradle config or APKs. The publishable key is intentionally public and RLS is the security boundary.
 - Never claim Guest Mode is Tor by default or anonymous. Only report Tor egress after the app-level check succeeds, and retain the limitation that this does not prove every tab/request was routed.
 - Never silently replace an unreadable encrypted password vault or cloud backup.
+
+
+## Architecture cleanup
+
+**Partially implemented:** Bookmark and browsing-history persistence has been extracted from `MainActivity` into `NovaBrowserDataRepository`; deterministic JSON parsing, URL filtering, bounded bookmark metadata, and history-ID recovery live in the pure `NovaBrowserDataCodec` with JVM regression tests. `MainActivity` retains tab privacy gates and UI feedback. The Activity is still large, so dialog construction, tab/session lifecycle, extension delegates, settings, and cloud-auth UI remain follow-up decomposition work.
