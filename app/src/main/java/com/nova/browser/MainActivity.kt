@@ -29,6 +29,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import com.cefrium.CefriumProfile
+import com.cefrium.CefriumBrowser
 import com.cefrium.Cefrium
 import com.cefrium.CefriumSecureDnsMode
 import com.nova.browser.engine.BrowserEngineMode
@@ -38,6 +39,7 @@ import com.nova.browser.engine.BrowserEnginePreferenceStore
 import com.nova.browser.engine.BrowserEngine
 import com.nova.browser.engine.BrowserEngineCapability
 import com.nova.browser.engine.BrowserEngineCapabilityPolicy
+import com.nova.browser.engine.BrowserRendererRecoveryPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.BrowserProfileKind
@@ -131,7 +133,8 @@ class MainActivity : ComponentActivity() {
         var desktopSite: Boolean = false,
         var readerOriginalUrl: String? = null,
         var engineType: BrowserEngineType = BrowserEngineType.GECKOVIEW,
-        var browserEngine: BrowserEngine? = null
+        var browserEngine: BrowserEngine? = null,
+        var rendererRecoveryAttempts: Int = 0
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -520,6 +523,14 @@ class MainActivity : ComponentActivity() {
             profile = profile,
             listener = { state ->
                 runOnUiThread {
+                    if (tab.browserEngine?.state != state) return@runOnUiThread
+                    if (!state.error.isNullOrBlank()) {
+                        handleCefriumRendererTermination(tab, state.error)
+                        return@runOnUiThread
+                    }
+                    if (!state.isLoading && state.progress >= 100) {
+                        tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.resetAfterSuccessfulPaint()
+                    }
                     val previousUrl = tab.lastUrl
                     state.url?.takeIf { it.isNotBlank() }?.let { tab.lastUrl = it }
                     state.title?.takeIf { it.isNotBlank() }?.let { tab.title = it }
@@ -555,8 +566,8 @@ class MainActivity : ComponentActivity() {
             desktopMode = tab.desktopSite
         )
         tab.browserEngine = engine
-        if (tab.needsReload && tab.lastUrl != HOME_URL && tab.lastUrl.startsWith("http")) {
-            engine.loadUrl(tab.lastUrl)
+        if (tab.needsReload) {
+            if (tab.lastUrl != HOME_URL && tab.lastUrl.startsWith("http")) engine.loadUrl(tab.lastUrl)
             tab.needsReload = false
         }
         return engine
@@ -572,8 +583,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun closeTabRuntime(tab: BrowserTab) {
-        tab.browserEngine?.close()
+        val engine = tab.browserEngine ?: return
+        val cefrium = engine.type == BrowserEngineType.CEFRIUM
+        engine.close()
         tab.browserEngine = null
+        if (cefrium) runCatching { CefriumBrowser.reapUnusedRenderers() }
     }
 
     private fun ensureBrowserEngine(tab: BrowserTab): BrowserEngine {
@@ -768,6 +782,18 @@ class MainActivity : ComponentActivity() {
                 }
             })
             session.contentDelegate = object : GeckoSession.ContentDelegate {
+                override fun onCrash(session: GeckoSession) {
+                    recoverGeckoRenderer(tab, session, "crashed")
+                }
+
+                override fun onKill(session: GeckoSession) {
+                    recoverGeckoRenderer(tab, session, "was stopped by Android")
+                }
+
+                override fun onFirstContentfulPaint(session: GeckoSession) {
+                    tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.resetAfterSuccessfulPaint()
+                }
+
                 override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                     val tab = tabs.firstOrNull { geckoSession(it) === session }
                     val body = response.body
@@ -825,6 +851,71 @@ class MainActivity : ComponentActivity() {
             }
     }
 
+    private fun recoverGeckoRenderer(tab: BrowserTab, crashedSession: GeckoSession, reason: String) {
+        if (geckoSession(tab) !== crashedSession) return
+        runOnUiThread {
+            if (geckoSession(tab) !== crashedSession) return@runOnUiThread
+            val active = currentTab() === tab
+            val secondary = tab.id == splitTabId
+            val shouldRecover = BrowserRendererRecoveryPolicy.shouldAutomaticallyRecover(tab.rendererRecoveryAttempts)
+            tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.nextAttempt(tab.rendererRecoveryAttempts)
+            closeTabRuntime(tab)
+            tab.needsReload = tab.lastUrl != HOME_URL
+            if (shouldRecover) {
+                if (active) {
+                    val engine = ensureBrowserEngine(tab)
+                    engine.attachTo(browserView)
+                    showPrimaryEngineView(engine.view)
+                    engine.setActive(true, true)
+                } else if (secondary) {
+                    val engine = ensureBrowserEngine(tab)
+                    engine.attachTo(secondaryBrowserView)
+                    showSecondaryEngineView(engine.view)
+                    engine.setActive(true, false)
+                }
+                toast("GeckoView renderer $reason · restoring the last page")
+            } else {
+                if (active) {
+                    showPrimaryEngineView(browserView)
+                    pageStatus.text = "Renderer stopped again · tap Reload to retry"
+                } else if (secondary) {
+                    showSecondaryEngineView(secondaryBrowserView)
+                }
+                toast("GeckoView renderer stopped again · automatic recovery paused; tap Reload to retry")
+            }
+        }
+    }
+
+    private fun handleCefriumRendererTermination(tab: BrowserTab, reason: String) {
+        if (tab.browserEngine !is CefriumBrowserEngine) return
+        val active = currentTab() === tab
+        val secondary = tab.id == splitTabId
+        val shouldRecover = BrowserRendererRecoveryPolicy.shouldAutomaticallyRecover(tab.rendererRecoveryAttempts)
+        tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.nextAttempt(tab.rendererRecoveryAttempts)
+        closeTabRuntime(tab)
+        tab.needsReload = tab.lastUrl != HOME_URL
+        if (shouldRecover) {
+            if (active) {
+                val engine = ensureCefriumEngine(tab)
+                showPrimaryEngineView(engine.view)
+                engine.setActive(true, true)
+            } else if (secondary) {
+                val engine = ensureCefriumEngine(tab)
+                showSecondaryEngineView(engine.view)
+                engine.setActive(true, false)
+            }
+            toast("Cefrium renderer stopped · restoring the last page ($reason)")
+        } else {
+            if (active) {
+                showPrimaryEngineView(browserView)
+                pageStatus.text = "Cefrium renderer stopped again · tap Reload to retry"
+            } else if (secondary) {
+                showSecondaryEngineView(secondaryBrowserView)
+            }
+            toast("Cefrium renderer stopped again · automatic recovery paused; tap Reload to retry")
+        }
+    }
+
     private fun ensureSession(tab: BrowserTab): GeckoSession {
         (tab.browserEngine as? GeckoViewBrowserEngine)?.let { return it.session }
         tab.browserEngine?.close()
@@ -839,8 +930,8 @@ class MainActivity : ComponentActivity() {
         val engine = GeckoViewBrowserEngine(session, browserView)
         tab.browserEngine = engine
         engine.installDelegates { configuredSession -> installGeckoDelegates(tab, configuredSession) }
-        if (tab.needsReload && tab.lastUrl != HOME_URL) {
-            tab.browserEngine?.loadUrl(tab.lastUrl)
+        if (tab.needsReload) {
+            if (tab.lastUrl != HOME_URL) tab.browserEngine?.loadUrl(tab.lastUrl)
             tab.needsReload = false
         }
         return session
@@ -974,7 +1065,12 @@ class MainActivity : ComponentActivity() {
         if (tab.canGoForward) tab.browserEngine?.goForward() else toast("No next page")
     }
 
-    private fun reloadPage() { currentTab()?.let { ensureBrowserEngine(it).reload() } }
+    private fun reloadPage() {
+        val tab = currentTab() ?: return
+        val restoring = tab.needsReload
+        val engine = ensureBrowserEngine(tab)
+        if (!restoring) engine.reload()
+    }
 
     private fun showTabs() {
         if (tabs.isEmpty()) return

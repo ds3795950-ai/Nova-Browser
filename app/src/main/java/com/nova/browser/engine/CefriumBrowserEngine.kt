@@ -79,6 +79,18 @@ class CefriumBrowserEngine(
         if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
         CefriumVpnController.registerProfile(profile)
         browser.setNavigationClient(object : CefriumNavigationClient {
+            override fun onRenderProcessTerminated(
+                browser: CefriumBrowser,
+                status: com.cefrium.CefriumRendererTerminationStatus,
+                errorCode: Int
+            ) {
+                publish(currentState.copy(
+                    isLoading = false,
+                    progress = 0,
+                    error = "Cefrium renderer terminated: $status (exit $errorCode)"
+                ))
+            }
+
             override fun onHttpAuthRequest(
                 browser: CefriumBrowser,
                 host: String,
