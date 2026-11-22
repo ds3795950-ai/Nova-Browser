@@ -1031,9 +1031,9 @@ class MainActivity : ComponentActivity() {
             initialView = browserView,
             delegateInstaller = GeckoSessionDelegateInstaller { configuredSession ->
                 installGeckoDelegates(tab, configuredSession)
-            }
+            },
+            onEngineCreated = { createdEngine -> tab.browserEngine = createdEngine }
         )
-        tab.browserEngine = engine
         val session = engine.session
         if (tab.needsReload) {
             if (tab.lastUrl != HOME_URL) tab.browserEngine?.loadUrl(tab.lastUrl)

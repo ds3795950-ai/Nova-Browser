@@ -11,19 +11,27 @@ fun interface GeckoSessionDelegateInstaller {
 }
 
 /**
- * Creates one GeckoView adapter per tab. Delegates are installed exactly once before opening
- * the session, so no navigation or content callback can race an unconfigured session.
+ * Creates one GeckoView adapter per tab. Delegates are installed exactly once before opening.
+ * The host is notified after installation but before open, so early callbacks always resolve
+ * back to a tab that already owns the adapter. Partial initialization is closed on failure.
  */
 class GeckoViewEngineFactory(private val runtime: GeckoRuntime) {
     fun create(
         settings: GeckoSessionSettings,
         initialView: GeckoView,
-        delegateInstaller: GeckoSessionDelegateInstaller
+        delegateInstaller: GeckoSessionDelegateInstaller,
+        onEngineCreated: (GeckoViewBrowserEngine) -> Unit
     ): GeckoViewBrowserEngine {
         val session = GeckoSession(settings)
         val engine = GeckoViewBrowserEngine(session, initialView)
-        engine.installDelegates(delegateInstaller)
-        session.open(runtime)
-        return engine
+        try {
+            engine.installDelegates(delegateInstaller)
+            onEngineCreated(engine)
+            session.open(runtime)
+            return engine
+        } catch (error: Throwable) {
+            runCatching { engine.close() }
+            throw error
+        }
     }
 }
