@@ -203,7 +203,8 @@ class MainActivity : ComponentActivity() {
         var desktopSite: Boolean = false,
         var readerOriginalUrl: String? = null,
         var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
-        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList()
+        var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList(),
+        var mediaSession: org.mozilla.geckoview.MediaSession? = null
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -247,6 +248,7 @@ class MainActivity : ComponentActivity() {
         applyProtectedDns(prefs.getBoolean("protected_dns_enabled", false))
         if (prefs.getBoolean("cloud_sync_enabled", false) && AutoSyncPassphraseStore.has(this)) NovaAutoSync.schedule(this)
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
+        applyGeckoCookieBehavior()
         val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
         val savedFontScale = prefs.getInt("font_scale_index", 1).coerceIn(fontScaleFactors.indices)
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
@@ -1179,6 +1181,7 @@ class MainActivity : ComponentActivity() {
     private fun handleCefriumPopup(popup: CefriumBrowser, url: String, userGesture: Boolean): Boolean {
         val source = currentTab()
         if (!userGesture || source == null || source.isPrivate || source.isGuest || source.engineType != BrowserEngineType.CEFRIUM ||
+            !siteSettingAllowed(BrowserEngineType.CEFRIUM, source.lastUrl, "popups", false) ||
             cefriumCompatibilityReason(source, url) != null) {
             popup.close()
             return true // We own and explicitly close blocked windows; returning false would load the URL in the opener.
@@ -1567,6 +1570,119 @@ class MainActivity : ComponentActivity() {
             }.setNegativeButton(getString(R.string.close), null).show()
     }
 
+    private fun geckoPermissionToken(permission: Int): String = when (permission) {
+        GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> "location"
+        GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "notifications"
+        GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> "autoplay_audible"
+        GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> "autoplay_inaudible"
+        GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> "persistent_storage"
+        GeckoSession.PermissionDelegate.PERMISSION_XR -> "xr"
+        GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> "protected_media"
+        GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> "storage_access"
+        GeckoSession.PermissionDelegate.PERMISSION_TRACKING -> "tracking"
+        GeckoSession.PermissionDelegate.PERMISSION_LOCAL_DEVICE_ACCESS -> "local_device_access"
+        GeckoSession.PermissionDelegate.PERMISSION_LOCAL_NETWORK_ACCESS -> "local_network_access"
+        else -> "permission_$permission"
+    }
+
+    private fun geckoPermissionDecision(origin: String, token: String, allowSiteOverride: Boolean = true): String {
+        val normalized = cefriumOriginForUrl(origin) ?: return "ASK"
+        if (allowSiteOverride) {
+            val site = prefs.getString("site_permission_geckoview_${token}_${Uri.encode(normalized)}", null)?.uppercase()
+            if (site in setOf("ASK", "ALLOW", "BLOCK")) return site
+        }
+        return (prefs.getString("site_default_permission_geckoview_$token", "ASK") ?: "ASK")
+            .uppercase().takeIf { it in setOf("ASK", "ALLOW", "BLOCK") } ?: "ASK"
+    }
+
+    private fun saveGeckoPermissionDecision(origin: String, token: String, decision: String) {
+        val normalized = cefriumOriginForUrl(origin) ?: return
+        val value = decision.uppercase().takeIf { it in setOf("ASK", "ALLOW", "BLOCK") } ?: "ASK"
+        prefs.edit().putString("site_permission_geckoview_${token}_${Uri.encode(normalized)}", value).apply()
+    }
+
+    private fun showDefaultGeckoPermissions() {
+        val definitions = listOf(
+            "location" to "Location", "notifications" to "Notifications",
+            "camera" to "Camera", "microphone" to "Microphone",
+            "persistent_storage" to "Persistent storage", "storage_access" to "Third-party storage access",
+            "xr" to "Virtual reality", "local_device_access" to "Local device access",
+            "local_network_access" to "Local network access"
+        )
+        val labels = definitions.map { (token, label) ->
+            val status = (prefs.getString("site_default_permission_geckoview_$token", "ASK") ?: "ASK").uppercase()
+            "$label · ${when (status) { "ALLOW" -> "Allowed"; "BLOCK" -> "Blocked"; else -> "Ask" }}"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Default GeckoView permissions")
+            .setItems(labels) { _, which ->
+                val (token, label) = definitions[which]
+                val key = "site_default_permission_geckoview_$token"
+                val current = when ((prefs.getString(key, "ASK") ?: "ASK").uppercase()) { "BLOCK" -> 1; "ALLOW" -> 2; else -> 0 }
+                AlertDialog.Builder(this).setTitle("$label default")
+                    .setSingleChoiceItems(arrayOf("Ask every time", "Block", "Allow"), current) { dialog, selected ->
+                        prefs.edit().putString(key, arrayOf("ASK", "BLOCK", "ALLOW")[selected]).apply()
+                        dialog.dismiss()
+                        showDefaultGeckoPermissions()
+                    }
+                    .setNegativeButton(getString(R.string.close), null).show()
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun showDefaultGeckoCookieSettings() {
+        val values = arrayOf("ALL", "FIRST_PARTY", "ISOLATE", "NONE")
+        val labels = arrayOf("Allow all cookies", "Block third-party cookies", "Isolate third-party cookies · recommended", "Block all cookies")
+        val current = prefs.getString("site_default_geckoview_cookies", "ISOLATE") ?: "ISOLATE"
+        val selected = values.indexOf(current).takeIf { it >= 0 } ?: 2
+        AlertDialog.Builder(this).setTitle("GeckoView cookies and site data")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                prefs.edit().putString("site_default_geckoview_cookies", values[which]).apply()
+                applyGeckoCookieBehavior()
+                dialog.dismiss()
+                toast("GeckoView cookie policy · ${labels[which]}")
+            }
+            .setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun applyGeckoCookieBehavior() {
+        if (!::runtime.isInitialized) return
+        val behavior = when (prefs.getString("site_default_geckoview_cookies", "ISOLATE")) {
+            "ALL" -> org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_ALL
+            "FIRST_PARTY" -> org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY
+            "NONE" -> org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_NONE
+            else -> org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS
+        }
+        runtime.settings.contentBlocking.setCookieBehavior(behavior)
+    }
+
+    private fun showGeckoSitePermissionHub(origin: String) {
+        AlertDialog.Builder(this).setTitle("Permissions · ${Uri.parse(origin).host ?: origin}")
+            .setItems(arrayOf("Content permissions", "Camera and microphone")) { _, which ->
+                if (which == 0) showGeckoSitePermissions(SiteRuleEntry(BrowserEngineType.GECKOVIEW, origin))
+                else showGeckoMediaPermissionSettings(origin)
+            }
+            .setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun showGeckoMediaPermissionSettings(origin: String) {
+        val definitions = listOf("camera" to "Camera", "microphone" to "Microphone")
+        val labels = definitions.map { (token, label) ->
+            val decision = geckoPermissionDecision(origin, token)
+            "$label · ${when (decision) { "ALLOW" -> "Allowed"; "BLOCK" -> "Blocked"; else -> "Ask" }}"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Camera and microphone · ${Uri.parse(origin).host ?: origin}")
+            .setItems(labels) { _, which ->
+                val (token, label) = definitions[which]
+                val current = when (geckoPermissionDecision(origin, token)) { "BLOCK" -> 1; "ALLOW" -> 2; else -> 0 }
+                AlertDialog.Builder(this).setTitle("$label permission")
+                    .setSingleChoiceItems(arrayOf("Ask every time", "Block", "Allow"), current) { dialog, selected ->
+                        saveGeckoPermissionDecision(origin, token, arrayOf("ASK", "BLOCK", "ALLOW")[selected])
+                        dialog.dismiss()
+                        showGeckoMediaPermissionSettings(origin)
+                    }
+                    .setNegativeButton(getString(R.string.close), null).show()
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
     private fun showCefriumPermissionPrompt(origin: String, permissions: Set<String>, respond: (Boolean) -> Unit) {
         val normalized = CefriumSitePermissionPolicy.normalize(origin, permissions)
         if (normalized == null) { respond(false); return }
@@ -1879,6 +1995,21 @@ class MainActivity : ComponentActivity() {
         })
         session.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onAndroidPermissionsRequest(session: GeckoSession, permissions: Array<String>?, callback: GeckoSession.PermissionDelegate.Callback) {
+                val tab = tabs.firstOrNull { it.session === session }
+                val origin = tab?.lastUrl.orEmpty()
+                val allowSiteOverride = tab != null && !tab.isPrivate && !tab.isGuest
+                val blockedBySite = permissions.orEmpty().any { permission ->
+                    val token = when (permission) {
+                        Manifest.permission.CAMERA -> "camera"
+                        Manifest.permission.RECORD_AUDIO -> "microphone"
+                        Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION -> "location"
+                        Manifest.permission.POST_NOTIFICATIONS -> "notifications"
+                        Manifest.permission.ACCESS_LOCAL_NETWORK -> "local_network_access"
+                        else -> null
+                    }
+                    token != null && geckoPermissionDecision(origin, token, allowSiteOverride) == "BLOCK"
+                }
+                if (blockedBySite) { callback.reject(); return }
                 val missing = permissions?.distinct().orEmpty().filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
                 if (missing.isEmpty()) { callback.grant(); return }
                 if (pendingAndroidPermissionCallback != null) { callback.reject(); return }
@@ -1890,6 +2021,14 @@ class MainActivity : ComponentActivity() {
             override fun onContentPermissionRequest(session: GeckoSession, perm: GeckoSession.PermissionDelegate.ContentPermission): GeckoResult<Int> {
                 if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
                 if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE || perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE) {
+                    val allowed = siteSettingAllowed(BrowserEngineType.GECKOVIEW, perm.uri, "autoplay", false)
+                    return GeckoResult.fromValue(if (allowed) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                }
+                val token = geckoPermissionToken(perm.permission)
+                val decision = geckoPermissionDecision(perm.uri, token, allowSiteOverride = !perm.privateMode && perm.contextId.isNullOrBlank())
+                if (decision == "ALLOW") return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                if (decision == "BLOCK") return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
                 val label = sitePermissionLabel(perm.permission)
                 val host = Uri.parse(perm.uri).host ?: perm.uri
                 val result = GeckoResult<Int>()
@@ -1908,14 +2047,30 @@ class MainActivity : ComponentActivity() {
 
             override fun onMediaPermissionRequest(session: GeckoSession, uri: String, video: Array<GeckoSession.PermissionDelegate.MediaSource>?, audio: Array<GeckoSession.PermissionDelegate.MediaSource>?, callback: GeckoSession.PermissionDelegate.MediaCallback) {
                 val host = Uri.parse(uri).host ?: uri
+                val tab = tabs.firstOrNull { it.session === session }
+                val allowSiteOverride = tab != null && !tab.isPrivate && !tab.isGuest
+                val requestedTokens = buildList {
+                    if (!video.isNullOrEmpty()) add("camera")
+                    if (!audio.isNullOrEmpty()) add("microphone")
+                }
+                if (requestedTokens.isEmpty()) { callback.reject(); return }
+                val decisions = requestedTokens.map { geckoPermissionDecision(uri, it, allowSiteOverride) }
+                if (decisions.any { it == "BLOCK" }) { callback.reject(); return }
+                if (decisions.all { it == "ALLOW" }) {
+                    callback.grant(video?.firstOrNull(), audio?.firstOrNull())
+                    return
+                }
+                val tokensToAsk = requestedTokens.filterIndexed { index, _ -> decisions[index] == "ASK" }
                 val requested = buildList {
-                    if (!video.isNullOrEmpty()) add(getString(R.string.camera))
-                    if (!audio.isNullOrEmpty()) add(getString(R.string.microphone))
+                    if ("camera" in tokensToAsk) add(getString(R.string.camera))
+                    if ("microphone" in tokensToAsk) add(getString(R.string.microphone))
                 }.joinToString(getString(R.string.and_separator))
                 var completed = false
                 fun finish(allow: Boolean) {
                     if (completed) return
                     completed = true
+                    if (allow && allowSiteOverride) tokensToAsk.forEach { saveGeckoPermissionDecision(uri, it, "ALLOW") }
+                    if (!allow && allowSiteOverride) tokensToAsk.forEach { saveGeckoPermissionDecision(uri, it, "BLOCK") }
                     if (allow) callback.grant(video?.firstOrNull(), audio?.firstOrNull()) else callback.reject()
                 }
                 val dialog = AlertDialog.Builder(this@MainActivity)
@@ -1925,6 +2080,16 @@ class MainActivity : ComponentActivity() {
                     .setNegativeButton(getString(R.string.block)) { _, _ -> finish(false) }
                     .create()
                 registerPromptDialog(dialog) { finish(false) }
+            }
+        }
+
+        session.mediaSessionDelegate = object : org.mozilla.geckoview.MediaSession.Delegate {
+            override fun onActivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+                tab.mediaSession = mediaSession
+                mediaSession.muteAudio(!siteSettingAllowed(BrowserEngineType.GECKOVIEW, tab.lastUrl, "sound", true))
+            }
+            override fun onDeactivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+                if (tab.mediaSession === mediaSession) tab.mediaSession = null
             }
         }
 
@@ -2035,6 +2200,10 @@ class MainActivity : ComponentActivity() {
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession> {
                 val source = tabs.firstOrNull { it.session === session } ?: return GeckoResult.fromValue(null)
+                if (!siteSettingAllowed(BrowserEngineType.GECKOVIEW, source.lastUrl, "popups", false)) {
+                    if (currentTab() === source) toast("Popup blocked for ${Uri.parse(source.lastUrl).host ?: "this site"}")
+                    return GeckoResult.fromValue(null)
+                }
                 val newSettings = GeckoSessionSettings.Builder()
                     .usePrivateMode(source.isPrivate || source.isGuest)
                     .contextId(if (source.isGuest) guestContextId else null)
@@ -2097,6 +2266,7 @@ class MainActivity : ComponentActivity() {
                 if (url.isNullOrBlank()) return
                 if (tab.isErrorPage && url.startsWith("data:")) return
                 tab.lastUrl = url
+                tab.mediaSession?.muteAudio(!siteSettingAllowed(BrowserEngineType.GECKOVIEW, url, "sound", true))
                 tab.contentPermissions = perms
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
                 if (!tab.isPrivate && !tab.isGuest && !url.startsWith("about:reader")) { addHistory(url); persistTabs() }
@@ -3555,6 +3725,7 @@ class MainActivity : ComponentActivity() {
                         val mode = modes[which]
                         prefs.edit().putString("shield_mode", mode.name).apply()
                         NovaShield.apply(runtime, mode)
+                        applyGeckoCookieBehavior()
                         if (mode != ShieldMode.OFF) switchAllCefriumTabsToGecko("Nova Shield enabled")
                         toast("Nova Shield: ${mode.name.lowercase().replaceFirstChar { it.uppercase() }}")
                     }
@@ -3942,11 +4113,14 @@ class MainActivity : ComponentActivity() {
         prefs.edit().putBoolean(key, enabled).apply()
         val engine = tab.browserEngine as? CefriumBrowserEngine
         when (setting) {
-            "autoplay" -> engine?.setAutoplayAllowed(enabled)
+            "autoplay" -> if (tab.engineType == BrowserEngineType.CEFRIUM) engine?.setAutoplayAllowed(enabled) else {
+                tab.contentPermissions.filter { it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE || it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE }
+                    .forEach { runtime.storageController.setPermission(it, if (enabled) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
+            }
             "ads" -> engine?.setAdBlockingEnabled(enabled)
-            "sound" -> engine?.setAudioMuted(!enabled)
+            "sound" -> if (tab.engineType == BrowserEngineType.CEFRIUM) engine?.setAudioMuted(!enabled) else tab.mediaSession?.muteAudio(!enabled)
         }
-        tab.browserEngine?.reload()
+        if (setting != "sound") tab.browserEngine?.reload()
         toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
     }
 
@@ -4147,17 +4321,28 @@ private fun showQuickSettings() {
                 Triple("autoplay", "Autoplay", false),
                 Triple("ads", "Ads and trackers", true),
                 Triple("sound", "Sound", true)
-            ) else emptyList()
-        val permissionDefaults = if (engine == BrowserEngineType.CEFRIUM) arrayOf("Location, camera, microphone, notifications, clipboard and NFC permissions") else emptyArray()
+            ) else listOf(
+                Triple("popups", "Pop-ups and redirects", false),
+                Triple("autoplay", "Autoplay", false),
+                Triple("sound", "Sound", true)
+            )
+        val permissionDefaults = if (engine == BrowserEngineType.CEFRIUM)
+            arrayOf("Location, camera, microphone, notifications, clipboard and NFC permissions")
+        else arrayOf("Location, camera, microphone, notifications and device permissions")
+        val cookieDefaults = if (engine == BrowserEngineType.GECKOVIEW) arrayOf("Cookies and site data") else emptyArray()
         val labels = definitions.map { (key, name, fallback) ->
             val enabled = prefs.getBoolean("site_default_${engine.name.lowercase()}_$key", fallback)
             "$name · ${if (enabled) "Allowed" else "Blocked"}"
-        }.toTypedArray() + permissionDefaults
+        }.toTypedArray() + permissionDefaults + cookieDefaults
         val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
             .setItems(labels) { _, which ->
-                if (engine == BrowserEngineType.CEFRIUM && which == definitions.size) {
-                    showDefaultCefriumPermissions()
+                if (which == definitions.size) {
+                    if (engine == BrowserEngineType.CEFRIUM) showDefaultCefriumPermissions() else showDefaultGeckoPermissions()
+                    return@setItems
+                }
+                if (engine == BrowserEngineType.GECKOVIEW && which == definitions.size + permissionDefaults.size) {
+                    showDefaultGeckoCookieSettings()
                     return@setItems
                 }
                 val (key, name, fallback) = definitions[which]
@@ -4167,9 +4352,22 @@ private fun showQuickSettings() {
                 tabs.filter { it.engineType == engine && !it.isPrivate && !it.isGuest }.forEach { active ->
                     when (key) {
                         "javascript" -> applyJavaScriptSetting(active, active.lastUrl, reload = false)
-                        "autoplay" -> (active.browserEngine as? CefriumBrowserEngine)?.setAutoplayAllowed(next)
-                        "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
-                        "sound" -> (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next)
+                        "autoplay" -> {
+                            val effective = siteSettingAllowed(engine, active.lastUrl, "autoplay", false)
+                            if (engine == BrowserEngineType.CEFRIUM) {
+                                (active.browserEngine as? CefriumBrowserEngine)?.setAutoplayAllowed(effective)
+                            } else {
+                                val origin = cefriumOriginForUrl(active.lastUrl)
+                                val hasSiteOverride = origin?.let { prefs.contains("site_autoplay_geckoview_${Uri.encode(it)}") } == true
+                                if (!hasSiteOverride) active.contentPermissions.filter { it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE || it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE }
+                                    .forEach { runtime.storageController.setPermission(it, if (effective) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
+                            }
+                        }
+                        "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(siteSettingAllowed(engine, active.lastUrl, "ads", true))
+                        "sound" -> {
+                            val effective = siteSettingAllowed(engine, active.lastUrl, "sound", true)
+                            if (engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!effective) else active.mediaSession?.muteAudio(!effective)
+                        }
                     }
                     if (active.lastUrl.startsWith("http", true)) active.browserEngine?.reload()
                 }
@@ -4239,12 +4437,24 @@ private fun showQuickSettings() {
                     AlertDialog.Builder(this).setTitle("Permissions · ${Uri.parse(entry.origin).host}")
                         .setItems(labels) { _, which ->
                             val permission = matching[which]
-                            val next = if (permission.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
-                                GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
-                            else GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
-                            runtime.storageController.setPermission(permission, next)
-                            toast("Permission updated · reload the site")
-                            showGeckoSitePermissions(entry)
+                            val current = when (permission.value) {
+                                GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> 1
+                                GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> 2
+                                else -> 0
+                            }
+                            AlertDialog.Builder(this).setTitle(sitePermissionLabel(permission.permission))
+                                .setSingleChoiceItems(arrayOf("Ask every time", "Block", "Allow"), current) { dialog, selected ->
+                                    val next = when (selected) {
+                                        1 -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                                        2 -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                                        else -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_PROMPT
+                                    }
+                                    runtime.storageController.setPermission(permission, next)
+                                    dialog.dismiss()
+                                    showGeckoSitePermissions(entry)
+                                }
+                                .setNegativeButton(getString(R.string.close), null)
+                                .show()
                         }.setNegativeButton(getString(R.string.close), null).show()
                 }
             }
@@ -4271,7 +4481,11 @@ private fun showQuickSettings() {
                 Triple("autoplay", "Autoplay", false),
                 Triple("ads", "Ads and trackers", true),
                 Triple("sound", "Sound", true)
-            ) else emptyList()
+            ) else listOf(
+                Triple("popups", "Pop-ups and redirects", false),
+                Triple("autoplay", "Autoplay", false),
+                Triple("sound", "Sound", true)
+            )
         fun label(definition: Triple<String, String, Boolean>): String {
             val value = if (definition.first == "javascript") {
                 isJavaScriptAllowed(entry.engine, entry.origin)
@@ -4306,9 +4520,14 @@ private fun showQuickSettings() {
                         }.forEach { active ->
                             when (definition.first) {
                                 "javascript" -> applyJavaScriptSetting(active, active.lastUrl, reload = false)
-                                "autoplay" -> (active.browserEngine as? CefriumBrowserEngine)?.setAutoplayAllowed(next)
+                                "autoplay" -> if (entry.engine == BrowserEngineType.CEFRIUM) {
+                                    (active.browserEngine as? CefriumBrowserEngine)?.setAutoplayAllowed(next)
+                                } else {
+                                    active.contentPermissions.filter { it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE || it.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE }
+                                        .forEach { runtime.storageController.setPermission(it, if (next) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
+                                }
                                 "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
-                                "sound" -> (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next)
+                                "sound" -> if (entry.engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next) else active.mediaSession?.muteAudio(!next)
                             }
                             active.browserEngine?.reload()
                         }
@@ -4316,7 +4535,7 @@ private fun showQuickSettings() {
                         showSiteRuleDetails(entry)
                     }
                     entry.engine == BrowserEngineType.GECKOVIEW && which == definitions.size -> {
-                        showGeckoSitePermissions(entry)
+                        showGeckoSitePermissionHub(entry.origin)
                     }
                     entry.engine == BrowserEngineType.CEFRIUM && which == definitions.size -> {
                         showCefriumSitePermissionSettings(entry.origin)
@@ -4389,6 +4608,7 @@ private fun showQuickSettings() {
         val jsLabel = "JavaScript · " + if (isJavaScriptAllowed(tab.engineType, tab.lastUrl)) "Allowed" else "Blocked"
         val popupLabel = "Pop-ups and redirects · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "popups", false)) "Allowed" else "Blocked"
         val autoplayLabel = "Autoplay · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "autoplay", false)) "Allowed" else "Blocked"
+        val soundLabel = "Sound · " + if (siteSettingAllowed(tab.engineType, tab.lastUrl, "sound", true)) "Allowed" else "Muted"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             val uri = Uri.parse(tab.lastUrl)
             val origin = "${uri.scheme ?: "https"}://${uri.host ?: host}${if (uri.port > 0) ":${uri.port}" else ""}"
@@ -4418,20 +4638,44 @@ private fun showQuickSettings() {
                 }.setNegativeButton("Close", null).show()
             return
         }
-        val perms = tab.contentPermissions.filter { it.permission != GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
+        val perms = tab.contentPermissions.filter {
+            it.permission != GeckoSession.PermissionDelegate.PERMISSION_TRACKING &&
+                it.permission != GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE &&
+                it.permission != GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE
+        }
         val rows = perms.map { "${sitePermissionLabel(it.permission)} · ${when (it.value) { GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"; GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"; else -> "Ask" }}" }.toTypedArray()
-        val options = arrayOf(jsLabel) + rows + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
+        val controls = arrayOf(jsLabel, popupLabel, autoplayLabel, soundLabel)
+        val options = controls + rows + "Camera and microphone permissions" + "Allow / block trackers for this site" + "Clear this site's cookies and storage"
         AlertDialog.Builder(this).setTitle("Site controls · $host")
             .setItems(options) { _, which ->
                 when {
                     which == 0 -> toggleJavaScriptForCurrentSite(tab)
-                    which <= perms.size -> {
-                        val perm = perms[which]
-                        val next = if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY else GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
-                        runtime.storageController.setPermission(perm, next)
-                        toast("Site permission updated · reload the page")
+                    which == 1 -> toggleSiteSetting(tab, "popups", false)
+                    which == 2 -> toggleSiteSetting(tab, "autoplay", false)
+                    which == 3 -> toggleSiteSetting(tab, "sound", true)
+                    which < controls.size + perms.size -> {
+                        val perm = perms[which - controls.size]
+                        val current = when (perm.value) {
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> 1
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> 2
+                            else -> 0
+                        }
+                        AlertDialog.Builder(this).setTitle(sitePermissionLabel(perm.permission))
+                            .setSingleChoiceItems(arrayOf("Ask every time", "Block", "Allow"), current) { dialog, selected ->
+                                val next = when (selected) {
+                                    1 -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                                    2 -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                                    else -> GeckoSession.PermissionDelegate.ContentPermission.VALUE_PROMPT
+                                }
+                                runtime.storageController.setPermission(perm, next)
+                                dialog.dismiss()
+                                toast("Site permission updated · reload the page")
+                            }
+                            .setNegativeButton(getString(R.string.close), null)
+                            .show()
                     }
-                    which == perms.size + 1 -> showShieldSettings()
+                    which == controls.size + perms.size -> showGeckoMediaPermissionSettings(tab.lastUrl)
+                    which == controls.size + perms.size + 1 -> showShieldSettings()
                     else -> AlertDialog.Builder(this).setMessage("Clear cookies, caches, and site storage for $host? Other sites are not affected.")
                         .setPositiveButton("Clear site data") { _, _ ->
                             runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)
@@ -5140,6 +5384,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         NovaSyncSnapshotRepository.apply(this, snapshot)
         searchEngine = prefs.getString("search_engine", searchEngine) ?: searchEngine
         NovaShield.apply(runtime, NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")))
+        applyGeckoCookieBehavior()
         val fontScaleFactors = floatArrayOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f)
         val savedFontScale = prefs.getInt("font_scale_index", 1).coerceIn(fontScaleFactors.indices)
         runtime.settings.setFontSizeFactor(fontScaleFactors[savedFontScale])
