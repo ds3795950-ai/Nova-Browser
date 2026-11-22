@@ -15,18 +15,18 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 6 | `MainActivity.kt`, `BrowserUiState.kt` | Distinct Private and Guest mode accents/chips. |
 | 7 | `MainActivity.kt`, `NovaVpnFirewallActivity.kt` | Layout dimensions converted to density-aware values. |
 | 8 | `MainActivity.kt` | Search-engine selector uses content-based sizing rather than a clipped fixed width. |
-| 9 | `MainActivity.kt` | Home shortcuts can be added, edited and removed in a responsive grid. **Intentional privacy choice:** the shortcut grid uses local site initials rather than silently fetching third-party favicons. The grid behavior is complete; remote favicon contact is deliberately not part of this design. |
+| 9 | `MainActivity.kt`, `ShortcutFaviconLoader.kt` | Home shortcut tiles load and cache the site's own HTTPS `/favicon.ico` with bounded response/bitmap sizes; initials remain as fallback. Fetching is skipped in Private and Guest modes; no third-party favicon proxy is used. |
 | 10 | `MainActivity.kt`, `res/drawable-nodpi/ic_kali_dragon.webp` | Scrollable home panel and attributed Kali-dragon artwork with content description. |
 | 11 | `MainActivity.kt` | Tab actions use a horizontally scrollable row and are mode-aware. |
 | 12 | `MainActivity.kt` | Slim address chrome and bottom navigation row; secondary actions moved to overflow. |
-| 13 | `MainActivity.kt` | Narrow/wide layout switches using the current window width. **Partial:** this is a width-class breakpoint, not Jetpack WindowManager's fold/hinge-aware posture handling. |
+| 13 | `MainActivity.kt`, `app/build.gradle.kts` | Jetpack WindowManager detects separating folds; split panes switch side-by-side for vertical hinges and top/bottom for horizontal hinges, with the hinge bounds kept clear. |
 | 14 | `MainActivity.kt` | Toolbar controls use minimum heights and wrap-content sizing instead of fixed clipping heights. |
 | 15 | `MainActivity.kt`, `res/values/strings.xml` | URI keyboard variation, suggestions suppression, and clear-address control. |
 | 16 | `MainActivity.kt` | Location updates do not replace text while the address field has focus. |
 | 17 | `AndroidManifest.xml`, `MainActivity.kt` | `adjustResize` and unchanged soft-input state. |
 | 18 | `MainActivity.kt` | Gecko progress delegate drives the progress bar and loading/error state; stop/reload is available from the browser menu. |
 | 19 | `MainActivity.kt`, `BrowserUiState.kt` | Security state reflects secure, certificate-warning and not-secure pages; host is emphasized. |
-| 20 | `MainActivity.kt`, `BrowserUiState.kt`, `BrowserUiStateTest.kt` | Live local suggestions from history/bookmarks plus a search action and URL matching. **Intentional privacy choice:** suggestions are local-only; no third-party search service receives keystrokes while the user types. |
+| 20 | `MainActivity.kt`, `RemoteSearchSuggestions.kt`, `res/values/strings.xml` | Local suggestions remain default. An explicit Privacy setting can opt into Google, Bing or DuckDuckGo suggestions; typed text is sent only to the selected provider while a Normal tab is focused. Private/Guest modes never request remote suggestions; unsupported providers return none. |
 | 21 | `MainActivity.kt` | Page title and user rename override are stored separately. |
 | 22 | `MainActivity.kt` | Bookmark control reflects the current URL's saved state. |
 | 23 | `res/drawable/ic_*.xml`, `MainActivity.kt`, `res/values/strings.xml` | Main navigation icons use vector resources and descriptive accessibility labels. |
@@ -43,7 +43,7 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 34 | `MainActivity.kt`, `res/values/strings.xml` | Settings grouped by Privacy, Network, Sync, Appearance and About; About displays app version. |
 | 35 | `MainActivity.kt`, `res/values/strings.xml` | Destructive actions use confirmations; reversible bookmark/shortcut deletions offer Undo. |
 | 36 | `MainActivity.kt` | Reader-mode explanation is shown once and the mode is toggleable from the toolbar/menu. |
-| 37 | `MainActivity.kt` | Menu flows use bottom sheets and consistent action roles. **Intentional platform choice:** native AlertDialogs remain for nested forms/system prompts where platform dialog semantics are more appropriate; action menus use bottom sheets. |
+| 37 | `MainActivity.kt` | Shortcut add/edit forms and shortcut-removal confirmation now stay in bottom-sheet flows; Gecko page prompts and security/system confirmations retain native AlertDialogs where their semantics are important. |
 | 38 | `MainActivity.kt` | Password vault has a protected list, reveal, edit, add and delete flows; device biometric/credential gate is applied. |
 | 39 | `MainActivity.kt` | Empty bookmark folders render and bookmark editor includes a folder picker. |
 | 40 | `MainActivity.kt` | Prompt dialogs are tracked and dismissed/cancelled during destruction so Gecko results are completed. |
@@ -56,11 +56,11 @@ Base: PR #4 branch `fix/top-10-bugs`
 | 47 | `MainActivity.kt` | Find-in-page bar is connected to Gecko's finder. |
 | 48 | `MainActivity.kt` | Network/certificate failures show themed internal error pages. |
 | 49 | `MainActivity.kt` | Search attachment control preserves the query and falls back to Android share; tab switcher uses a thumbnail grid. |
-| 50 | `MainActivity.kt`, drawable/string resources | Icon labels, minimum touch dimensions, live status announcements and large-text-friendly scrolling were added. **Unverified:** TalkBack order, 4.5:1 contrast measurements, and 200% font-scale behavior require real-device accessibility testing. |
+| 50 | `MainActivity.kt`, `res/values/strings.xml`, `ShortcutFaviconLoaderTest.kt` | Shortcut tiles expose a single descriptive action label, decorative favicon art is excluded from duplicate focus, and touch width/height minimums are enforced. **Unverified:** TalkBack traversal, measured contrast ratios and 200% font scale still require device-level validation. |
 
 ## Engine boundary
 
-`BrowserEngine` and `GeckoBrowserEngine` in this UI branch isolate browser-chrome navigation and lifecycle calls behind an engine interface. The separate `feature/phase-1-dual-engine-foundation` branch contains the Cefrium SDK and adapter, with Private/Guest locked to GeckoView. These branches diverged from `main`; a direct merge into an isolated integration branch was rejected because of overlapping changes in `MainActivity.kt`, the manifest, download/sync code and VPN settings. A manual three-way integration is still required before the UI polish and dual-engine architecture exist together in one build. Do not read this branch-local note as meaning the repository has no Cefrium implementation.
+`BrowserEngine` and `GeckoBrowserEngine` isolate browser-chrome navigation and lifecycle calls; `BrowserEngineCallbacks` now defines the event contract future adapters must translate. The repository and Gradle dependency graph contain no Cefrium SDK/module or artifact coordinates. A working Cefrium adapter, rendering surface, and migration of Gecko delegates cannot be honestly implemented or tested without that SDK/API. Normal tabs therefore remain Gecko-backed in this branch; the requested Gecko-only Private/Guest versus Cefrium normal-tab split is still blocked.
 
 ## Automated validation
 
@@ -68,6 +68,7 @@ The Android CI workflow runs:
 
 - `gradle :app:testDebugUnitTest`
 - `gradle :app:assembleDebug`
+- Android lint (`:app:lintDebug`) is configured in the lint workflow; this branch now also runs it on pull requests.
 - Release APK assembly when signing secrets are configured
 
 CI status is tracked on the PR; device-level UI tests are not implied by a successful build.
@@ -83,5 +84,7 @@ CI status is tracked on the PR; device-level UI tests are not implied by a succe
 7. At tablet width and in Android split-screen/resizable-window mode, verify the wide split layout and that controls remain reachable.
 8. With TalkBack enabled, traverse every screen; check focus order, descriptions, touch targets and contrast.
 9. Test Gecko web prompts (select, alert, confirm, text, HTTP auth, date/time, color, popup and before-unload), permissions, fullscreen, context menu, find-in-page, network failure and content-process crash.
+10. In Normal mode, verify a site shortcut loads its own favicon or falls back to its initial; verify Private/Guest do not trigger favicon requests. Toggle remote suggestions on and off; confirm the setting is off by default and Private/Guest never send typed text.
+11. On a foldable, test vertical and horizontal separating hinges with split view; confirm browser content does not render underneath the hinge.
 
-**Not run in CI:** manual device script, TalkBack, 200% font scale, fold-hinge posture, and BrowserStack real-device sessions.
+**Not run in CI:** manual device script, TalkBack traversal, measured 4.5:1 contrast, 200% font scale, fold-hinge behavior on physical foldables, and BrowserStack real-device sessions. CI lint is a static check, not a substitute for these tests.

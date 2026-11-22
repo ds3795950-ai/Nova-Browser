@@ -1,6 +1,11 @@
 package com.nova.browser
 
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,6 +42,8 @@ import android.graphics.drawable.ColorDrawable
 import android.view.Gravity
 import android.view.View
 import android.widget.GridLayout
+import android.os.Handler
+import android.os.Looper
 import android.widget.ScrollView
 import android.widget.ImageView
 import android.widget.AutoCompleteTextView
@@ -111,6 +118,10 @@ class MainActivity : ComponentActivity() {
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
     private lateinit var addressBar: AutoCompleteTextView
     private var addressSuggestionItems: List<BrowserSuggestion> = emptyList()
+    private val addressSuggestionHandler = Handler(Looper.getMainLooper())
+    private var pendingRemoteSuggestion: Runnable? = null
+    private val remoteSuggestionExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var separatingFold: FoldingFeature? = null
     private lateinit var addressSuggestionsAdapter: ArrayAdapter<String>
     private lateinit var tabLabel: TextView
     private lateinit var pageStatus: TextView
@@ -229,6 +240,7 @@ class MainActivity : ComponentActivity() {
             prefs.edit().putString("guest_context_id", guestContextId).apply()
         }
         buildBrowserUi()
+        observeWindowLayout()
         if (retained != null) {
             tabs.forEach { tab -> tab.session?.let { configureSession(it, tab) } }
             if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
@@ -236,6 +248,38 @@ class MainActivity : ComponentActivity() {
         } else {
             restoreTabs()
             if (tabs.isEmpty()) createTab(false, HOME_URL)
+        }
+    }
+
+    private fun observeWindowLayout() {
+        lifecycleScope.launch {
+            WindowInfoTracker.getOrCreate(this@MainActivity)
+                .windowLayoutInfo(this@MainActivity)
+                .collect { info ->
+                    val fold = info.displayFeatures.filterIsInstance<FoldingFeature>()
+                        .firstOrNull { it.isSeparating }
+                    applyFoldAwareLayout(fold)
+                }
+        }
+    }
+
+    private fun applyFoldAwareLayout(fold: FoldingFeature?) {
+        separatingFold = fold
+        if (!::browserPane.isInitialized || !::browserView.isInitialized || !::secondaryPane.isInitialized) return
+        val sideBySide = if (fold?.isSeparating == true) {
+            fold.orientation == FoldingFeature.Orientation.VERTICAL
+        } else resources.configuration.screenWidthDp >= 600
+        browserPane.orientation = if (sideBySide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        if (sideBySide) {
+            browserView.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            secondaryPane.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            val hingeGap = if (fold?.isSeparating == true) fold.bounds.width().coerceAtLeast(0) else 0
+            secondaryPane.setPadding(hingeGap, 0, 0, 0)
+        } else {
+            browserView.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            secondaryPane.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            val hingeGap = if (fold?.isSeparating == true) fold.bounds.height().coerceAtLeast(0) else 0
+            secondaryPane.setPadding(0, hingeGap, 0, 0)
         }
     }
 
@@ -290,7 +334,10 @@ class MainActivity : ComponentActivity() {
             override fun afterTextChanged(s: Editable?) = Unit
         })
         addressBar.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) updateAddressSuggestions(addressBar.text?.toString().orEmpty()) else addressBar.dismissDropDown()
+            if (hasFocus) updateAddressSuggestions(addressBar.text?.toString().orEmpty()) else {
+                cancelPendingRemoteSuggestions()
+                addressBar.dismissDropDown()
+            }
         }
         addressRow.minimumHeight = dp(48)
         addressBar.minimumHeight = dp(48)
@@ -409,6 +456,7 @@ class MainActivity : ComponentActivity() {
         }
         root.isFocusableInTouchMode = true
         setContentView(root)
+        applyFoldAwareLayout(separatingFold)
         root.applySystemBarPadding()
         window.useLightSystemBarIcons()
         root.requestFocus()
@@ -502,25 +550,48 @@ class MainActivity : ComponentActivity() {
             val tile = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                minimumWidth = dp(48)
                 minimumHeight = dp(72)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
                 background = GradientDrawable().apply { setColor(getColor(R.color.nova_surface_elevated)); cornerRadius = dp(14).toFloat(); setStroke(dp(1), getColor(R.color.nova_outline)) }
+                isFocusable = true
+                contentDescription = getString(R.string.shortcut_tile_accessibility, shortcut.title, Uri.parse(shortcut.url).host ?: shortcut.url)
                 setOnClickListener { navigate(shortcut.url) }
                 setOnLongClickListener { showHomeShortcutActions(shortcut, index); true }
             }
-            val favicon = TextView(this).apply {
+            val faviconFrame = android.widget.FrameLayout(this).apply {
+                background = GradientDrawable().apply { setColor(getColor(R.color.nova_accent)); cornerRadius = dp(12).toFloat() }
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            val faviconFallback = TextView(this).apply {
                 text = shortcut.title.trim().take(1).uppercase(Locale.ROOT).ifBlank { "•" }
-                contentDescription = getString(R.string.shortcut_favicon, shortcut.title)
                 gravity = Gravity.CENTER
                 textSize = 18f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(getColor(R.color.nova_text_primary))
-                background = GradientDrawable().apply { setColor(getColor(R.color.nova_accent)); cornerRadius = dp(12).toFloat() }
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            val faviconImage = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                visibility = View.GONE
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                tag = shortcut.url
+            }
+            faviconFrame.addView(faviconFallback, android.widget.FrameLayout.LayoutParams(-1, -1))
+            faviconFrame.addView(faviconImage, android.widget.FrameLayout.LayoutParams(-1, -1))
+            if (currentTab()?.let { !it.isPrivate && !it.isGuest } == true) {
+                ShortcutFaviconLoader.load(this, shortcut.url) { bitmap ->
+                    if (bitmap != null && faviconImage.tag == shortcut.url && !isDestroyed) {
+                        faviconImage.setImageBitmap(bitmap)
+                        faviconImage.visibility = View.VISIBLE
+                        faviconFallback.visibility = View.GONE
+                    }
+                }
             }
             val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), 0, 0, 0) }
             details.addView(TextView(this).apply { text = shortcut.title; textSize = 13f; maxLines = 1; setTextColor(getColor(R.color.nova_text_primary)) })
             details.addView(TextView(this).apply { text = Uri.parse(shortcut.url).host ?: shortcut.url; textSize = 10f; maxLines = 1; setTextColor(getColor(R.color.nova_text_secondary)) })
-            tile.addView(favicon, LinearLayout.LayoutParams(dp(40), dp(40)))
+            tile.addView(faviconFrame, LinearLayout.LayoutParams(dp(40), dp(40)))
             tile.addView(details, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             homeShortcuts.addView(tile, GridLayout.LayoutParams().apply {
                 width = 0
@@ -534,15 +605,14 @@ class MainActivity : ComponentActivity() {
         showBottomSheetMenu(shortcut.title, listOf(
             getString(R.string.edit_shortcut) to { showHomeShortcutEditor(shortcut, index) },
             getString(R.string.remove_shortcut) to {
-                AlertDialog.Builder(this).setTitle(getString(R.string.remove_shortcut))
-                    .setMessage(getString(R.string.remove_shortcut_confirm, shortcut.title))
-                    .setNegativeButton(getString(R.string.cancel), null)
-                    .setPositiveButton(getString(R.string.remove)) { _, _ ->
+                showBottomSheetMenu(getString(R.string.remove_shortcut), listOf(
+                    getString(R.string.cancel) to {},
+                    getString(R.string.remove) to {
                         val previous = readHomeShortcuts()
                         saveHomeShortcuts(previous.filterIndexed { i, _ -> i != index })
                         showUndoSnackbar(getString(R.string.shortcut_removed), getString(R.string.undo)) { saveHomeShortcuts(previous) }
                     }
-                    .show()
+                ), getString(R.string.remove_shortcut_confirm, shortcut.title))
             }
         ))
     }
@@ -552,16 +622,19 @@ class MainActivity : ComponentActivity() {
         val title = EditText(this).apply { hint = getString(R.string.shortcut_title); setText(existing?.title.orEmpty()) }
         val url = EditText(this).apply { hint = getString(R.string.shortcut_url); setText(existing?.url.orEmpty()); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI }
         form.addView(title); form.addView(url)
-        AlertDialog.Builder(this).setTitle(getString(if (existing == null) R.string.add_shortcut else R.string.edit_shortcut)).setView(form)
-            .setPositiveButton(getString(R.string.save)) { _, _ ->
-                val resolved = BrowserUrlResolver.resolve(url.text.toString(), searchEngine)
-                if (resolved == null || !(resolved.startsWith("https://") || resolved.startsWith("http://"))) { toast(getString(R.string.invalid_shortcut_url)); return@setPositiveButton }
+        showBottomSheetForm(getString(if (existing == null) R.string.add_shortcut else R.string.edit_shortcut), form, getString(R.string.save)) {
+            val resolved = BrowserUrlResolver.resolve(url.text.toString(), searchEngine)
+            if (resolved == null || !(resolved.startsWith("https://") || resolved.startsWith("http://"))) {
+                toast(getString(R.string.invalid_shortcut_url)); false
+            } else {
                 val label = title.text.toString().trim().ifBlank { Uri.parse(resolved).host ?: getString(R.string.website) }
                 val items = readHomeShortcuts().toMutableList()
                 val shortcut = HomeShortcut(label, resolved)
                 if (index in items.indices) items[index] = shortcut else items.add(shortcut)
                 saveHomeShortcuts(items)
-            }.setNegativeButton(getString(R.string.cancel), null).show()
+                true
+            }
+        }
     }
 
     private fun showHomeScreen() {
@@ -582,6 +655,7 @@ class MainActivity : ComponentActivity() {
         }, 0)
         searchEngineButton.text = getString(R.string.search_engine_button, searchEngine)
         searchEngineButton.contentDescription = getString(R.string.search_engine_accessibility, searchEngine)
+        renderHomeShortcuts()
         homeShortcuts.visibility = if (prefs.getBoolean("show_home_shortcuts", true)) View.VISIBLE else View.GONE
     }
 
@@ -697,6 +771,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun showBottomSheetForm(title: String, form: View, primaryLabel: String, onPrimary: () -> Boolean) {
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(18), dp(16), dp(18))
+            background = GradientDrawable().apply {
+                setColor(getColor(R.color.nova_surface))
+                cornerRadii = floatArrayOf(dp(20).toFloat(), dp(20).toFloat(), dp(20).toFloat(), dp(20).toFloat(), 0f, 0f, 0f, 0f)
+            }
+        }
+        content.addView(TextView(this).apply {
+            text = title; textSize = 18f; typeface = Typeface.DEFAULT_BOLD
+            setTextColor(getColor(R.color.nova_text_primary)); setPadding(dp(4), 0, dp(4), dp(12))
+        })
+        content.addView(form, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        actions.addView(actionButton(getString(R.string.cancel)) { dialog.dismiss() })
+        actions.addView(actionButton(primaryLabel) { if (onPrimary()) dialog.dismiss() })
+        content.addView(actions)
+        dialog.setContentView(ScrollView(this).apply { isFillViewport = true; addView(content) })
+        dialog.setCanceledOnTouchOutside(true)
+        activeBottomSheetDialogs.add(dialog)
+        dialog.setOnDismissListener { activeBottomSheetDialogs.remove(dialog) }
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+            setLayout(WindowManager.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.78f).toInt())
+            setGravity(Gravity.BOTTOM)
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes = attributes.apply { dimAmount = 0.35f }
+        }
+    }
+
     private fun showOverflowMenu(anchor: View) {
         val tab = currentTab() ?: return
         val actions = mutableListOf<Pair<String, () -> Unit>>()
@@ -752,6 +859,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
+        cancelPendingRemoteSuggestions()
         if (currentTab()?.isGuest == true && !isGuest) {
             toast("Normal and Private tabs are unavailable in Guest Mode")
             return
@@ -1592,6 +1700,7 @@ class MainActivity : ComponentActivity() {
         if (!::addressBar.isInitialized || !::addressSuggestionsAdapter.isInitialized || !addressBar.hasFocus()) return
         val typed = query.trim()
         if (typed.isBlank()) {
+            cancelPendingRemoteSuggestions()
             addressSuggestionItems = emptyList()
             addressSuggestionsAdapter.clear()
             addressBar.dismissDropDown()
@@ -1614,6 +1723,38 @@ class MainActivity : ComponentActivity() {
         addressSuggestionsAdapter.clear()
         addressSuggestionsAdapter.addAll(addressSuggestionItems.map { it.label })
         if (addressSuggestionItems.isNotEmpty()) addressBar.showDropDown() else addressBar.dismissDropDown()
+        scheduleRemoteSuggestions(typed, ranked, searchSuggestion)
+    }
+
+    private fun cancelPendingRemoteSuggestions() {
+        pendingRemoteSuggestion?.let(addressSuggestionHandler::removeCallbacks)
+        pendingRemoteSuggestion = null
+    }
+
+    private fun scheduleRemoteSuggestions(query: String, local: List<BrowserSuggestion>, searchSuggestion: BrowserSuggestion?) {
+        cancelPendingRemoteSuggestions()
+        val tab = currentTab()
+        if (!prefs.getBoolean("remote_search_suggestions", false) || tab?.isPrivate == true || tab?.isGuest == true || query.length < 2) return
+        val request = Runnable {
+            remoteSuggestionExecutor.execute {
+                val remote = RemoteSearchSuggestions.fetch(query, searchEngine)
+                runOnUiThread {
+                    val current = currentTab()
+                    if (isDestroyed || !::addressBar.isInitialized || !addressBar.hasFocus() ||
+                        addressBar.text?.toString()?.trim() != query ||
+                        !prefs.getBoolean("remote_search_suggestions", false) || current?.isPrivate == true || current?.isGuest == true) return@runOnUiThread
+                    val remoteItems = remote.mapNotNull { label ->
+                        BrowserUrlResolver.resolve(label, searchEngine)?.let { BrowserSuggestion(label, it) }
+                    }
+                    addressSuggestionItems = (local + remoteItems + listOfNotNull(searchSuggestion)).distinctBy { it.url }.take(7)
+                    addressSuggestionsAdapter.clear()
+                    addressSuggestionsAdapter.addAll(addressSuggestionItems.map { it.label })
+                    if (addressSuggestionItems.isNotEmpty()) addressBar.showDropDown()
+                }
+            }
+        }
+        pendingRemoteSuggestion = request
+        addressSuggestionHandler.postDelayed(request, 350L)
     }
 
     private fun submitAddressBar() {
@@ -2871,6 +3012,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         section(getString(R.string.settings_privacy), listOf(
+            getString(R.string.remote_search_suggestions, if (prefs.getBoolean("remote_search_suggestions", false)) "On" else "Off") to {
+                val enabled = !prefs.getBoolean("remote_search_suggestions", false)
+                prefs.edit().putBoolean("remote_search_suggestions", enabled).apply()
+                toast(getString(if (enabled) R.string.remote_suggestions_enabled else R.string.remote_suggestions_disabled))
+                if (::addressBar.isInitialized && addressBar.hasFocus()) updateAddressSuggestions(addressBar.text?.toString().orEmpty())
+            },
             getString(R.string.clear_history) to { clearBrowsingHistory() },
             getString(R.string.close_private_guest_tabs) to { closePrivateAndGuestTabs() },
             getString(R.string.site_permissions) to { showSiteControls() },
@@ -3104,6 +3251,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        cancelPendingRemoteSuggestions()
         persistTabs()
         super.onPause()
     }
@@ -3186,6 +3334,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        pendingRemoteSuggestion?.let(addressSuggestionHandler::removeCallbacks)
+        pendingRemoteSuggestion = null
+        remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()
         pendingAndroidPermissionCallback = null
         activeBottomSheetDialogs.toList().forEach { runCatching { it.dismiss() } }
