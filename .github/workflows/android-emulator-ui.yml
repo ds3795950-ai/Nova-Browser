@@ -20,6 +20,9 @@ jobs:
     name: Home, search, privacy and settings on Android emulator
     runs-on: ubuntu-latest
     timeout-minutes: 70
+    env:
+      # GitHub-hosted Linux runners may not expose KVM; force the emulator's TCG fallback.
+      ANDROID_I_WANT_MY_TCG: "yes"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -53,7 +56,8 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          emulator-boot-timeout: 1200
           script: |
             set -euo pipefail
             mkdir -p test-results
