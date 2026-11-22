@@ -1590,7 +1590,7 @@ class MainActivity : ComponentActivity() {
         val normalized = cefriumOriginForUrl(origin) ?: return "ASK"
         if (allowSiteOverride) {
             val site = prefs.getString("site_permission_geckoview_${token}_${Uri.encode(normalized)}", null)?.uppercase()
-            if (site in setOf("ASK", "ALLOW", "BLOCK")) return site
+            if (site != null && site in setOf("ASK", "ALLOW", "BLOCK")) return site
         }
         return (prefs.getString("site_default_permission_geckoview_$token", "ASK") ?: "ASK")
             .uppercase().takeIf { it in setOf("ASK", "ALLOW", "BLOCK") } ?: "ASK"
