@@ -1,32 +1,38 @@
-# Nova Browser — Phase 3 and Phase 4 implementation status
+# Phase 2 — tab management and engine integration
 
-Last reconciled: 2026-11-20. This document describes the current feature branch. It does not claim device acceptance.
+## Engine-neutral tab ownership
 
-## Phase 3: bookmarks, history, downloads, uploads and page tools
+- `BrowserTab` stores a `BrowserEngine` runtime, not a raw `GeckoSession` or a concrete Cefrium engine field.
+- `CefriumBrowserEngine` and `GeckoViewBrowserEngine` implement the same per-tab contract for URL loading, back/forward, reload, view, activation, host pause/resume, and close.
+- `GeckoViewBrowserEngine` owns the `GeckoSession` and Gecko-specific permission snapshots created for that tab. `MainActivity` resolves the session through a narrow Gecko-specific accessor only for APIs that do not yet have a cross-engine equivalent (translation, prompt delegates, and download callbacks).
+- `BrowserTab` contains no `GeckoSession` or Gecko permission-object fields. `MainActivity` routes shared navigation and lifecycle through `BrowserEngine`; it no longer calls `GeckoView.setSession`, `GeckoSession.loadUri`, or stores Gecko-only permission state in the tab model.
+- Gecko adapter attach/detach moves a session between the primary and secondary panes and releases the old view before attaching the new one. Closing a tab closes its engine once; Cefrium's default attach/detach hooks leave its engine-owned view unchanged.
+- Cefrium-only reader extraction and desktop user-agent control remain explicit adapter-specific capabilities rather than being falsely advertised as common features.
 
-- **Bookmarks:** structured title/URL/folder/time records; search; folder grouping; edit/delete; create folders; JSON import/export through Android's document picker. Legacy URL-only bookmarks are migrated on read.
-- **History:** timestamped entries, title/host labels, search, date grouping, deduplicated visits, 500-entry cap and clear-history. Private and Guest tabs do not write history.
-- **Downloads:** app-controlled HTTP downloader with persisted job metadata and partial files, pause/resume/cancel, HTTP Range and If-Range validation, byte progress, safe filenames and publication to Downloads/Nova through MediaStore on Android 10+. Servers that ignore Range cause a safe restart from byte zero.
-- **Webpage downloads:** GeckoView response interception saves the authenticated response body instead of issuing a second unauthenticated request. Private and Guest response streams are closed without saving.
-- **Uploads:** Android Storage Access Framework supports single/multiple file selection. GeckoView folder-upload requests receive explicit Allow/Deny confirmation and use Android's directory picker.
-- **Desktop site:** per-site mobile/desktop preference. Cefrium applies a desktop user agent and viewport; GeckoView retains its native path.
-- **Reader mode:** GeckoView uses its built-in reader. Cefrium extracts article content and renders a simplified reading page.
-- **Translation:** GeckoView native translation controller with source/target selection. Model availability depends on the GeckoView build and device.
-- **Sharing:** Android share sheet.
+## Existing tab behavior
 
-## Phase 4: Private browsing and Guest Mode
+- Normal and Private tabs remain in separate sections; Guest tabs remain isolated from owner tabs.
+- Tabs are grouped by their assigned group name and support collapsed group headings, expand-all, and collapse-all controls.
+- Nova keeps the active tab and up to three most-recently-used background runtimes open. Older runtimes are closed and recreated lazily when selected.
+- A sleeping tab reloads its last URL; it does not promise preservation of in-page form state, scroll position, or the full back/forward session history.
+- Private and Guest URLs are excluded from normal tab persistence and workspace snapshots.
 
-- **Private:** Private tabs use Cefrium's in-memory incognito profile when Cefrium is selected, or GeckoView's private session when GeckoView is selected. They are excluded from normal history, bookmarks, workspaces and session restore. Cefrium Private tabs share the in-memory Private profile, which is cleared when the final Private Cefrium browser closes.
-- **Guest:** Guest is a distinct tab category locked to GeckoView. It uses a dedicated isolated Gecko session context and is excluded from normal tabs/session restore, workspaces, history, bookmarks and saved downloads. Guest does not read owner browsing records. Owner credential callbacks are disabled while a Private or Guest tab exists.
-- **Cleanup:** Guest context cleanup runs at startup to recover after process death, after the final Guest tab closes, and during Activity teardown after sessions close. The context ID rotates for the next Guest session.
-- **Tab switcher:** normal, Private and Guest tabs remain separate; split-screen is restricted to normal tabs.
+## Split-screen
 
-## Verification status and limitations
+- Split mode supports two distinct tab-owned engine views in stacked panes, each with its own address field and Go control.
+- The second pane can be selected from existing Normal tabs only; Private and Guest tabs are excluded.
+- Gecko sessions are attached to exactly one pane at a time. Switching or closing a tab detaches its Gecko view before it is re-used or released.
+- The secondary address field and Go control expose stable accessibility labels for automation and assistive technology.
+- Split state is temporary and is not restored after process recreation.
 
-- Unit tests cover guest persistence/read boundaries, profile/engine selection, session retention and related privacy policies.
-- Android CI and lint passed on commit `5c83f759b5aeef9f310d04498070fcede1f1af96`.
-- The latest Android Emulator Smoke run failed during emulator setup/ADB configuration after boot completion and before the instrumentation test command. ADB returned a broken-pipe/exit-224 error; this is not a test assertion result. A workflow reliability change is being applied and must be rerun.
-- Device acceptance is still required on Android 16 / Realme RMX5313 for downloads, cookie/session isolation, folder upload, translation models, Reader Mode, Private/Guest storage cleanup and process-death recovery.
-- HTTP Range resume remains server-dependent. Do not claim all downloads can resume.
-- Translation language pairs depend on the bundled GeckoView translation engine and downloaded model support.
-- Guest Mode is ephemeral local browsing, not Tor routing or Tor-level anonymity.
+## Remaining Phase 2 work
+
+- Move Gecko-specific delegate installation and capability handling behind the Gecko adapter/factory so `MainActivity` no longer needs to know the Gecko session type.
+- Add an explicit engine-capability contract for features such as translation, password autofill, downloads, permissions, reader mode, and Shield; use it instead of scattered concrete-engine checks.
+- Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
+- Do not mark Phase 2 verified until the Android build, unit tests, emulator smoke tests, and BrowserStack device suite pass.
+
+## Verification status
+
+- Source integration: implemented in the current feature branch; CI/device verification is pending for this revision.
+- The existing Gecko delegates remain host-managed intentionally in this increment; the tab model and shared navigation/lifecycle are engine-neutral, but capability extraction is not complete.

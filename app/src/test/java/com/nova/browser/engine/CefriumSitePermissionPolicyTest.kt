@@ -26,6 +26,7 @@ class CefriumSitePermissionPolicyTest {
     @Test fun rejectsOpaqueMalformedAndCredentialBearingOrigins() {
         assertNull(CefriumSitePermissionPolicy.normalize("data:text/html,hello", listOf("CAMERA")))
         assertNull(CefriumSitePermissionPolicy.normalize("https://user:pass@example.com", listOf("CAMERA")))
+        assertNull(CefriumSitePermissionPolicy.normalize("https://example.com/account", listOf("CAMERA")))
         assertNull(CefriumSitePermissionPolicy.normalize("not a url", listOf("CAMERA")))
     }
 

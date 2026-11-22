@@ -21,6 +21,7 @@ object CefriumSitePermissionPolicy {
         val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
         val host = uri.host?.lowercase(Locale.ROOT) ?: return null
         if (uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null) return null
+        if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return null
         val secureOrigin = scheme == "https" ||
             (scheme == "http" && host in LOCALHOST_HOSTS)
         if (!secureOrigin) return null
