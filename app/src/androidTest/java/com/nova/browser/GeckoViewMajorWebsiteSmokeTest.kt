@@ -97,4 +97,39 @@ class GeckoViewMajorWebsiteSmokeTest {
             }
         }
     }
+
+
+    @Test fun engineAdapterCanDetachReattachPauseResumeAndCloseIdempotently() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val runtimeField = MainActivity::class.java.getDeclaredField("runtime").apply { isAccessible = true }
+                val runtime = runtimeField.get(activity) as GeckoRuntime
+                val firstView = GeckoView(activity)
+                val secondView = GeckoView(activity)
+                val root = activity.findViewById<FrameLayout>(android.R.id.content)
+                root.addView(firstView, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                ))
+                root.addView(secondView, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                ))
+
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val engine = GeckoViewBrowserEngine(session, firstView, BrowserEngineListener { })
+                session.open(runtime)
+                engine.attachTo(firstView)
+                engine.setActive(true, true)
+                engine.detach()
+                engine.attachTo(secondView)
+                engine.onHostPause()
+                engine.onHostResume()
+                engine.setActive(false, false)
+                engine.close()
+                engine.close()
+
+                assertTrue("Adapter should own the newly attached pane after reattachment", engine.view === secondView)
+            }
+        }
+    }
+
 }
