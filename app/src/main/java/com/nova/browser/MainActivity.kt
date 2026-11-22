@@ -3800,7 +3800,7 @@ class MainActivity : ComponentActivity() {
             "Current site settings · ${host ?: "open a website"}",
             "Default settings · GeckoView",
             "Default settings · Cefrium",
-            "All sites · ${storedSiteRuleEntries().size}",
+            "All sites",
             "Clear all site data · GeckoView",
             "Clear all site data · Cefrium"
         )
@@ -3945,7 +3945,11 @@ class MainActivity : ComponentActivity() {
                 Triple("sound", "Sound", true)
             ) else emptyList()
         fun label(definition: Triple<String, String, Boolean>): String {
-            val value = prefs.getBoolean(siteRuleKey(entry, definition.first), definition.third)
+            val value = if (definition.first == "javascript") {
+                isJavaScriptAllowed(entry.engine, entry.origin)
+            } else {
+                siteSettingAllowed(entry.engine, entry.origin, definition.first, definition.third)
+            }
             return "${definition.second} · ${if (value) "Allowed" else "Blocked"}"
         }
         val permissionsOffset = if (entry.engine == BrowserEngineType.GECKOVIEW) 1 else 0
