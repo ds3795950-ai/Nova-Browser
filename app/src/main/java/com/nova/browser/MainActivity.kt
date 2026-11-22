@@ -1896,18 +1896,9 @@ class MainActivity : ComponentActivity() {
                     active.lastUrl.startsWith("about:") || active.lastUrl.startsWith("chrome:")) {
                     callback(null)
                 } else {
-                    // Read on demand so summarisation works for pages that were already open
-                    // before the built-in reader extension finished installing.
-                    session.evaluateJS(
-                        "(function(){return document.body ? document.body.innerText.slice(0,24000) : '';})()"
-                    ).accept({ value ->
-                        runOnUiThread {
-                            val extracted = (value as? String)?.take(24000)?.takeIf { it.isNotBlank() }
-                            callback(extracted ?: aiPageText[active.id])
-                        }
-                    }, {
-                        runOnUiThread { callback(aiPageText[active.id]) }
-                    })
+                    // Page text is supplied by the built-in GeckoView reader extension.
+                    // Avoid APIs not exposed by the GeckoView version bundled in this app.
+                    callback(aiPageText[active.id])
                 }
             },
             persistHistory = tab?.isPrivate != true && tab?.isGuest != true,

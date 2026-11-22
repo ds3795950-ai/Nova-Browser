@@ -343,7 +343,7 @@ internal class NovaBrowserUiController(
         val searchInput = EditText(context).apply {
             hint = "Search or type a web address"
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             setTextColor(palette.text)
@@ -417,7 +417,7 @@ internal class NovaBrowserUiController(
         val scroll = android.widget.ScrollView(context).apply {
             isFillViewport = true
             isVerticalScrollBarEnabled = false
-            addView(content, android.widget.ScrollView.LayoutParams(-1, -2))
+            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
         }
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL

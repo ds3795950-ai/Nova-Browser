@@ -307,7 +307,7 @@ internal class NovaAiAssistantUi(
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), dp(8), dp(2), dp(12))
         }
-        scroll.addView(feed, ScrollView.LayoutParams(-1, -2))
+        scroll.addView(feed, android.view.ViewGroup.LayoutParams(-1, -2))
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
         // Composer, visually separated from the conversation.
