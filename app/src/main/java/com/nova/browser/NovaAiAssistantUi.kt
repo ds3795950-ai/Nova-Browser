@@ -165,6 +165,7 @@ internal class NovaAiAssistantUi(
     private lateinit var models: Spinner
     private lateinit var modelAdapter: ArrayAdapter<String>
     private lateinit var contextChip: TextView
+    private lateinit var usageWarning: TextView
     private var attachedPageText: String? = null
     private var busy = false
     private var dialog: AlertDialog? = null
@@ -276,6 +277,11 @@ internal class NovaAiAssistantUi(
             setPadding(dp(8), dp(3), dp(8), dp(7))
         }
         composer.addView(contextChip)
+        usageWarning = label("", 11f, 0xFFFFC66D.toInt()).apply {
+            visibility = View.GONE
+            setPadding(dp(7), dp(5), dp(7), dp(7))
+        }
+        composer.addView(usageWarning)
         input = EditText(context).apply {
             hint = "Ask anything… use current page as context"
             textSize = 14f
@@ -321,6 +327,7 @@ internal class NovaAiAssistantUi(
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 provider = NovaAiProvider.values()[position]
+                usageWarning.visibility = View.GONE
                 model = store.model(provider)
                 modelAdapter.clear()
                 modelAdapter.add(model)
@@ -332,6 +339,7 @@ internal class NovaAiAssistantUi(
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 model = models.selectedItem?.toString() ?: store.model(provider)
+                usageWarning.visibility = View.GONE
                 store.setModel(provider, model)
             }
         }
@@ -509,6 +517,7 @@ internal class NovaAiAssistantUi(
         NovaAiApi.send(provider, key, model, messages.toList()) { result ->
             busy = false
             result.onSuccess { answer ->
+                usageWarning.visibility = View.GONE
                 val reply = NovaAiMessage("assistant", answer)
                 messages += reply
                 render(reply)
@@ -517,11 +526,8 @@ internal class NovaAiAssistantUi(
             }.onFailure { failure ->
                 if (failure is NovaAiUsageLimitException) {
                     status.text = "Usage limit reached · ${provider.label}"
-                    AlertDialog.Builder(context)
-                        .setTitle("Model temporarily unavailable")
-                        .setMessage("The selected model or API account has reached its current usage limit or quota. Wait for the provider's limit to reset, check your billing/usage settings, or choose another available model.\n\nProvider details: ${failure.message.orEmpty()}")
-                        .setPositiveButton("OK", null)
-                        .show()
+                    usageWarning.text = "⚠ $model is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
+                    usageWarning.visibility = View.VISIBLE
                 } else {
                     status.text = "Request failed"
                     notify(failure.message ?: "AI request failed")
