@@ -4,8 +4,8 @@
 
 - `BrowserTab` stores a `BrowserEngine` runtime, not a raw `GeckoSession` or a concrete Cefrium engine field.
 - `CefriumBrowserEngine` and `GeckoViewBrowserEngine` implement the same per-tab contract for URL loading, back/forward, reload, view, activation, host pause/resume, and close.
-- `GeckoViewBrowserEngine` owns the `GeckoSession` and Gecko-specific permission snapshots created for that tab. `MainActivity` resolves the session through a narrow Gecko-specific accessor only for APIs that do not yet have a cross-engine equivalent (translation, prompt delegates, and download callbacks).
-- `BrowserTab` contains no `GeckoSession` or Gecko permission-object fields. `MainActivity` routes shared navigation and lifecycle through `BrowserEngine`; it no longer calls `GeckoView.setSession`, `GeckoSession.loadUri`, or stores Gecko-only permission state in the tab model.
+- `GeckoViewBrowserEngine` owns the `GeckoSession` and Gecko-specific permission snapshots created for that tab. Gecko-only delegates and APIs remain behind the Gecko adapter/factory; no engine-neutral caller may obtain another engine's native session.
+- `BrowserTab` contains no `GeckoSession` or Gecko permission-object fields. `MainActivity` routes shared navigation and lifecycle through `BrowserEngine`.
 - Gecko adapter attach/detach moves a session between the primary and secondary panes and releases the old view before attaching the new one. Closing a tab closes its engine once; Cefrium's default attach/detach hooks leave its engine-owned view unchanged.
 - Cefrium-only reader extraction and desktop user-agent control remain explicit adapter-specific capabilities rather than being falsely advertised as common features.
 
@@ -25,14 +25,19 @@
 - The secondary address field and Go control expose stable accessibility labels for automation and assistive technology.
 - Split state is temporary and is not restored after process recreation.
 
-## Remaining Phase 2 work
+## Phase 3 — strict engine profile isolation (replaces data migration)
 
-- Move Gecko-specific delegate installation and capability handling behind the Gecko adapter/factory so `MainActivity` no longer needs to know the Gecko session type.
-- Add an explicit engine-capability contract for features such as translation, password autofill, downloads, permissions, reader mode, and Shield; use it instead of scattered concrete-engine checks.
+- GeckoView and Cefrium use independent engine-owned profiles and storage. No website data is shared between them, in either direction.
+- Cookies, browsing history, HTTP cache, localStorage, IndexedDB, service workers, Cache Storage, permissions, passwords, passkeys, downloads, and session state remain within the owning engine/profile.
+- There is no cross-engine export, import, migration, synchronization, fallback read, or profile reuse.
+- Switching a tab to another engine starts with that engine's own profile state. The other engine's cookies or authenticated sessions must never appear.
+- Private and Guest modes remain isolated from Normal mode and from each other according to their existing profile policy; they must not persist owner browsing data.
+- `WebsiteDataMigrationCoordinator` is a fail-closed guard only. Cross-engine requests return `BLOCKED_BY_ENGINE_ISOLATION`; same-engine requests are no-ops. It contains no export/import interface.
+- Any future request to share data between engines is out of scope and requires a separate explicit security review and product decision.
+
+## Phase 4 — validation and hardening
+
 - Validate tab switching, split-screen, sleeping-tab recreation, engine switching, process recreation, and resource cleanup on Android 16 and BrowserStack.
-- Do not mark Phase 2 verified until the Android build, unit tests, emulator smoke tests, and BrowserStack device suite pass.
-
-## Verification status
-
-- Source integration: implemented in the current feature branch; CI/device verification is pending for this revision.
-- The existing Gecko delegates remain host-managed intentionally in this increment; the tab model and shared navigation/lifecycle are engine-neutral, but capability extraction is not complete.
+- Verify both directions of engine switching do not expose cookies, history, cache, localStorage, IndexedDB, credentials, permissions, or session state.
+- Verify Private and Guest tabs never write browsing records into Normal profile persistence.
+- Do not mark the work verified until Android build, unit tests, emulator smoke tests, and device suite pass.
