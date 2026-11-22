@@ -2584,6 +2584,7 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showCloudAccount() {
+        if (currentTab()?.isPrivate == true) { toast("Nova Cloud is unavailable in Private Mode"); return }
         if (denyGuestAccess("Nova Cloud")) return
         val email = cloudSync.signedInEmail()
         if (email.isNullOrBlank()) {
@@ -2605,7 +2606,7 @@ class MainActivity : ComponentActivity() {
         val lastSyncText = if (lastSync > 0L) SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(lastSync)) else "Not synced yet"
         val syncError = prefs.getString("cloud_sync_last_error", null)
         val check = CheckBox(this).apply { text = "Allow encrypted cloud sync from this device"; isChecked = enabled; setPadding(24, 12, 24, 12) }
-        val syncMessage = "Your sync data is encrypted before upload. The passphrase is never sent to Nova or Supabase and is stored only as Android-Keystore-protected ciphertext on this device after the first successful sync. The GeckoView-only password vault is encrypted separately. Cefrium and GeckoView bookmarks, history, workspaces and downloads are stored and synced in separate engine profiles; no website data or credentials move between engines. Private and Guest data is excluded.\n\nAutomatic sync: every 6 hours when a network is available.\nLast successful sync: $lastSyncText" + if (!syncError.isNullOrBlank()) "\nLast sync issue: $syncError" else ""
+        val syncMessage = "Your sync data is encrypted before upload. The passphrase is never sent to Nova or Supabase and is stored only as Android-Keystore-protected ciphertext on this device after the first successful sync. The GeckoView-only password vault is encrypted separately. Cefrium and GeckoView bookmarks, history and workspaces are synced in separate engine profiles. Download records and files are stored separately per engine on this device and are not cloud-synced. No website data or credentials move between engines. Private and Guest data is excluded.\n\nAutomatic sync: every 6 hours when a network is available.\nLast successful sync: $lastSyncText" + if (!syncError.isNullOrBlank()) "\nLast sync issue: $syncError" else ""
         AlertDialog.Builder(this).setTitle("Nova Cloud · $email").setMessage(syncMessage)
             .setView(check).setPositiveButton("Save") { _, _ ->
                 prefs.edit().putBoolean("cloud_sync_enabled", check.isChecked).apply()
@@ -2646,7 +2647,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showSyncPassphrase() {
         val input = EditText(this).apply { hint = "Sync passphrase (10+ characters)"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true }
-        AlertDialog.Builder(this).setTitle("Encrypt and sync").setMessage("Use the same passphrase on every device. If you lose it, the encrypted backup cannot be recovered. The GeckoView-only password vault is encrypted separately. Cefrium and GeckoView bookmarks, history, workspaces and downloads are stored and synced in separate engine profiles; no website data or credentials move between engines. Private and Guest data is excluded.")
+        AlertDialog.Builder(this).setTitle("Encrypt and sync").setMessage("Use the same passphrase on every device. If you lose it, the encrypted backup cannot be recovered. The GeckoView-only password vault is encrypted separately. Cefrium and GeckoView bookmarks, history and workspaces are synced in separate engine profiles. Download records and files are stored separately per engine on this device and are not cloud-synced. No website data or credentials move between engines. Private and Guest data is excluded.")
             .setView(input).setPositiveButton("Sync now") { _, _ ->
                 val passphrase = input.text.toString().toCharArray()
                 if (passphrase.size < 10) { passphrase.fill('\u0000'); toast("Passphrase must be at least 10 characters"); return@setPositiveButton }

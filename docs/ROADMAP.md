@@ -46,7 +46,7 @@ Status key:
 **Status: IMPLEMENTED IN SOURCE; CI AND DEVICE ACCEPTANCE REQUIRED**
 
 - Cefrium and GeckoView have disjoint website profiles; no cookies, cache, localStorage, IndexedDB, service workers, permissions, credentials, passkeys or session state cross the engine boundary.
-- Nova-owned history, bookmarks, folders/tombstones, workspaces, saved Normal tab metadata and downloads use engine-specific storage namespaces. Download preference records, partial files and public download folders are also separated.
+- Nova-owned history, bookmarks, folders/tombstones, workspaces, saved Normal tab metadata and downloads use engine-specific storage namespaces. Download preference records, partial files and public download folders are also separated. Download records/files are device-local and are not part of encrypted cloud sync.
 - Bookmark backup files are schema-tagged with their engine and cross-engine or unscoped imports are rejected. History exports include engine provenance. Password vault UI is GeckoView-only. Private and Guest modes cannot read owner bookmarks, history, workspaces or downloads.
 - Encrypted cloud sync stores and merges independent `GECKOVIEW` and `CEFRIUM` profile objects. Legacy unscoped cloud snapshots are not imported into either profile.
 - `WebsiteDataMigrationCoordinator` contains no data ports and always blocks cross-engine migration.
