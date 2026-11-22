@@ -132,10 +132,8 @@ class MainActivity : ComponentActivity() {
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
     private var guestTorStartPending: Boolean = false
-    private val novaDownloads: NovaDownloadManager by lazy {
-        NovaDownloadManager(this, "normal") { items -> runOnUiThread { updateDownloadSummary(items) } }
-            .also { it.resumeInterrupted() }
-    }
+    private val geckoDownloads: NovaDownloadManager by lazy { createDownloadManager(BrowserEngineType.GECKOVIEW) }
+    private val cefriumDownloads: NovaDownloadManager by lazy { createDownloadManager(BrowserEngineType.CEFRIUM) }
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
@@ -1019,7 +1017,7 @@ class MainActivity : ComponentActivity() {
             listener = BrowserEngineListener { state -> runOnUiThread { applyCefriumState(tab, state) } },
             onDownloadCompleted = { download ->
                 runOnUiThread {
-                    novaDownloads.registerCompleted(
+                    downloadsFor(tab).registerCompleted(
                         download.url, download.fileName, download.mimeType, download.savedUri, download.bytes
                     )
                     toast("Downloaded ${download.fileName}")
@@ -1319,6 +1317,7 @@ class MainActivity : ComponentActivity() {
 
     private fun activateTab(tab: BrowserTab) {
         enforceCefriumCompatibility(tab)
+        refreshDownloadsList(if (tab.isPrivate || tab.isGuest) emptyList() else downloadsFor(tab).items())
         if (tab.lastUrl == HOME_URL) {
             deactivateTabRuntime(tab)
             showHomeScreen()
@@ -1376,6 +1375,7 @@ class MainActivity : ComponentActivity() {
             if (desired == BrowserEngineType.CEFRIUM && tab.engineType != BrowserEngineType.CEFRIUM) tab.cefriumNavigationState = null
             tab.engineType = desired
             tab.needsReload = false
+            if (currentTab() === tab) refreshDownloadsList(if (tab.isPrivate || tab.isGuest) emptyList() else downloadsFor(tab).items())
         }
     }
 
@@ -1953,11 +1953,7 @@ class MainActivity : ComponentActivity() {
                 if (image != null && element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE) actions += getString(R.string.save_image) to {
                     runCatching {
                         val fileName = "Nova-${Uri.parse(image).lastPathSegment ?: "image"}".replace(Regex("[^A-Za-z0-9._-]"), "_")
-                        val request = android.app.DownloadManager.Request(Uri.parse(image))
-                            .setTitle(getString(R.string.saved_image))
-                            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
-                        (getSystemService(DOWNLOAD_SERVICE) as android.app.DownloadManager).enqueue(request)
+                        downloadsFor(tab).enqueue(image, fileName, "image/*")
                         toast(getString(R.string.image_download_started))
                     }.onFailure { toast(getString(R.string.image_save_failed)) }
                 }
@@ -1984,8 +1980,8 @@ class MainActivity : ComponentActivity() {
                     .ifBlank { "nova-download-${System.currentTimeMillis()}" }
                 val mime = response.headers["Content-Type"] ?: response.headers["content-type"] ?: "application/octet-stream"
                 requestDownloadNotificationPermission()
-                novaDownloads.saveExternalStream(body, rawName, mime.substringBefore(';'))
-                toast("Webpage download received · saving to Downloads/Nova")
+                downloadsFor(tab).saveExternalStream(body, rawName, mime.substringBefore(';'))
+                toast("Webpage download received · saving to Downloads/Nova/${tab.engineType.name.lowercase(Locale.ROOT)}")
             }
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 if (!title.isNullOrBlank()) {
@@ -2304,6 +2300,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
+
+    private fun createDownloadManager(engine: BrowserEngineType): NovaDownloadManager =
+        NovaDownloadManager(this, engine.name.lowercase(Locale.ROOT)) { items ->
+            runOnUiThread {
+                val active = currentTab()
+                if (active != null && !active.isPrivate && !active.isGuest && active.engineType == engine) {
+                    updateDownloadSummary(items)
+                }
+            }
+        }.also { it.resumeInterrupted() }
+
+    private fun downloadsFor(tab: BrowserTab?): NovaDownloadManager =
+        if (tab?.engineType == BrowserEngineType.CEFRIUM) cefriumDownloads else geckoDownloads
 
     private fun denyGuestAccess(feature: String): Boolean {
         if (currentTab()?.isGuest != true) return false
@@ -3169,7 +3178,7 @@ class MainActivity : ComponentActivity() {
         val url = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         if (!url.startsWith("https://") && !url.startsWith("http://")) { toast("Only HTTP and HTTPS downloads are supported"); return }
         requestDownloadNotificationPermission()
-        runCatching { novaDownloads.enqueue(url); toast("Download started · resumable") }
+        runCatching { downloadsFor(currentTab()).enqueue(url); toast("Download started · resumable") }
             .onFailure { toast("Download could not start: ${it?.localizedMessage ?: "Unknown error"}") }
     }
 
@@ -3190,8 +3199,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDownloads() {
-        if (denyGuestAccess(getString(R.string.downloads))) return
-        downloadsItems = novaDownloads.items()
+        val tab = currentTab()
+        if (tab == null || tab.isPrivate || tab.isGuest) {
+            toast("Downloads are unavailable in Private and Guest Mode")
+            return
+        }
+        val manager = downloadsFor(tab)
+        downloadsItems = manager.items()
         if (downloadsItems.isEmpty()) { downloadPrompt(); return }
         val listView = ListView(this)
         val emptyView = TextView(this).apply { text = getString(R.string.no_downloads); gravity = Gravity.CENTER; setPadding(dp(16), dp(24), dp(16), dp(24)) }
@@ -3231,7 +3245,7 @@ class MainActivity : ComponentActivity() {
         listView.adapter = adapter
         listView.emptyView = emptyView
         val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(emptyView, LinearLayout.LayoutParams(-1, 0, 1f)); addView(listView, LinearLayout.LayoutParams(-1, 0, 1f)) }
-        listView.setOnItemClickListener { _, _, which, _ -> downloadsItems.getOrNull(which)?.let { showDownloadActions(it) } }
+        listView.setOnItemClickListener { _, _, which, _ -> downloadsItems.getOrNull(which)?.let { showDownloadActions(it, manager) } }
         val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.downloads_count, downloadsItems.size)).setView(container)
             .setPositiveButton(getString(R.string.new_download), null)
             .setNeutralButton(getString(R.string.refresh), null)
@@ -3239,32 +3253,32 @@ class MainActivity : ComponentActivity() {
         downloadsDialog = dialog
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { dialog.dismiss(); downloadPrompt() }
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { refreshDownloadsList(novaDownloads.items()) }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { refreshDownloadsList(manager.items()) }
         }
         dialog.setOnDismissListener { if (downloadsDialog === dialog) { downloadsDialog = null; downloadsAdapter = null } }
         dialog.show()
     }
 
-    private fun showDownloadActions(item: NovaDownloadManager.Item) {
+    private fun showDownloadActions(item: NovaDownloadManager.Item, manager: NovaDownloadManager) {
         val actions: List<Pair<String, () -> Unit>> = when (item.state) {
-            "RUNNING" -> listOf(getString(R.string.pause) to { novaDownloads.pause(item.id) }, getString(R.string.cancel_download) to { confirmRemoveDownload(item, cancel = true) })
-            "PAUSED" -> listOf(getString(R.string.resume) to { novaDownloads.resume(item.id) }, getString(R.string.cancel_download) to { confirmRemoveDownload(item, cancel = true) })
-            "QUEUED" -> listOf(getString(R.string.cancel_download) to { confirmRemoveDownload(item, cancel = true) })
+            "RUNNING" -> listOf(getString(R.string.pause) to { manager.pause(item.id) }, getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
+            "PAUSED" -> listOf(getString(R.string.resume) to { manager.resume(item.id) }, getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
+            "QUEUED" -> listOf(getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
             "FINALIZING", "SAVING" -> listOf(getString(R.string.close) to { })
-            "COMPLETE" -> listOf(getString(R.string.open_download) to { openDownloadedFile(item) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item) })
-            "INTERRUPTED" -> if (item.url.isNotBlank()) listOf(getString(R.string.resume) to { novaDownloads.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item) })
-            else -> if (item.url.isNotBlank()) listOf(getString(R.string.retry_download) to { novaDownloads.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item) })
+            "COMPLETE" -> listOf(getString(R.string.open_download) to { openDownloadedFile(item) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
+            "INTERRUPTED" -> if (item.url.isNotBlank()) listOf(getString(R.string.resume) to { manager.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
+            else -> if (item.url.isNotBlank()) listOf(getString(R.string.retry_download) to { manager.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
         }
         showBottomSheetMenu(item.fileName, actions)
     }
 
-    private fun confirmRemoveDownload(item: NovaDownloadManager.Item, cancel: Boolean = false) {
+    private fun confirmRemoveDownload(item: NovaDownloadManager.Item, manager: NovaDownloadManager, cancel: Boolean = false) {
         AlertDialog.Builder(this)
             .setTitle(getString(if (cancel) R.string.cancel_download else R.string.remove_download_title))
             .setMessage(getString(if (cancel) R.string.cancel_download_message else R.string.remove_download_message))
             .setNegativeButton(getString(R.string.keep), null)
             .setPositiveButton(getString(if (cancel) R.string.cancel_download else R.string.remove_from_list)) { _, _ ->
-                novaDownloads.cancel(item.id)
+                manager.cancel(item.id)
                 toast(getString(if (cancel) R.string.download_cancelled else R.string.download_removed_from_list))
             }.show()
     }
