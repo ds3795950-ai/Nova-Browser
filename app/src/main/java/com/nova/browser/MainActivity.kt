@@ -550,16 +550,12 @@ class MainActivity : ComponentActivity() {
         if (tab.isGuest || tab.isPrivate) return BrowserEngineType.GECKOVIEW
         val profileKind = BrowserEngineProfilePolicy.kindFor(tab.isPrivate, tab.isGuest)
         val webUrl = tab.lastUrl == HOME_URL || tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://")
-        val hasSavedLogin = runCatching {
-            passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) }
-        }.getOrDefault(false)
         return enginePreferences.resolve(
             tab.lastUrl,
             profileKind,
             cefriumAvailable = CefriumRuntimeAvailability.supportsAny(Build.SUPPORTED_ABIS.asList()),
             cefriumCompatible = webUrl &&
-                NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) == ShieldMode.OFF &&
-                !hasSavedLogin
+                NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) == ShieldMode.OFF
         ).engine
     }
 
@@ -2424,7 +2420,6 @@ class MainActivity : ComponentActivity() {
         if (switchingToCefrium) {
             val reason = when {
                 NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) != ShieldMode.OFF -> "Nova Shield currently requires GeckoView"
-                runCatching { passwordVault.all().any { Uri.parse(it.origin).host.equals(Uri.parse(tab.lastUrl).host, true) } }.getOrDefault(false) -> "Saved-login autofill currently requires GeckoView"
                 else -> null
             }
             if (reason != null) {
@@ -2435,7 +2430,7 @@ class MainActivity : ComponentActivity() {
         val target = if (switchingToCefrium) "Cefrium (Chromium)" else "GeckoView (Firefox)"
         AlertDialog.Builder(this)
             .setTitle("Switch this tab's engine?")
-            .setMessage("Reload this site in $target? Cookies, website storage and sign-in sessions are not transferred between engines. The original engine's stored data is left untouched; you may need to sign in again.")
+            .setMessage("Reload this site in $target? Cookies, website storage, sign-in sessions and passwords are never transferred between engines. Cefrium cannot access the GeckoView password vault. The original engine's stored data is left untouched; you may need to sign in again.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Switch and reload") { _, _ ->
                 if (switchingToCefrium) {
@@ -2443,7 +2438,7 @@ class MainActivity : ComponentActivity() {
                     tab.engineType = BrowserEngineType.CEFRIUM
                     tab.needsReload = true
                     activateTab(tab)
-                    toast("Switched to Cefrium. Website data was not migrated.")
+                    toast("Switched to Cefrium. Website data and GeckoView passwords are never transferred.")
                 } else {
                     switchCurrentTabToGecko("manual engine switch")
                 }
