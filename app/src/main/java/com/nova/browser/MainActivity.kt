@@ -2179,11 +2179,10 @@ class MainActivity : ComponentActivity() {
     /** Chrome/Brave-style overflow menu for frequently used browser actions. */
     private fun showQuickSettings() {
         val guest = currentTab()?.isGuest == true
-        val privateTab = currentTab()?.isPrivate == true
         val labels = if (guest) {
             arrayOf("New guest tab", "Back", "Forward", "Reload", "Share page", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Quick settings help")
         } else {
-            arrayOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Find in page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Password manager", "Site permissions", "Settings")
+            arrayOf("New tab", "New private tab", "New guest tab", "Bookmarks", "History", "Downloads", "Share page", "Desktop site", "Reader view", "Translate page", "Nova Shield", "AI Assistant", "Extensions", "Password manager", "Site permissions", "Settings")
         }
         AlertDialog.Builder(this)
             .setTitle("Quick settings")
@@ -2199,7 +2198,6 @@ class MainActivity : ComponentActivity() {
                     "History" -> showHistory()
                     "Downloads" -> showDownloads()
                     "Share page" -> sharePage()
-                    "Find in page" -> showFindInPage()
                     "Desktop site" -> toggleDesktopSite()
                     "Reader view" -> openReaderMode()
                     "Translate page" -> translatePage()
