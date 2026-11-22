@@ -2288,22 +2288,63 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showCloudOtp(email: String) {
-        val input = EditText(this).apply { hint = "6-digit email code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; filters = arrayOf(InputFilter.LengthFilter(6)); isSingleLine = true }
-        AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the six-digit code sent to $email")
-            .setView(input).setPositiveButton("Verify") { _, _ ->
+        val input = EditText(this).apply {
+            hint = "6-digit email code"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            filters = arrayOf(InputFilter.LengthFilter(6))
+            isSingleLine = true
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Verify email")
+            .setMessage("Enter the six-digit code sent to $email")
+            .setView(input)
+            .setPositiveButton("Verify", null)
+            .setNeutralButton("Resend code", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener {
+            val verifyButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            verifyButton.setOnClickListener {
                 val code = input.text.toString().trim()
-                toast("Verifying codeâ¦")
+                if (!code.matches(Regex("[0-9]{6}"))) {
+                    input.error = "Enter all six digits"
+                    return@setOnClickListener
+                }
+                verifyButton.isEnabled = false
+                toast("Verifying code…")
                 Thread {
-                    runCatching { cloudSync.verifyEmailOtp(email, code) }
-                        .onSuccess { runOnUiThread { toast("Signed in to Nova Cloud"); showCloudAccount() } }
-                        .onFailure { runOnUiThread { toast("Sign-in failed: ${it.message ?: "Try again"}") } }
+                    val result = runCatching { cloudSync.verifyEmailOtp(email, code) }
+                    runOnUiThread {
+                        verifyButton.isEnabled = true
+                        result.onSuccess {
+                            dialog.dismiss()
+                            toast("Signed in to Nova Cloud")
+                            showCloudAccount()
+                        }.onFailure {
+                            toast("Sign-in failed: ${it.message ?: "Check the code and try again"}")
+                        }
+                    }
                 }.start()
-            }.setNeutralButton("Resend code") { _, _ ->
-                Thread { runCatching { cloudSync.sendEmailOtp(email) }
-                    .onSuccess { runOnUiThread { showCloudOtp(email); toast("A new code was requested") } }
-                    .onFailure { runOnUiThread { toast("Could not resend: ${it.message}") } }
+            }
+            val resendButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            resendButton.setOnClickListener {
+                resendButton.isEnabled = false
+                Thread {
+                    val result = runCatching { cloudSync.sendEmailOtp(email) }
+                    runOnUiThread {
+                        resendButton.isEnabled = true
+                        result.onSuccess {
+                            dialog.dismiss()
+                            showCloudOtp(email)
+                            toast("A new code was requested")
+                        }.onFailure {
+                            toast("Could not resend: ${it.message ?: "Try again shortly"}")
+                        }
+                    }
                 }.start()
-            }.setNegativeButton("Cancel", null).show()
+            }
+        }
+        dialog.show()
     }
 
     private fun showSyncPassphrase() {
