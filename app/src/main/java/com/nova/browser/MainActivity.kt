@@ -3785,7 +3785,7 @@ class MainActivity : ComponentActivity() {
         tabs.filter { !it.isGuest && !it.isPrivate }.forEach { tab ->
             val uri = runCatching { Uri.parse(tab.lastUrl) }.getOrNull() ?: return@forEach
             if (uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
-                val origin = "\${uri.scheme}://\${uri.host}\${if (uri.port > 0) ":\${uri.port}" else ""}"
+                val origin = "${uri.scheme}://${uri.host}${if (uri.port > 0) ":${uri.port}" else ""}"
                 entries.add(SiteRuleEntry(tab.engineType, origin))
             }
         }
@@ -3796,8 +3796,8 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Site Settings")) return
         val host = currentTab()?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
         val actions = arrayOf(
-            "Current site settings · \${host ?: "open a website"}",
-            "All sites · \${storedSiteRuleEntries().size}",
+            "Current site settings · ${host ?: "open a website"}",
+            "All sites · ${storedSiteRuleEntries().size}",
             "Clear all site data · GeckoView",
             "Clear all site data · Cefrium"
         )
@@ -3821,7 +3821,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val labels = entries.map {
-            "\${it.origin}  ·  \${if (it.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"}"
+            "${it.origin}  ·  ${if (it.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"}"
         }.toTypedArray()
         AlertDialog.Builder(this).setTitle("All sites")
             .setItems(labels) { _, which -> showSiteRuleDetails(entries[which]) }
@@ -3831,9 +3831,9 @@ class MainActivity : ComponentActivity() {
     private fun siteRuleKey(entry: SiteRuleEntry, setting: String): String {
         val encoded = Uri.encode(entry.origin)
         return if (setting == "javascript") {
-            "javascript_enabled_\${entry.engine.name.lowercase()}_$encoded"
+            "javascript_enabled_${entry.engine.name.lowercase()}_$encoded"
         } else {
-            "site_\${setting}_\${entry.engine.name.lowercase()}_$encoded"
+            "site_${setting}_${entry.engine.name.lowercase()}_$encoded"
         }
     }
 
@@ -3849,7 +3849,7 @@ class MainActivity : ComponentActivity() {
             ) else emptyList()
         fun label(definition: Triple<String, String, Boolean>): String {
             val value = prefs.getBoolean(siteRuleKey(entry, definition.first), definition.third)
-            return "\${definition.second} · \${if (value) "Allowed" else "Blocked"}"
+            return "${definition.second} · ${if (value) "Allowed" else "Blocked"}"
         }
         val labels = definitions.map(::label).toTypedArray() +
             "Reset this site's settings" + "Clear this site's data"
@@ -3865,7 +3865,7 @@ class MainActivity : ComponentActivity() {
                             active.engineType == entry.engine && !active.isGuest && !active.isPrivate &&
                                 runCatching {
                                     val uri = Uri.parse(active.lastUrl)
-                                    "\${uri.scheme}://\${uri.host}\${if (uri.port > 0) ":\${uri.port}" else ""}" == entry.origin
+                                    "${uri.scheme}://${uri.host}${if (uri.port > 0) ":${uri.port}" else ""}" == entry.origin
                                 }.getOrDefault(false)
                         }.forEach { active ->
                             when (definition.first) {
@@ -3876,7 +3876,7 @@ class MainActivity : ComponentActivity() {
                             }
                             active.browserEngine?.reload()
                         }
-                        toast("$host · \${definition.second} \${if (next) "allowed" else "blocked"}")
+                        toast("$host · ${definition.second} ${if (next) "allowed" else "blocked"}")
                         showSiteRuleDetails(entry)
                     }
                     which == definitions.size -> {
@@ -3899,7 +3899,7 @@ class MainActivity : ComponentActivity() {
     private fun confirmClearSingleSiteData(entry: SiteRuleEntry) {
         val host = Uri.parse(entry.origin).host ?: return
         AlertDialog.Builder(this).setTitle("Clear site data?")
-            .setMessage("Delete cookies and site storage for $host in \${entry.engine.name}. The other engine's profile is not affected.")
+            .setMessage("Delete cookies and site storage for $host in ${entry.engine.name}. The other engine's profile is not affected.")
             .setNegativeButton(getString(R.string.cancel), null)
             .setPositiveButton("Clear data") { _, _ ->
                 if (entry.engine == BrowserEngineType.CEFRIUM) {
@@ -3907,11 +3907,11 @@ class MainActivity : ComponentActivity() {
                         CefriumProfile.get(enginePreferences.cefriumProfileName()).clearSiteData(entry.origin) {
                             runOnUiThread { toast("Cefrium site data cleared for $host") }
                         }
-                    }.onFailure { toast("Could not clear Cefrium site data: \${it.localizedMessage ?: "unknown error"}") }
+                    }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
                 } else {
                     runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)
                         .accept({ runOnUiThread { toast("GeckoView site data cleared for $host") } },
-                            { error -> runOnUiThread { toast("Could not clear site data: \${error?.localizedMessage ?: "Unknown error"}") } })
+                            { error -> runOnUiThread { toast("Could not clear site data: ${error?.localizedMessage ?: "Unknown error"}") } })
                 }
             }.show()
     }
@@ -3927,7 +3927,7 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton("Clear all data") { _, _ ->
                 runtime.storageController.clearData(StorageController.ClearFlags.SITE_DATA)
                     .accept({ runOnUiThread { toast("GeckoView site data cleared") } },
-                        { error -> runOnUiThread { toast("Could not clear GeckoView data: \${error?.localizedMessage ?: "Unknown error"}") } })
+                        { error -> runOnUiThread { toast("Could not clear GeckoView data: ${error?.localizedMessage ?: "Unknown error"}") } })
             }.show()
     }
 
