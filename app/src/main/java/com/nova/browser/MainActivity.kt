@@ -585,7 +585,9 @@ class MainActivity : ComponentActivity() {
     private fun closeTabRuntime(tab: BrowserTab) {
         val engine = tab.browserEngine ?: return
         val cefrium = engine.type == BrowserEngineType.CEFRIUM
-        engine.close()
+        runCatching { engine.close() }.onFailure { error ->
+            android.util.Log.w("NovaEngineLifecycle", "Could not close ${engine.type} tab runtime cleanly", error)
+        }
         tab.browserEngine = null
         if (cefrium) runCatching { CefriumBrowser.reapUnusedRenderers() }
     }
