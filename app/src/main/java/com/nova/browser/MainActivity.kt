@@ -3753,6 +3753,184 @@ class MainActivity : ComponentActivity() {
         toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
     }
 
+    /**
+     * Android Site Settings hub. Rules are keyed by engine and exact origin,
+     * keeping GeckoView and Cefrium preferences isolated.
+     */
+    private data class SiteRuleEntry(val engine: BrowserEngineType, val origin: String)
+
+    private fun storedSiteRuleEntries(): List<SiteRuleEntry> {
+        val entries = linkedSetOf<SiteRuleEntry>()
+        prefs.all.keys.forEach { key ->
+            BrowserEngineType.values().forEach engineLoop@{ engine ->
+                val engineToken = engine.name.lowercase() + "_"
+                val encoded = when {
+                    key.startsWith("javascript_enabled_$engineToken") ->
+                        key.removePrefix("javascript_enabled_$engineToken")
+                    key.startsWith("site_") -> {
+                        val marker = "_$engineToken"
+                        val markerIndex = key.indexOf(marker)
+                        if (markerIndex < 0) return@engineLoop
+                        key.substring(markerIndex + marker.length)
+                    }
+                    else -> return@engineLoop
+                }
+                val origin = runCatching { Uri.decode(encoded) }.getOrNull().orEmpty()
+                val uri = runCatching { Uri.parse(origin) }.getOrNull()
+                if (uri?.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
+                    entries.add(SiteRuleEntry(engine, origin))
+                }
+            }
+        }
+        tabs.filter { !it.isGuest && !it.isPrivate }.forEach { tab ->
+            val uri = runCatching { Uri.parse(tab.lastUrl) }.getOrNull() ?: return@forEach
+            if (uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
+                val origin = "\${uri.scheme}://\${uri.host}\${if (uri.port > 0) ":\${uri.port}" else ""}"
+                entries.add(SiteRuleEntry(tab.engineType, origin))
+            }
+        }
+        return entries.sortedWith(compareBy({ it.engine.name }, { it.origin }))
+    }
+
+    private fun showSiteSettingsHub() {
+        if (denyGuestAccess("Site Settings")) return
+        val host = currentTab()?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+        val actions = arrayOf(
+            "Current site settings · \${host ?: "open a website"}",
+            "All sites · \${storedSiteRuleEntries().size}",
+            "Clear all site data · GeckoView",
+            "Clear all site data · Cefrium"
+        )
+        AlertDialog.Builder(this).setTitle("Site Settings")
+            .setItems(actions) { _, which ->
+                when (which) {
+                    0 -> showSiteControls()
+                    1 -> showAllSiteSettings()
+                    2 -> confirmClearAllSiteData(BrowserEngineType.GECKOVIEW)
+                    3 -> confirmClearAllSiteData(BrowserEngineType.CEFRIUM)
+                }
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun showAllSiteSettings() {
+        val entries = storedSiteRuleEntries()
+        if (entries.isEmpty()) {
+            AlertDialog.Builder(this).setTitle("All sites")
+                .setMessage("No saved site-specific settings yet. Open a website and change one of its settings to add it here.")
+                .setPositiveButton(android.R.string.ok, null).show()
+            return
+        }
+        val labels = entries.map {
+            "\${it.origin}  ·  \${if (it.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"}"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("All sites")
+            .setItems(labels) { _, which -> showSiteRuleDetails(entries[which]) }
+            .setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun siteRuleKey(entry: SiteRuleEntry, setting: String): String {
+        val encoded = Uri.encode(entry.origin)
+        return if (setting == "javascript") {
+            "javascript_enabled_\${entry.engine.name.lowercase()}_$encoded"
+        } else {
+            "site_\${setting}_\${entry.engine.name.lowercase()}_$encoded"
+        }
+    }
+
+    private fun showSiteRuleDetails(entry: SiteRuleEntry) {
+        val host = Uri.parse(entry.origin).host ?: entry.origin
+        val engineLabel = if (entry.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
+        val definitions = listOf(Triple("javascript", "JavaScript", true)) +
+            if (entry.engine == BrowserEngineType.CEFRIUM) listOf(
+                Triple("popups", "Pop-ups and redirects", false),
+                Triple("autoplay", "Autoplay", false),
+                Triple("ads", "Ads and trackers", true),
+                Triple("sound", "Sound", true)
+            ) else emptyList()
+        fun label(definition: Triple<String, String, Boolean>): String {
+            val value = prefs.getBoolean(siteRuleKey(entry, definition.first), definition.third)
+            return "\${definition.second} · \${if (value) "Allowed" else "Blocked"}"
+        }
+        val labels = definitions.map(::label).toTypedArray() +
+            "Reset this site's settings" + "Clear this site's data"
+        AlertDialog.Builder(this).setTitle("$host · $engineLabel")
+            .setItems(labels) { _, which ->
+                when {
+                    which < definitions.size -> {
+                        val definition = definitions[which]
+                        val key = siteRuleKey(entry, definition.first)
+                        val next = !prefs.getBoolean(key, definition.third)
+                        prefs.edit().putBoolean(key, next).apply()
+                        tabs.filter { active ->
+                            active.engineType == entry.engine && !active.isGuest && !active.isPrivate &&
+                                runCatching {
+                                    val uri = Uri.parse(active.lastUrl)
+                                    "\${uri.scheme}://\${uri.host}\${if (uri.port > 0) ":\${uri.port}" else ""}" == entry.origin
+                                }.getOrDefault(false)
+                        }.forEach { active ->
+                            when (definition.first) {
+                                "javascript" -> applyJavaScriptSetting(active, active.lastUrl, reload = false)
+                                "autoplay" -> (active.browserEngine as? CefriumBrowserEngine)?.setAutoplayAllowed(next)
+                                "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
+                                "sound" -> (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next)
+                            }
+                            active.browserEngine?.reload()
+                        }
+                        toast("$host · \${definition.second} \${if (next) "allowed" else "blocked"}")
+                        showSiteRuleDetails(entry)
+                    }
+                    which == definitions.size -> {
+                        val encoded = Uri.encode(entry.origin)
+                        val engineToken = entry.engine.name.lowercase() + "_"
+                        val editor = prefs.edit()
+                        prefs.all.keys.filter { key ->
+                            (key.startsWith("javascript_enabled_$engineToken") && key.endsWith(encoded)) ||
+                                (key.startsWith("site_") && key.contains("_$engineToken") && key.endsWith(encoded))
+                        }.forEach(editor::remove)
+                        editor.apply()
+                        toast("Site settings reset for $host")
+                        showAllSiteSettings()
+                    }
+                    else -> confirmClearSingleSiteData(entry)
+                }
+            }.setNegativeButton(getString(R.string.close), null).show()
+    }
+
+    private fun confirmClearSingleSiteData(entry: SiteRuleEntry) {
+        val host = Uri.parse(entry.origin).host ?: return
+        AlertDialog.Builder(this).setTitle("Clear site data?")
+            .setMessage("Delete cookies and site storage for $host in \${entry.engine.name}. The other engine's profile is not affected.")
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton("Clear data") { _, _ ->
+                if (entry.engine == BrowserEngineType.CEFRIUM) {
+                    runCatching {
+                        CefriumProfile.get(enginePreferences.cefriumProfileName()).clearSiteData(entry.origin) {
+                            runOnUiThread { toast("Cefrium site data cleared for $host") }
+                        }
+                    }.onFailure { toast("Could not clear Cefrium site data: \${it.localizedMessage ?: "unknown error"}") }
+                } else {
+                    runtime.storageController.clearDataFromHost(host, StorageController.ClearFlags.SITE_DATA)
+                        .accept({ runOnUiThread { toast("GeckoView site data cleared for $host") } },
+                            { error -> runOnUiThread { toast("Could not clear site data: \${error?.localizedMessage ?: "Unknown error"}") } })
+                }
+            }.show()
+    }
+
+    private fun confirmClearAllSiteData(engine: BrowserEngineType) {
+        if (engine == BrowserEngineType.CEFRIUM) {
+            clearCefriumProfileData()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Clear all GeckoView site data?")
+            .setMessage("This deletes cookies, site storage, caches and saved site permissions in the GeckoView profile. Open pages may recreate data after clearing.")
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton("Clear all data") { _, _ ->
+                runtime.storageController.clearData(StorageController.ClearFlags.SITE_DATA)
+                    .accept({ runOnUiThread { toast("GeckoView site data cleared") } },
+                        { error -> runOnUiThread { toast("Could not clear GeckoView data: \${error?.localizedMessage ?: "Unknown error"}") } })
+            }.show()
+    }
+
     private fun showSiteControls() {
         if (denyGuestAccess("Site controls")) return
         val tab = currentTab() ?: return
@@ -3973,7 +4151,7 @@ class MainActivity : ComponentActivity() {
             getString(R.string.clear_history) to { clearBrowsingHistory() },
             "Clear Cefrium profile data" to { clearCefriumProfileData() },
             getString(R.string.close_private_guest_tabs) to { closePrivateAndGuestTabs() },
-            getString(R.string.site_permissions) to { showSiteControls() },
+            "Site Settings" to { showSiteSettingsHub() },
             getString(R.string.nova_shield) to { showShieldSettings() },
             getString(R.string.password_manager) to { showPasswordVault() }
         ))
