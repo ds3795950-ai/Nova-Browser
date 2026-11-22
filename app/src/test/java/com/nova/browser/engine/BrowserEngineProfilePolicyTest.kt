@@ -12,9 +12,11 @@ class BrowserEngineProfilePolicyTest {
 
     @Test fun guestContextIsRequiredOnlyForGuest() {
         assertEquals("guest-ctx", BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.GUEST, "guest-ctx"))
-        assertNull(BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.GUEST, " "))
+        assertTrue(
+            runCatching { BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.GUEST, " ") }
+                .exceptionOrNull() is IllegalArgumentException
+        )
         assertNull(BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.PRIVATE, "guest-ctx"))
         assertNull(BrowserEngineProfilePolicy.geckoContextId(BrowserProfileKind.NORMAL, "guest-ctx"))
     }
 }
-
