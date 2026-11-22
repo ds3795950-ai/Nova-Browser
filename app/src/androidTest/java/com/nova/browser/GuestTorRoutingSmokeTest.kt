@@ -63,7 +63,12 @@ class GuestTorRoutingSmokeTest {
             assertTrue("Could not bind embedded Tor service", bound)
             assertTrue("Tor did not bootstrap within 180 seconds", bootstrapped.await(180, TimeUnit.SECONDS))
             assertTrue("Tor service error: ${errorRef.get()}", errorRef.get() == null)
-            val socksPort = serviceRef.get()?.socksPort ?: 0
+            var socksPort = serviceRef.get()?.socksPort ?: 0
+            val portDeadline = System.currentTimeMillis() + 10_000L
+            while (socksPort !in 1..65535 && System.currentTimeMillis() < portDeadline) {
+                Thread.sleep(250L)
+                socksPort = serviceRef.get()?.socksPort ?: 0
+            }
             assertTrue("Tor did not expose a SOCKS port", socksPort in 1..65535)
 
             val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
