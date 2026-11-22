@@ -2231,6 +2231,7 @@ class MainActivity : ComponentActivity() {
             useDefaultMargins = false
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
+        lateinit var quickSettingsDialog: AlertDialog
         labels.forEach { label ->
             val tile = TextView(this).apply {
                 text = label
@@ -2247,7 +2248,7 @@ class MainActivity : ComponentActivity() {
                     setStroke(dp(1), Color.rgb(220, 225, 232))
                 }
                 setOnClickListener {
-                    (it.parent?.parent as? AlertDialog)?.dismiss()
+                    quickSettingsDialog.dismiss()
                     actions(label)
                 }
             }
@@ -2265,11 +2266,12 @@ class MainActivity : ComponentActivity() {
             isFillViewport = true
             addView(grid)
         }
-        AlertDialog.Builder(this)
+        quickSettingsDialog = AlertDialog.Builder(this)
             .setTitle("Quick settings")
             .setView(scroll)
             .setNegativeButton("Close", null)
-            .show()
+            .create()
+        quickSettingsDialog.show()
     }
 
     private fun showSettings() {
