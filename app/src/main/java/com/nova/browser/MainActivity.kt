@@ -2831,14 +2831,28 @@ class MainActivity : ComponentActivity() {
 
     private fun captureTabThumbnail(tab: BrowserTab) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val width = window.decorView.width
-        val height = window.decorView.height
+        val engineView = tab.browserEngine?.view ?: return
+        val sourcePane = when {
+            currentTab()?.id == tab.id && engineView.parent === browserPane -> browserPane
+            splitTabId == tab.id && engineView.parent === secondaryPane -> secondaryPane
+            else -> return // Never attach the visible tab's pixels to a background tab card.
+        }
+        val width = sourcePane.width
+        val height = sourcePane.height
         if (width <= 0 || height <= 0) return
+        val location = IntArray(2)
+        sourcePane.getLocationInWindow(location)
+        val sourceRect = android.graphics.Rect(location[0], location[1], location[0] + width, location[1] + height)
         val bitmap = runCatching { Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) }.getOrNull() ?: return
-        PixelCopy.request(window, bitmap, { result ->
+        PixelCopy.request(window, sourceRect, bitmap, { result ->
             if (result == PixelCopy.SUCCESS && tabs.any { it.id == tab.id }) {
-                tab.thumbnail?.takeIf { it !== bitmap }?.recycle()
-                tab.thumbnail = bitmap
+                val scale = minOf(1f, 360f / bitmap.width, 640f / bitmap.height)
+                val previewWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val previewHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val preview = if (previewWidth == bitmap.width && previewHeight == bitmap.height) bitmap
+                    else Bitmap.createScaledBitmap(bitmap, previewWidth, previewHeight, true).also { bitmap.recycle() }
+                tab.thumbnail?.takeIf { it !== preview }?.recycle()
+                tab.thumbnail = preview
             } else bitmap.recycle()
         }, android.os.Handler(android.os.Looper.getMainLooper()))
     }
