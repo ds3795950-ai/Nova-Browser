@@ -507,7 +507,7 @@ class MainActivity : ComponentActivity() {
         return enginePreferences.resolve(
             tab.lastUrl,
             profileKind,
-            cefriumAvailable = true,
+            cefriumAvailable = CefriumRuntimeAvailability.supportsAny(Build.SUPPORTED_ABIS.asList()),
             cefriumCompatible = webUrl &&
                 NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")) == ShieldMode.OFF &&
                 !hasSavedLogin
