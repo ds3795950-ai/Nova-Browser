@@ -38,11 +38,14 @@ jobs:
           api-level: 36
           target: google_apis
           arch: x86_64
-          profile: pixel_2
+          profile: pixel_6
+          cores: 4
+          ram-size: 4096
+          heap-size: 512
           # Hosted runners may not expose KVM. Force the emulator's software CPU
           # translator and avoid snapshot restore so Android 16 can boot reliably.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -accel off
-          emulator-boot-timeout: 1200
+          emulator-boot-timeout: 1800
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
           script: gradle :app:connectedDebugAndroidTest --stacktrace
