@@ -422,4 +422,5 @@ internal class NovaBrowserUiController(
             setBackgroundColor(0xFF100D15.toInt())
             addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         }
-    }}
+    }
+}
