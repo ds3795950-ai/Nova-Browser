@@ -295,9 +295,37 @@ class MainActivity : ComponentActivity() {
         buildBrowserUi()
         observeWindowLayout()
         if (retained != null) {
-            tabs.filter { it.session != null && it.engineType == BrowserEngineType.GECKOVIEW }.forEach { ensureSession(it) }
-            if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
-            restoreSplitPane()
+            if (tabs.any { it.isGuest }) {
+                // Guest engine sessions were closed before recreation. Do not recreate or resume them
+                // until the process-wide Tor route and GeckoView proxy/WebRTC protections are verified.
+                guestTorStartPending = true
+                TorGuestRoutingController.start(
+                    context = this,
+                    onReady = {
+                        guestTorStartPending = false
+                        if (isFinishing || isDestroyed) return@start
+                        tabs.filter { it.isGuest }.forEach { tab ->
+                            runCatching { ensureSession(tab) }.onFailure {
+                                closeGuestTabs()
+                                toast("Guest Mode could not be restored safely: ${it.localizedMessage ?: "browser initialization failed"}")
+                            }
+                        }
+                        if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
+                        restoreSplitPane()
+                    },
+                    onFailure = { reason ->
+                        guestTorStartPending = false
+                        if (isChangingConfigurations) return@start
+                        if (tabs.any { it.isGuest }) closeGuestTabs()
+                        if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
+                        toast("Guest Mode closed because Tor could not be verified: $reason")
+                    }
+                )
+            } else {
+                tabs.filter { it.session != null && it.engineType == BrowserEngineType.GECKOVIEW }.forEach { ensureSession(it) }
+                if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
+                restoreSplitPane()
+            }
         } else {
             restoreTabs()
             if (tabs.isEmpty()) createTab(false, HOME_URL)
@@ -948,7 +976,7 @@ class MainActivity : ComponentActivity() {
             onReady = {
                 guestTorStartPending = false
                 if (isFinishing || isDestroyed) {
-                    TorGuestRoutingController.stop()
+                    if (!isChangingConfigurations) TorGuestRoutingController.stop()
                     return@start
                 }
                 runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
@@ -960,6 +988,7 @@ class MainActivity : ComponentActivity() {
             },
             onFailure = { reason ->
                 guestTorStartPending = false
+                if (isChangingConfigurations) return@start
                 if (tabs.any { it.isGuest }) {
                     toast("Tor connection lost. Closing Guest Mode to prevent direct traffic.")
                     closeGuestTabs()
@@ -5607,7 +5636,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
 
     override fun onDestroy() {
         guestTorStartPending = false
-        TorGuestRoutingController.stop()
+        if (!isChangingConfigurations || tabs.none { it.isGuest }) TorGuestRoutingController.stop()
         cancelPendingRemoteSuggestions()
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()
@@ -5629,6 +5658,11 @@ private fun showForgotPassword(prefillEmail: String = "") {
         if (isChangingConfigurations) {
             tabs.forEach { tab ->
                 if (tab.engineType == BrowserEngineType.CEFRIUM) {
+                    closeTabRuntime(tab)
+                    tab.needsReload = tab.lastUrl != HOME_URL
+                } else if (tab.isGuest) {
+                    // A detached GeckoSession can still issue background requests. Close it until
+                    // the recreated Activity has revalidated the Tor route.
                     closeTabRuntime(tab)
                     tab.needsReload = tab.lastUrl != HOME_URL
                 } else {
