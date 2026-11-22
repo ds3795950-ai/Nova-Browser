@@ -85,7 +85,8 @@ class MainActivity : ComponentActivity() {
     private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
-    private val extensionActions = mutableMapOf<String, WebExtension.Action>()
+    private val extensionController by lazy { NovaExtensionController() }
+    private val extensionActions get() = extensionController.actions
     private var activeExtensionPopup: Dialog? = null
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -96,8 +97,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var homePanel: LinearLayout
     private lateinit var homeShortcuts: LinearLayout
     private lateinit var searchEngineButton: Button
-    private val tabs = mutableListOf<BrowserTab>()
-    private var activeIndex = 0
+    private val tabController by lazy { NovaTabController() }
+    private val tabs get() = tabController.tabs
+    private var activeIndex: Int
+        get() = tabController.activeIndex
+        set(value) { tabController.activeIndex = value }
     private val sessionBudgetController by lazy {
         NovaSessionBudgetController(
             tabs = tabs,
@@ -355,8 +359,7 @@ class MainActivity : ComponentActivity() {
         currentTab()?.session?.setActive(false)
         currentTab()?.session?.setFocused(false)
         val tab = BrowserTab(null, isPrivate, isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
-        tabs.add(tab)
-        activeIndex = tabs.lastIndex
+        tabController.add(tab)
         val session = ensureSession(tab)
         browserView.setSession(session)
         session.setActive(true)
@@ -826,7 +829,7 @@ class MainActivity : ComponentActivity() {
         evictBackgroundNormalSessions()
     }
 
-    private fun currentTab(): BrowserTab? = tabs.getOrNull(activeIndex)
+    private fun currentTab(): BrowserTab? = tabController.currentTab()
 
     private fun denyGuestAccess(feature: String): Boolean {
         if (currentTab()?.isGuest != true) return false
@@ -852,8 +855,7 @@ class MainActivity : ComponentActivity() {
         }
         currentTab()?.session?.setActive(false)
         currentTab()?.session?.setFocused(false)
-        activeIndex = index
-        val tab = tabs[index]
+        val tab = tabController.activate(index) ?: return
         tab.lastAccess = System.nanoTime()
         if (splitTabId == tab.id) exitSplitScreen()
         val session = ensureSession(tab)
@@ -1058,7 +1060,7 @@ class MainActivity : ComponentActivity() {
         if (index !in tabs.indices) return
         val wasActive = index == activeIndex
         val wasGuestActive = currentTab()?.isGuest == true
-        val removed = tabs.removeAt(index)
+        val removed = tabController.removeAt(index) ?: return
 
         detectedPageLanguages.remove(removed.id)
         if (removed.id == splitTabId) exitSplitScreen()
@@ -1075,8 +1077,6 @@ class MainActivity : ComponentActivity() {
             createTab(false, HOME_URL)
             return
         }
-        if (index < activeIndex) activeIndex--
-        else if (wasActive) activeIndex = index.coerceAtMost(tabs.lastIndex)
         persistTabs()
         if (wasActive) switchTab(activeIndex.coerceIn(tabs.indices))
     }
@@ -1134,7 +1134,7 @@ class MainActivity : ComponentActivity() {
                     val item = saved.getJSONObject(i)
                     val url = item.optString("url", HOME_URL).ifBlank { HOME_URL }
                     if (!HistoryPolicy.shouldPersist(url) && url != HOME_URL) return@runCatching
-                    tabs.add(BrowserTab(
+                    tabController.add(BrowserTab(
                         session = null,
                         isPrivate = false,
                         isGuest = false,
@@ -1144,7 +1144,7 @@ class MainActivity : ComponentActivity() {
                         desktopSite = isDesktopUrl(url),
                         readerOriginalUrl = item.optString("readerOriginalUrl")
                             .takeIf { it.startsWith("http://") || it.startsWith("https://") }
-                    ))
+                    ), activate = false)
                 }
             }
             if (tabs.isNotEmpty()) {
@@ -1682,7 +1682,7 @@ class MainActivity : ComponentActivity() {
         if (guestIndices.isEmpty()) { toast("Guest Mode is not active"); return }
         val activeIdBeforeClose = currentTab()?.id
         guestIndices.forEach { index ->
-            val removed = tabs.removeAt(index)
+            val removed = tabController.removeAt(index) ?: return@forEach
             detectedPageLanguages.remove(removed.id)
             if (removed.id == splitTabId) exitSplitScreen()
             removed.session?.close()
@@ -2043,8 +2043,7 @@ class MainActivity : ComponentActivity() {
         }
         val tab = BrowserTab(null, isPrivate, false, lastUrl = url, desktopSite = isDesktopUrl(url))
         tab.needsReload = false
-        tabs.add(tab)
-        if (activate) activeIndex = tabs.lastIndex
+        tabController.add(tab, activate = activate)
         val session = ensureSession(tab)
         if (activate) {
             browserView.setSession(session)
@@ -2198,7 +2197,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val shortcutState = if (prefs.getBoolean("show_home_shortcuts", true)) "shown" else "hidden"
-        val items = arrayOf("Choose search engine", "Toggle home shortcuts (currently $shortcutState)", "Clear browsing history", "Close private and Guest tabs", "Exit Guest Mode", "Exit Reader view", "Nova Shield", "AI assistants", "Extensions", "Password manager", "Site permissions", "Accessibility", "Export history", "About Nova", "Account & encrypted cloud sync", "Protected DNS Â· AdGuard DNS", "Browser proxy & Shield Â· 1VPN")
+        val items = NovaSettingsCatalog.ownerItems(shortcutState)
         AlertDialog.Builder(this).setTitle("Nova Settings").setItems(items) { _, which ->
             when (which) {
                 0 -> chooseSearchEngine()
@@ -2252,7 +2251,8 @@ class MainActivity : ComponentActivity() {
             val input = EditText(this).apply { hint = "Email address"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; filters = arrayOf(InputFilter.LengthFilter(254)); isSingleLine = true }
             AlertDialog.Builder(this).setTitle("Sign in to Nova Cloud").setMessage("We'll email you a one-time code. No password is required.")
                 .setView(input).setPositiveButton("Send code") { _, _ ->
-                    val address = input.text.toString().trim().lowercase(Locale.ROOT)
+                    val address = NovaCloudAuthController.normalizeEmail(input.text.toString())
+                    if (!NovaCloudAuthController.isValidEmail(address)) { toast("Enter a valid email address"); return@setPositiveButton }
                     toast("Requesting sign-in codeâ¦")
                     Thread {
                         runCatching { cloudSync.sendEmailOtp(address) }
@@ -2306,7 +2306,7 @@ class MainActivity : ComponentActivity() {
             val verifyButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             verifyButton.setOnClickListener {
                 val code = input.text.toString().trim()
-                if (!code.matches(Regex("[0-9]{6}"))) {
+                if (!NovaCloudAuthController.isValidOtp(code)) {
                     input.error = "Enter all six digits"
                     return@setOnClickListener
                 }
@@ -2545,7 +2545,7 @@ class MainActivity : ComponentActivity() {
         if (::runtime.isInitialized) {
             tabs.filter { it.isPrivate }.forEach(::clearPrivateContext)
         }
-        tabs.clear()
+        tabController.clear()
         if (::runtime.isInitialized) {
             if (guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
             runtime.shutdown()
