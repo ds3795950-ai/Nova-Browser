@@ -93,7 +93,7 @@ class UrlInputTest {
     }
 
     @Test fun javascriptSchemeIsTreatedAsSearchText() {
-        assertEquals("https://www.google.com/search?q=javascript%3Aalert(1)", BrowserUrlResolver.resolve("javascript:alert(1)"))
+        assertEquals("https://www.google.com/search?q=javascript%3Aalert%281%29", BrowserUrlResolver.resolve("javascript:alert(1)"))
     }
 
     @Test fun domainWithPathAndQuery() {
