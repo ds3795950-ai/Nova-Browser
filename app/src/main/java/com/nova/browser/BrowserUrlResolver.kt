@@ -123,7 +123,7 @@ object BrowserUrlResolver {
             InetAddress.getByName(host.substring(1, host.length - 1)) as? Inet6Address
         }.getOrNull() ?: return false
         val firstByte = address.address.firstOrNull()?.toInt()?.and(0xff) ?: return false
-        val uniqueLocal = firstByte and 0xfe == 0xfc
+        val uniqueLocal = (firstByte and 0xfe) == 0xfc
         return address.isAnyLocalAddress || address.isLoopbackAddress ||
             address.isLinkLocalAddress || address.isSiteLocalAddress || uniqueLocal
     }
