@@ -3325,10 +3325,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addHistory(url: String) {
-        if (url.isBlank() || url == HOME_URL) return
-        val items = readHistory().sortedBy { it.visitedAt }.filterNot { it.url == url }.toMutableList()
+        val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return
+        if (safeUrl == HOME_URL) return
+        val items = readHistory().sortedBy { it.visitedAt }.toMutableList()
         val visitedAt = maxOf(System.currentTimeMillis(), prefs.getLong("history_cleared_at", 0L) + 1L)
-        items.add(HistoryEntry(url, Uri.parse(url).host ?: url, visitedAt))
+        val last = items.lastOrNull()
+        if (!HistoryPolicy.shouldAppendVisit(last?.url, last?.visitedAt ?: 0L, safeUrl, visitedAt)) return
+        items.add(HistoryEntry(safeUrl, Uri.parse(safeUrl).host ?: safeUrl, visitedAt))
         val array = JSONArray()
         items.takeLast(500).forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("visitedAt", it.visitedAt)) }
         prefs.edit().putString("history_v2", array.toString()).apply()
@@ -3336,11 +3339,17 @@ class MainActivity : ComponentActivity() {
 
     private fun readHistory(): List<HistoryEntry> {
         val raw = prefs.getString("history_v2", null)
-        if (raw != null) return runCatching {
+        val entries = if (raw != null) runCatching {
             val array = JSONArray(raw)
             List(array.length()) { i -> val item = array.getJSONObject(i); HistoryEntry(item.optString("url"), item.optString("title"), item.optLong("visitedAt")) }
-        }.getOrDefault(emptyList())
-        return (prefs.getStringSet("history", emptySet()) ?: emptySet()).map { HistoryEntry(it, Uri.parse(it).host ?: it, 0L) }
+        }.getOrDefault(emptyList()) else {
+            (prefs.getStringSet("history", emptySet()) ?: emptySet()).map { HistoryEntry(it, Uri.parse(it).host ?: it, 0L) }
+        }
+        return entries.mapNotNull { entry ->
+            HistoryPolicy.sanitizeForStorage(entry.url)?.let { safeUrl ->
+                if (safeUrl == entry.url) entry else entry.copy(url = safeUrl)
+            }
+        }
     }
 
     private fun showHistory() {
