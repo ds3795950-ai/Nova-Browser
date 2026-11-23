@@ -114,7 +114,11 @@ val prepare1VpnAssets by tasks.registering {
         delete(outputDir)
         outputDir.mkdirs()
         val archive = File(temporaryDir, "1vpn-4.2.2.xpi")
-        URL("https://addons.mozilla.org/firefox/downloads/latest/1vpn/latest.xpi").openStream().use { input ->
+        val xpiConnection = URL("https://addons.mozilla.org/firefox/downloads/latest/1vpn/latest.xpi").openConnection().apply {
+            connectTimeout = 20_000
+            readTimeout = 60_000
+        }
+        xpiConnection.getInputStream().use { input ->
             archive.outputStream().use { output -> input.copyTo(output) }
         }
         val sha256 = MessageDigest.getInstance("SHA-256")

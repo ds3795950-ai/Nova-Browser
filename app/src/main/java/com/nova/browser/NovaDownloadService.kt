@@ -29,21 +29,40 @@ class NovaDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val count = (intent?.getIntExtra(EXTRA_COUNT, 1) ?: 1).coerceAtLeast(0)
+        activeCount = count
+        val notification = buildNotification(count)
+        // startForegroundService() requires startForeground() even when the work is already over.
+        if (!foreground) {
+            try {
+                if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                else startForeground(NOTIFICATION_ID, notification)
+                foreground = true
+            } catch (error: Exception) {
+                // Android 15+ refuses to restart a dataSync service after its timeout.
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+        }
         if (count == 0) {
             stopForeground(STOP_FOREGROUND_REMOVE)
+            foreground = false
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        activeCount = count
-        val notification = buildNotification(count)
-        if (!foreground) {
-            if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            else startForeground(NOTIFICATION_ID, notification)
-            foreground = true
-        } else if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+        if (foreground && notificationsAllowed()) {
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
         }
         return START_NOT_STICKY
+    }
+
+    private fun notificationsAllowed(): Boolean =
+        Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    /** Android 15 limits dataSync services to about six hours; stop cleanly instead of being killed. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        foreground = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
     }
 
     private fun buildNotification(count: Int): Notification {
@@ -67,13 +86,15 @@ class NovaDownloadService : Service() {
         private const val NOTIFICATION_ID = 7301
         private const val EXTRA_COUNT = "active_count"
 
+        @Volatile private var started = false
+
         fun update(context: Context, activeCount: Int) {
             val intent = Intent(context, NovaDownloadService::class.java).putExtra(EXTRA_COUNT, activeCount)
-            runCatching {
-                if (activeCount > 0) {
-                    context.startForegroundService(intent)
-                } else context.stopService(intent)
-            }
+            if (activeCount == 0 && !started) return
+            started = activeCount > 0
+            // Stopping through the same start command avoids stopService() racing startForeground().
+            runCatching { context.startForegroundService(intent) }
+                .onFailure { runCatching { context.stopService(intent) } }
         }
     }
 }

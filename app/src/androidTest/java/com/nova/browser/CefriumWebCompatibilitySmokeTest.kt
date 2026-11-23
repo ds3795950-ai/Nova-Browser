@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.cefrium.CefriumProfile
 import com.nova.browser.engine.BrowserEngineListener
 import com.nova.browser.engine.CefriumBrowserEngine
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID

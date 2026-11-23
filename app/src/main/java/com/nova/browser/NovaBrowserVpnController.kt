@@ -147,8 +147,15 @@ object NovaBrowserVpnController {
     }
 
     fun setFirewallEnabled(enabled: Boolean) {
-        val mode = if (enabled) ShieldMode.STANDARD else ShieldMode.OFF
-        preferences?.edit()?.putString("shield_mode", mode.name)?.apply()
+        val current = NovaShield.fromStored(preferences?.getString("shield_mode", "STANDARD"))
+        // Remember the user's stricter mode so switching the firewall back on does not downgrade it.
+        val mode = if (enabled) {
+            val remembered = NovaShield.fromStored(preferences?.getString("shield_mode_before_off", "STANDARD"))
+            if (remembered == ShieldMode.OFF) ShieldMode.STANDARD else remembered
+        } else ShieldMode.OFF
+        val editor = preferences?.edit()
+        if (!enabled && current != ShieldMode.OFF) editor?.putString("shield_mode_before_off", current.name)
+        editor?.putString("shield_mode", mode.name)?.apply()
         runtime?.let { NovaShield.apply(it, mode) }
         statusListener?.invoke()
     }

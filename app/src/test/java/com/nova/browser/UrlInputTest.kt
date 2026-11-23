@@ -84,4 +84,12 @@ class UrlInputTest {
     @Test fun unicodeDomainIsNavigated() {
         assertEquals("https://münchen.de", BrowserUrlResolver.resolve("münchen.de"))
     }
+
+    @Test fun underscoreHostnameIsNavigated() {
+        assertEquals("https://my_bucket.s3.amazonaws.com", BrowserUrlResolver.resolve("my_bucket.s3.amazonaws.com"))
+    }
+
+    @Test fun trailingDotHostnameIsNavigated() {
+        assertEquals("https://example.com.", BrowserUrlResolver.resolve("example.com."))
+    }
 }

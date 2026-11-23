@@ -35,4 +35,14 @@ class DownloadProtocolTest {
     @Test fun limitsFilenameLength() {
         assertEquals(120, DownloadProtocol.safeFileName("a".repeat(200)).length)
     }
+
+    @Test fun keepsNonAsciiLetters() {
+        assertEquals("отчёт 2026.pdf", DownloadProtocol.safeFileName("отчёт 2026.pdf"))
+    }
+
+    @Test fun longNamesKeepTheirExtension() {
+        val name = DownloadProtocol.safeFileName("a".repeat(200) + ".pdf")
+        assertEquals(120, name.length)
+        assertEquals(true, name.endsWith(".pdf"))
+    }
 }

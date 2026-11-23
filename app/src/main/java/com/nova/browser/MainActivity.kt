@@ -103,7 +103,9 @@ class MainActivity : ComponentActivity() {
             }.also { it.resumeInterrupted() }
         }
     }
-    private val passwordVault: PasswordVault by lazy { PasswordVault(this) }
+    private val passwordVault: PasswordVault by lazy { PasswordVault.shared(this) }
+    private val clipboardHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var clipboardClearTask: Runnable? = null
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
     private val historyExportRequestCode = 4103
@@ -200,6 +202,23 @@ class MainActivity : ComponentActivity() {
         buildBrowserUi()
         restoreTabs()
         if (tabs.isEmpty()) createTab(false, HOME_URL)
+        if (savedInstanceState == null) handleViewIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleViewIntent(intent)
+    }
+
+    /** Opens http(s) links sent by other apps in a new tab (Guest stays Guest). */
+    private fun handleViewIntent(incoming: Intent?) {
+        if (incoming?.action != Intent.ACTION_VIEW) return
+        val link = incoming.data ?: return
+        val scheme = link.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return
+        incoming.data = null
+        createTab(false, link.toString(), isGuest = currentTab()?.isGuest == true)
     }
 
     private fun buildBrowserUi() {
@@ -2059,10 +2078,10 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<WebExtension.PermissionPromptResponse>()
                 val detail = buildString {
                     append("Extension ID: ").append(extension.id)
-                    if (permissions.isNotEmpty()) append("\\n\\nPermissions:\\n• ").append(permissions.joinToString("\\n• "))
-                    if (origins.isNotEmpty()) append("\\n\\nWebsite access:\\n• ").append(origins.joinToString("\\n• "))
-                    if (dataCollectionPermissions.isNotEmpty()) append("\\n\\nData collection requested:\\n• ").append(dataCollectionPermissions.joinToString("\\n• "))
-                    append("\\n\\nPrivate browsing access and optional data collection remain disabled.")
+                    if (permissions.isNotEmpty()) append("\n\nPermissions:\n• ").append(permissions.joinToString("\n• "))
+                    if (origins.isNotEmpty()) append("\n\nWebsite access:\n• ").append(origins.joinToString("\n• "))
+                    if (dataCollectionPermissions.isNotEmpty()) append("\n\nData collection requested:\n• ").append(dataCollectionPermissions.joinToString("\n• "))
+                    append("\n\nPrivate browsing access and optional data collection remain disabled.")
                 }
                 runOnUiThread {
                     AlertDialog.Builder(this@MainActivity).setTitle("Install extension?")
@@ -2240,8 +2259,15 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
                 val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}").setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
-                    .setItems(rows) { _, which ->
+                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}")
+                    // A dialog message hides the list on Android, so the note lives in its own row.
+                    .setItems(rows + "ⓘ About extension support") { _, which ->
+                        if (which >= installed.size) {
+                            AlertDialog.Builder(this)
+                                .setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
+                                .setPositiveButton("OK", null).show()
+                            return@setItems
+                        }
                         val extension = installed[which]
                         val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
                         AlertDialog.Builder(this).setTitle(extension.metaData.name ?: extension.id)
@@ -2323,8 +2349,25 @@ class MainActivity : ComponentActivity() {
 
     private fun copyToClipboard(label: String, value: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
-        toast("$label copied · clear your clipboard when finished")
+        val clip = ClipData.newPlainText(label, value)
+        if (Build.VERSION.SDK_INT >= 33) {
+            // Hide the value from clipboard previews and overlays.
+            clip.description.extras = android.os.PersistableBundle().apply {
+                putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+        }
+        clipboard.setPrimaryClip(clip)
+        clipboardClearTask?.let(clipboardHandler::removeCallbacks)
+        val clearTask = Runnable {
+            runCatching {
+                val current = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                // Background apps cannot read the clip on Android 10+, so a null read still clears our own copy.
+                if (current == null || current == value) clipboard.clearPrimaryClip()
+            }
+        }
+        clipboardClearTask = clearTask
+        clipboardHandler.postDelayed(clearTask, 45_000L)
+        toast("$label copied · clears from the clipboard in 45 s")
     }
 
     private fun showSiteControls() {

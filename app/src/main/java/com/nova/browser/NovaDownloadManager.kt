@@ -117,7 +117,8 @@ class NovaDownloadManager(
     fun enqueue(url: String, fileName: String? = null, mimeType: String = "application/octet-stream"): String {
         val parsed = URL(url)
         require(parsed.protocol == "http" || parsed.protocol == "https") { "Only HTTP(S) downloads are supported" }
-        val name = sanitize(fileName ?: URLDecoder.decode(parsed.path.substringAfterLast('/').ifBlank { "nova-download.bin" }, "UTF-8"))
+        val rawLeaf = parsed.path.substringAfterLast('/').ifBlank { "nova-download.bin" }
+        val name = sanitize(fileName ?: runCatching { URLDecoder.decode(rawLeaf, "UTF-8") }.getOrDefault(rawLeaf))
         val id = UUID.randomUUID().toString()
         put(Item(id, url, name, mimeType, 0, 0, "QUEUED"))
         resume(id)
@@ -176,6 +177,8 @@ class NovaDownloadManager(
             connection.connectTimeout = 20000
             connection.readTimeout = 30000
             connection.setRequestProperty("User-Agent", "NovaBrowser/0.2 GeckoView")
+            // Ranges are byte offsets into the stored representation; never let the server gzip them.
+            connection.setRequestProperty("Accept-Encoding", "identity")
             if (offset > 0) {
                 connection.setRequestProperty("Range", "bytes=$offset-")
                 val validator = worker.item.etag.ifBlank { worker.item.lastModified }
@@ -183,6 +186,11 @@ class NovaDownloadManager(
             }
             connection.connect()
             var code = connection.responseCode
+            if (code == 416 && offset > 0) {
+                // The partial file no longer matches the server copy; start clean on the next Resume.
+                part.delete()
+                throw IllegalStateException("The saved partial download no longer matches the server. Tap Resume to restart it.")
+            }
             if (code !in 200..299) throw IllegalStateException("Server returned HTTP $code")
             val contentRange = DownloadProtocol.parseContentRange(connection.getHeaderField("Content-Range"))
             if (code == HttpURLConnection.HTTP_PARTIAL) {

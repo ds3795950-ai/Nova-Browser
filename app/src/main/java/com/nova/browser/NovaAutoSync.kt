@@ -117,7 +117,7 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
                 return Result.failure()
             }
             val localSnapshot = NovaSyncSnapshotRepository.build(applicationContext)
-            val vault = PasswordVault(applicationContext)
+            val vault = PasswordVault.shared(applicationContext)
             val localVault = vault.exportSyncBundle()
             val remote = cloud.downloadEncrypted()
             val remoteSnapshot = remote.first
