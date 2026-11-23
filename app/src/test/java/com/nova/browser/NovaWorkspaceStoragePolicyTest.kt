@@ -12,6 +12,29 @@ class NovaWorkspaceStoragePolicyTest {
         .put("tabs", JSONArray().put(JSONObject().put("url", "https://example.com")
             .put("title", "Example").put("group", "Research"))).toString()
 
+    @Test fun rejectsUnsafeWorkspaceUrls() {
+        assertThrows(IllegalArgumentException::class.java) {
+            NovaWorkspaceStoragePolicy.serialize(setOf(JSONObject().put("name", "Bad")
+                .put("tabs", JSONArray().put(JSONObject().put("url", "javascript:alert(1)"))).toString()))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            NovaWorkspaceStoragePolicy.serialize(setOf(JSONObject().put("name", "Bad")
+                .put("tabs", JSONArray().put(JSONObject().put("url", "file:///private/data"))).toString()))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            NovaWorkspaceStoragePolicy.serialize(setOf(JSONObject().put("name", "Bad")
+                .put("tabs", JSONArray().put(JSONObject().put("url", "https://user:pass@example.com"))).toString()))
+        }
+    }
+
+    @Test fun allowsBlankAndWebWorkspaceUrls() {
+        val value = JSONObject().put("name", "Safe").put("tabs", JSONArray()
+            .put(JSONObject().put("url", "about:blank"))
+            .put(JSONObject().put("url", "https://example.com"))
+            .put(JSONObject().put("url", "http://localhost:3000"))).toString()
+        assertEquals(setOf(value), NovaWorkspaceStoragePolicy.parse(NovaWorkspaceStoragePolicy.serialize(setOf(value))))
+    }
+
     @Test fun workspaceSetSerializesAndParsesDeterministically() {
         val values = linkedSetOf(workspace("Second"), workspace("First"))
         val serialized = NovaWorkspaceStoragePolicy.serialize(values)
