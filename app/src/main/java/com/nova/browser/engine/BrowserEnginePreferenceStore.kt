@@ -14,6 +14,17 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
         preferences.edit().putString(KEY_NORMAL_MODE, mode.name).apply()
     }
 
+    fun cefriumProfileName(): String {
+        val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_999)
+        return if (generation == 1) BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE else "nova-normal-v$generation"
+    }
+
+    fun rotateCefriumProfile(): String {
+        val next = (preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_998) + 1)
+        preferences.edit().putInt(KEY_PROFILE_GENERATION, next).apply()
+        return cefriumProfileName()
+    }
+
     fun siteAffinity(url: String): BrowserEngineType? = affinity.get(url)
 
     fun setSiteAffinity(url: String, engine: BrowserEngineType): Boolean = affinity.set(url, engine)
@@ -47,5 +58,6 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
 
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
+        const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
     }
 }

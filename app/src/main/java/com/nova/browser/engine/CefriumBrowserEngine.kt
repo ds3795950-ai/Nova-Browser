@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.os.Environment
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -14,11 +15,15 @@ import android.webkit.ValueCallback
 import org.json.JSONObject
 import org.json.JSONTokener
 import com.cefrium.CefriumBrowser
+import com.cefrium.CefriumExperimental
 import com.cefrium.CefriumDownloadClient
 import com.cefrium.CefriumChromeClient
 import com.cefrium.CefriumPermissionRequest
-import com.cefrium.CefriumProfile
+import com.cefrium.CefriumPermission
+import com.cefrium.CefriumContentSetting
 import com.cefrium.CefriumNavigationClient
+import com.cefrium.CefriumProfile
+import com.cefrium.CefriumContextMenu
 import com.nova.browser.DownloadProtocol
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -34,20 +39,48 @@ data class CefriumDownloadInfo(
 )
 
 /** Cefrium implementation of the shared per-tab engine contract. */
+@OptIn(CefriumExperimental::class)
 class CefriumBrowserEngine(
     activity: Activity,
     private val profile: CefriumProfile,
     private val listener: BrowserEngineListener? = null,
     private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit = {},
     private val onPermissionRequest: (origin: String, permissions: List<String>, respond: (Boolean) -> Unit) -> Unit = { _, _, respond -> respond(false) },
+    private val onFindResult: (activeMatch: Int, totalMatches: Int) -> Unit = { _, _ -> },
+    private val onFullscreenChanged: (Boolean) -> Unit = {},
+    private val onPopupRequested: (CefriumBrowser, String, Boolean) -> Boolean = { _, _, _ -> false },
+    private val onPopupClosed: (CefriumBrowser) -> Unit = {},
+    private val onExternalNavigation: (String, Boolean) -> Boolean = { _, _ -> false },
+    private val onHttpAuthRequest: (String, String, Boolean, (String?, String?) -> Unit) -> Unit = { _, _, _, respond -> respond(null, null) },
+    private val onContextMenu: (CefriumContextMenu) -> Boolean = { it.cancel(); false },
+    private val onBeforeUnloadDialog: (String, Boolean, (Boolean) -> Unit) -> Unit = { _, _, answer -> answer(false) },
+    private val onPermissionRequestCanceled: () -> Unit = {},
     desktopMode: Boolean = false,
-    private val browserOverride: CefriumBrowser? = null,
-    private val onPopupRequested: ((CefriumBrowser, String, Boolean) -> Boolean)? = null,
-    private val onPopupClosed: ((CefriumBrowser) -> Unit)? = null
+    existingBrowser: CefriumBrowser? = null,
+    initialNavigationState: ByteArray? = null,
+    initialNovaAddons: List<NovaScriptAddon> = emptyList(),
+    private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
+    private val autoplayAllowedForUrl: (String) -> Boolean = { false },
+    private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
+    private val soundAllowedForUrl: (String) -> Boolean = { true }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
-    override val capabilities = BrowserEngineCapabilitySets.CEFRIUM
-    private val browser = browserOverride ?: CefriumBrowser.createWithSurface(activity, profile)
+    override val capabilities = setOf(
+        BrowserEngineCapability.DOWNLOADS,
+        BrowserEngineCapability.SITE_PERMISSIONS,
+        BrowserEngineCapability.READER_MODE,
+        BrowserEngineCapability.DESKTOP_MODE,
+        BrowserEngineCapability.FIND_IN_PAGE,
+        BrowserEngineCapability.FULLSCREEN,
+        BrowserEngineCapability.POPUP_TABS,
+        BrowserEngineCapability.JS_DIALOGS,
+        BrowserEngineCapability.FILE_CHOOSER,
+        BrowserEngineCapability.CONTEXT_MENU,
+        BrowserEngineCapability.HTTP_AUTH,
+        BrowserEngineCapability.EXTERNAL_NAVIGATION,
+        BrowserEngineCapability.SITE_DATA
+    )
+    private val browser = existingBrowser ?: CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()
     private var currentState = BrowserEngineState(
@@ -56,82 +89,130 @@ class CefriumBrowserEngine(
         progress = browser.getProgress()
     )
     private var closed = false
+    private val novaAddonScriptHandlers = mutableMapOf<String, CefriumBrowser.ScriptHandler>()
+    var didRestoreInitialNavigationState: Boolean = false
+        private set
 
     override val state: BrowserEngineState
         get() = currentState
 
     init {
-        // Cefrium is pre-1.0. Keep its callback surface retained here so SDK API migrations do not
-        // leak into Nova's tab manager.
-        browser.setOnUrlChangedListener { url ->
-            publish(currentState.copy(url = url))
-        }
-        browser.setOnTitleChangedListener { title ->
-            publish(currentState.copy(title = title))
-        }
-        browser.setOnLoadingStateChangedListener { loading, canGoBack, canGoForward ->
-            publish(currentState.copy(
-                isLoading = loading,
-                progress = browser.getProgress().coerceIn(0, 100),
-                canGoBack = canGoBack,
-                canGoForward = canGoForward,
-                error = null
-            ))
-        }
-        browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
-        if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
-        CefriumVpnController.registerProfile(profile)
-        browser.setNavigationClient(object : CefriumNavigationClient {
-            override fun onRenderProcessTerminated(
-                browser: CefriumBrowser,
-                status: com.cefrium.CefriumRendererTerminationStatus,
-                errorCode: Int
-            ) {
-                publish(currentState.copy(
-                    isLoading = false,
-                    progress = 0,
-                    error = "Cefrium renderer terminated: $status (exit $errorCode)"
-                ))
-            }
-
-            override fun onHttpAuthRequest(
-                browser: CefriumBrowser,
-                host: String,
-                realm: String,
-                port: Int,
-                isProxy: Boolean,
-                callback: CefriumBrowser.HttpAuthCallback
-            ) {
-                CefriumVpnController.provideProxyCredentials(
-                    host = host,
-                    port = port,
-                    isProxy = isProxy,
-                    callback = { username, password -> callback.proceed(username, password) },
-                    cancel = { callback.cancel() }
+        // Restore the encrypted per-tab navigation stack before any new navigation.
+        if (initialNavigationState != null && initialNavigationState.isNotEmpty()) {
+            didRestoreInitialNavigationState = runCatching {
+                browser.restoreNavigationState(initialNavigationState)
+                true
+            }.getOrDefault(false)
+            if (didRestoreInitialNavigationState) {
+                currentState = currentState.copy(
+                    url = browser.getUrl(),
+                    title = browser.getTitle(),
+                    canGoBack = browser.canGoBack(),
+                    canGoForward = browser.canGoForward(),
+                    progress = browser.getProgress().coerceIn(0, 100)
                 )
             }
+        }
+        // Use the typed 0.21 clients rather than deprecated one-listener-per-event APIs.
+        browser.setPageVisible(false)
+        browser.setFocus(false)
+        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl()))
+        browser.setNavigationClient(object : CefriumNavigationClient {
+            override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
+                val url = request.url
+                // These settings belong to the tab's top-level origin, not an embedded iframe.
+                if (request.isForMainFrame) applySiteSettingsForUrl(url)
+                val scheme = Uri.parse(url).scheme?.lowercase()
+                return when (scheme) {
+                    "http", "https", "about", "data", "blob", "javascript" -> false
+                    "file" -> !url.startsWith("file:///android_asset/", ignoreCase = true)
+                    "mailto", "tel", "sms", "smsto", "geo", "market", "intent" ->
+                        this@CefriumBrowserEngine.onExternalNavigation.invoke(url, navigationHasUserGesture(request))
+                    else -> true // Never hand file/content/arbitrary schemes to the Android package resolver.
+                }
+            }
+            override fun onUrlChanged(browser: CefriumBrowser, url: String) {
+                publish(currentState.copy(url = url, error = null))
+            }
+            override fun onLoadStart(browser: CefriumBrowser, url: String) {
+                publish(currentState.copy(url = url, isLoading = true, progress = 0, error = null))
+            }
+            override fun onProgressChanged(browser: CefriumBrowser, percent: Int) {
+                publish(currentState.copy(progress = percent.coerceIn(0, 100)))
+            }
+            override fun onLoadingStateChanged(browser: CefriumBrowser, loading: Boolean, canGoBack: Boolean, canGoForward: Boolean) {
+                publish(currentState.copy(
+                    isLoading = loading,
+                    progress = browser.getProgress().coerceIn(0, 100),
+                    canGoBack = canGoBack,
+                    canGoForward = canGoForward,
+                    error = if (loading) null else currentState.error
+                ))
+            }
+            override fun onLoadError(browser: CefriumBrowser, error: com.cefrium.CefriumLoadError) {
+                publish(currentState.copy(isLoading = false, error = error.toString()))
+            }
+            override fun onRenderProcessTerminated(browser: CefriumBrowser, status: com.cefrium.CefriumRendererTerminationStatus, errorCode: Int) {
+                publish(currentState.copy(isLoading = false, error = "Cefrium renderer stopped ($status, code $errorCode)"))
+            }
+            override fun onRenderProcessUnresponsive(browser: CefriumBrowser) {
+                publish(currentState.copy(error = "This page is not responding"))
+            }
+            override fun onRenderProcessResponsive(browser: CefriumBrowser) {
+                publish(currentState.copy(error = null))
+            }
+            override fun onHttpAuthRequest(browser: CefriumBrowser, host: String, realm: String, port: Int, isProxy: Boolean, callback: CefriumBrowser.HttpAuthCallback) {
+                this@CefriumBrowserEngine.onHttpAuthRequest.invoke(host, realm, isProxy) { username, password ->
+                    if (username == null || password == null) callback.cancel() else callback.proceed(username, password)
+                }
+            }
         })
+        browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
+        setNovaScriptAddons(initialNovaAddons)
+        if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
-            override fun onCreateWindow(
-                browser: CefriumBrowser,
-                popup: CefriumBrowser,
-                url: String,
-                userGesture: Boolean
-            ): Boolean {
-                if (!CefriumPopupPolicy.isSafeUserInitiatedRequest(url, userGesture)) {
-                    popup.close()
-                    return true
+            override fun onTitleChanged(browser: CefriumBrowser, title: String) {
+                publish(currentState.copy(title = title))
+            }
+            override fun onContextMenu(browser: CefriumBrowser, menu: CefriumContextMenu): Boolean =
+                this@CefriumBrowserEngine.onContextMenu.invoke(menu)
+            override fun onBeforeUnloadDialog(browser: CefriumBrowser, message: String, isReload: Boolean, callback: CefriumBrowser.JsDialogCallback): Boolean {
+                this@CefriumBrowserEngine.onBeforeUnloadDialog.invoke(message, isReload) { leave ->
+                    // Cefrium 0.21 exposes a Java callback carrying success + prompt text.
+                    // Resolve that signature without binding the adapter to a method name.
+                    val resolver = callback.javaClass.methods.firstOrNull { method ->
+                        method.parameterCount == 2 &&
+                            (method.parameterTypes[0] == Boolean::class.javaPrimitiveType || method.parameterTypes[0] == Boolean::class.java) &&
+                            method.parameterTypes[1] == String::class.java
+                    }
+                    if (resolver != null) runCatching { resolver.invoke(callback, leave, "") }
                 }
-                return runCatching { onPopupRequested?.invoke(popup, url.ifBlank { "about:blank" }, userGesture) == true }
-                    .getOrElse { popup.close(); true }
+                return true
             }
-
+            override fun onFindResult(browser: CefriumBrowser, activeMatch: Int, matches: Int) {
+                this@CefriumBrowserEngine.onFindResult.invoke(activeMatch, matches)
+            }
+            override fun onFullscreenChanged(browser: CefriumBrowser, fullscreen: Boolean) {
+                this@CefriumBrowserEngine.onFullscreenChanged.invoke(fullscreen)
+            }
+            override fun onJsDialog(
+                browser: CefriumBrowser,
+                type: com.cefrium.CefriumJsDialogType,
+                message: String,
+                defaultText: String,
+                callback: CefriumBrowser.JsDialogCallback
+            ): Boolean = false // Keep Cefrium's native, correctly typed alert/confirm/prompt UI.
+            override fun onShowFileChooser(
+                browser: CefriumBrowser,
+                params: com.cefrium.CefriumFileChooserParams,
+                callback: com.cefrium.CefriumFileChooserCallback
+            ): Boolean = false // Keep the SDK's surface-mode Android picker and camera integration.
+            override fun onCreateWindow(browser: CefriumBrowser, popup: CefriumBrowser, url: String, userGesture: Boolean): Boolean =
+                this@CefriumBrowserEngine.onPopupRequested.invoke(popup, url, userGesture)
             override fun onCloseWindow(browser: CefriumBrowser, popup: CefriumBrowser) {
-                val handler = onPopupClosed
-                if (handler != null) handler(popup) else popup.close()
+                this@CefriumBrowserEngine.onPopupClosed.invoke(popup)
             }
-
             override fun onPermissionRequest(browser: CefriumBrowser, request: CefriumPermissionRequest) {
                 // Deny insecure/opaque origins and any permission kind Nova does not recognize.
                 val requested = CefriumSitePermissionPolicy.normalize(
@@ -142,59 +223,129 @@ class CefriumBrowserEngine(
                     request.deny()
                     return
                 }
-                onPermissionRequest(request.origin, requested) { allowed ->
+                this@CefriumBrowserEngine.onPermissionRequest.invoke(request.origin, requested) { allowed ->
                     if (allowed) request.grant() else request.deny()
                 }
             }
         })
     }
 
+    fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
+
+    fun setJavaScriptEnabled(enabled: Boolean) {
+        checkOpen()
+        browser.setJavaScriptEnabled(enabled)
+    }
+    fun setAutoplayAllowed(allowed: Boolean) {
+        checkOpen()
+        browser.setMediaPlaybackRequiresUserGesture(!allowed)
+    }
+    fun setAdBlockingEnabled(enabled: Boolean) {
+        checkOpen()
+        browser.setAdBlockEnabled(enabled)
+    }
+    fun setAudioMuted(muted: Boolean) {
+        checkOpen()
+        browser.setAudioMuted(muted)
+    }
+
+    fun setNovaScriptAddons(addons: List<NovaScriptAddon>) {
+        checkOpen()
+        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
+        novaAddonScriptHandlers.clear()
+        addons.filter { it.enabled }.forEach { addon ->
+            require(addon.allowedOriginRules.isNotEmpty()) { "Nova Add-on requires an origin allowlist" }
+            val idLiteral = org.json.JSONObject.quote(addon.id)
+            val nameLiteral = org.json.JSONObject.quote(addon.name)
+            val wrapped = """
+                (() => {
+                  try {
+                    globalThis.__novaAddonLoaded = globalThis.__novaAddonLoaded || Object.create(null);
+                    if (globalThis.__novaAddonLoaded[$idLiteral]) return;
+                    globalThis.__novaAddonLoaded[$idLiteral] = true;
+                    ${addon.script}
+                  } catch (error) {
+                    console.error("[Nova Add-on: " + $nameLiteral + "]", error);
+                  }
+                })();
+            """.trimIndent()
+            novaAddonScriptHandlers[addon.id] = browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
+        }
+    }
+    /** Persist a per-origin website permission decision in this Cefrium profile. */
+    fun setSitePermission(origin: String, permission: String, decision: String) {
+        if (closed) return
+        val cefriumPermission = when (permission.uppercase()) {
+            "GEOLOCATION" -> CefriumPermission.GEOLOCATION
+            "CAMERA" -> CefriumPermission.CAMERA
+            "MICROPHONE" -> CefriumPermission.MICROPHONE
+            "NOTIFICATIONS" -> CefriumPermission.NOTIFICATIONS
+            "CLIPBOARD_READ" -> CefriumPermission.CLIPBOARD_READ
+            "NFC" -> CefriumPermission.NFC
+            else -> return
+        }
+        val contentSetting = when (decision.uppercase()) {
+            "ALLOW" -> CefriumContentSetting.ALLOW
+            "BLOCK" -> CefriumContentSetting.BLOCK
+            else -> CefriumContentSetting.ASK
+        }
+        browser.setContentSetting(origin, cefriumPermission, contentSetting)
+    }
+
+    fun startDownload(url: String) { if (!closed) browser.startDownload(url) }
+    fun serializeNavigationState(): ByteArray? = if (closed) null else runCatching { browser.serializeNavigationState() }.getOrNull()
+
+    /** Executes JavaScript through Cefrium's typed callback API. */
+    fun evaluateJavaScript(script: String, onResult: (String?) -> Unit) {
+        checkOpen()
+        browser.evaluateJavaScript(script, ValueCallback { value -> onResult(value) })
+    }
+
+    /** Loads HTML with an explicit origin for deterministic local compatibility tests and Reader Mode. */
+    fun loadHtmlWithBaseUrl(html: String, baseUrl: String) {
+        checkOpen()
+        browser.loadHtmlWithBaseUrl(html, baseUrl)
+    }
+
     override fun loadUrl(url: String) {
         checkOpen()
+        applySiteSettingsForUrl(url)
         browser.loadUrl(url)
     }
 
     override fun goBack() {
         checkOpen()
-        if (currentState.canGoBack) browser.goBack()
+        if (currentState.canGoBack) {
+            applyHistoryDestinationSettings(-1)
+            browser.goBack()
+        }
     }
 
     override fun goForward() {
         checkOpen()
-        if (currentState.canGoForward) browser.goForward()
+        if (currentState.canGoForward) {
+            applyHistoryDestinationSettings(1)
+            browser.goForward()
+        }
     }
 
     override fun reload() {
         checkOpen()
+        applySiteSettingsForUrl(browser.getUrl())
         browser.reload()
     }
 
-    fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
+    override fun stop() { if (!closed) browser.stopLoading() }
 
-    fun refreshVpnSettings() {
-        checkOpen()
-        CefriumVpnController.registerProfile(profile)
+    override fun findInPage(query: String, forward: Boolean, findNext: Boolean) {
+        if (!closed) browser.find(query, forward, false, findNext)
     }
 
-    /** Loads trusted app-provided HTML under an explicit HTTP(S) origin (also used by tests). */
-    fun loadHtmlWithBaseUrl(html: String, baseUrl: String) {
-        checkOpen()
-        val parsed = Uri.parse(baseUrl)
-        require((parsed.scheme == "https" || parsed.scheme == "http") && !parsed.host.isNullOrBlank()) {
-            "HTML base URL must be an absolute HTTP(S) origin"
-        }
-        require(html.length <= MAX_READER_HTML_CHARS) { "HTML content exceeds Nova's safe rendering limit" }
-        browser.loadHtmlWithBaseUrl(html, baseUrl)
-    }
+    override fun stopFinding() { if (!closed) browser.stopFinding(true) }
+    override fun clearCache() { if (!closed) browser.clearCache() }
+    override fun exitFullscreen() { if (!closed) browser.exitFullscreen() }
 
-    /** Executes a bounded script in the current page; callers must not pass untrusted code. */
-    fun evaluateJavaScript(script: String, callback: ValueCallback<String?>) {
-        checkOpen()
-        require(script.length <= MAX_SCRIPT_CHARS) { "JavaScript input is too large" }
-        browser.evaluateJavaScript(script, callback)
-    }
-
-    fun setDesktopMode(enabled: Boolean) {
+    override fun setDesktopMode(enabled: Boolean) {
         checkOpen()
         browser.setUserAgentOverride(if (enabled) DESKTOP_USER_AGENT else null)
     }
@@ -234,7 +385,6 @@ class CefriumBrowserEngine(
                 val title = payload.optString("title").ifBlank { "Reader view" }
                 val content = payload.optString("html")
                 check(content.isNotBlank()) { "No readable article content was found" }
-                check(content.length <= MAX_READER_HTML_CHARS) { "Article is too large for safe Reader Mode extraction" }
                 val safeBase = escapeHtml(originalUrl)
                 val html = buildString {
                     append("<!doctype html><html><head><meta charset=\"utf-8\">")
@@ -278,11 +428,46 @@ class CefriumBrowserEngine(
         if (!closed) browser.onResume()
     }
 
+    override fun detach() {
+        (view.parent as? android.view.ViewGroup)?.removeView(view)
+    }
+
     override fun close() {
         if (closed) return
+        detach()
+        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
+        novaAddonScriptHandlers.clear()
         closed = true
         browser.close()
     }
+
+    private fun applyHistoryDestinationSettings(offset: Int) {
+        val entries = runCatching { browser.getNavigationEntries() }.getOrNull().orEmpty()
+        val currentIndex = entries.indexOfFirst { it.current }
+        if (currentIndex < 0) return
+        val destinationUrl = entries.getOrNull(currentIndex + offset)?.url ?: return
+        applySiteSettingsForUrl(destinationUrl)
+    }
+
+    private fun applySiteSettingsForUrl(url: String) {
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return
+        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(url))
+        browser.setMediaPlaybackRequiresUserGesture(!autoplayAllowedForUrl(url))
+        browser.setAdBlockEnabled(adBlockingEnabledForUrl(url))
+        browser.setAudioMuted(!soundAllowedForUrl(url))
+    }
+
+    private fun navigationHasUserGesture(request: com.cefrium.CefriumNavigationRequest): Boolean = runCatching {
+        val method = request.javaClass.methods.firstOrNull {
+            it.parameterCount == 0 && it.name in setOf("hasUserGesture", "isUserGesture", "getUserGesture", "hasGesture", "getGesture", "isGesture")
+        }
+        val fromMethod = method?.invoke(request) as? Boolean
+        if (fromMethod != null) fromMethod else {
+            val field = request.javaClass.declaredFields.firstOrNull { it.name.contains("gesture", ignoreCase = true) }
+            field?.isAccessible = true
+            field?.get(request) as? Boolean ?: false
+        }
+    }.getOrDefault(false)
 
     private fun publish(next: BrowserEngineState) {
         currentState = next
@@ -294,8 +479,6 @@ class CefriumBrowserEngine(
     }
 
     private companion object {
-        const val MAX_READER_HTML_CHARS = 1_500_000
-        const val MAX_SCRIPT_CHARS = 64_000
         const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
 
@@ -324,6 +507,7 @@ class CefriumBrowserEngine(
  * The engine writes to its app-private Downloads directory first; only completed files
  * are copied to MediaStore, and the private source is deleted only after publication.
  */
+@OptIn(CefriumExperimental::class)
 private class CefriumDownloadPublisher(
     context: Context,
     private val onDownloadCompleted: (CefriumDownloadInfo) -> Unit

@@ -13,7 +13,6 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLDecoder
 import java.util.UUID
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -99,17 +98,20 @@ class NovaDownloadManager(
 
     /** Records a file already downloaded by a browser engine and published to MediaStore. */
     fun registerCompleted(url: String, fileName: String, mimeType: String, savedUri: String, bytes: Long): String {
-        require(savedUri.isNotBlank()) { "A published download URI is required" }
+        val parsedUrl = runCatching { URL(url) }.getOrNull()
+        val safeUrl = parsedUrl?.takeIf { it.protocol == "http" || it.protocol == "https" }?.toString().orEmpty()
+        val uri = Uri.parse(savedUri)
+        require(uri.scheme == "content") { "A published Android Downloads URI is required" }
         val id = "engine-${UUID.randomUUID()}"
         put(Item(
             id = id,
-            url = url,
-            fileName = sanitize(fileName),
-            mimeType = mimeType.ifBlank { "application/octet-stream" },
+            url = safeUrl.take(8192),
+            fileName = sanitize(fileName).ifBlank { "nova-download.bin" },
+            mimeType = mimeType.take(128).ifBlank { "application/octet-stream" },
             downloaded = bytes.coerceAtLeast(0L),
             total = bytes.coerceAtLeast(0L),
             state = "COMPLETE",
-            savedUri = savedUri
+            savedUri = uri.toString()
         ))
         return id
     }
@@ -117,8 +119,7 @@ class NovaDownloadManager(
     fun enqueue(url: String, fileName: String? = null, mimeType: String = "application/octet-stream"): String {
         val parsed = URL(url)
         require(parsed.protocol == "http" || parsed.protocol == "https") { "Only HTTP(S) downloads are supported" }
-        val rawLeaf = parsed.path.substringAfterLast('/').ifBlank { "nova-download.bin" }
-        val name = sanitize(fileName ?: runCatching { URLDecoder.decode(rawLeaf, "UTF-8") }.getOrDefault(rawLeaf))
+        val name = sanitize(fileName ?: DownloadProtocol.fileNameFromResponse(url, null).ifBlank { "nova-download.bin" })
         val id = UUID.randomUUID().toString()
         put(Item(id, url, name, mimeType, 0, 0, "QUEUED"))
         resume(id)
@@ -171,25 +172,19 @@ class NovaDownloadManager(
             val part = partial(id)
             part.parentFile?.mkdirs()
             var offset = part.length()
-            var connection = URL(worker.item.url).openConnection() as HttpURLConnection
-            worker.connection = connection
-            connection.instanceFollowRedirects = true
-            connection.connectTimeout = 20000
-            connection.readTimeout = 30000
-            connection.setRequestProperty("User-Agent", "NovaBrowser/0.2 GeckoView")
-            // Ranges are byte offsets into the stored representation; never let the server gzip them.
-            connection.setRequestProperty("Accept-Encoding", "identity")
-            if (offset > 0) {
-                connection.setRequestProperty("Range", "bytes=$offset-")
-                val validator = worker.item.etag.ifBlank { worker.item.lastModified }
-                if (validator.isNotBlank()) connection.setRequestProperty("If-Range", validator)
-            }
-            connection.connect()
+            // If-Range needs a strong ETag or a Last-Modified date; otherwise a partial file cannot be validated.
+            val validator = worker.item.etag.takeIf { it.isNotBlank() && !it.startsWith("W/") }
+                ?: worker.item.lastModified.takeIf { it.isNotBlank() }
+            if (offset > 0 && validator == null) { part.delete(); offset = 0 }
+            var connection = openConnection(worker, offset, validator)
             var code = connection.responseCode
             if (code == 416 && offset > 0) {
-                // The partial file no longer matches the server copy; start clean on the next Resume.
+                // The partial file is already complete or no longer matches the server copy: restart cleanly.
+                connection.disconnect()
                 part.delete()
-                throw IllegalStateException("The saved partial download no longer matches the server. Tap Resume to restart it.")
+                offset = 0
+                connection = openConnection(worker, 0, null)
+                code = connection.responseCode
             }
             if (code !in 200..299) throw IllegalStateException("Server returned HTTP $code")
             val contentRange = DownloadProtocol.parseContentRange(connection.getHeaderField("Content-Range"))
@@ -209,7 +204,8 @@ class NovaDownloadManager(
                 length >= 0 -> offset + length
                 else -> worker.item.total
             }
-            worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified)
+            val headerName = DownloadProtocol.parseContentDispositionName(connection.getHeaderField("Content-Disposition"))?.let { DownloadProtocol.safeFileName(it) }
+            worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified, fileName = headerName ?: worker.item.fileName)
             put(worker.item)
             connection.inputStream.use { input ->
                 FileOutputStream(part, offset > 0).use { output ->
@@ -260,6 +256,40 @@ class NovaDownloadManager(
             if (worker.cancel.get()) partial(id).delete()
             running.remove(id)
             NovaDownloadService.update(context, running.size)
+        }
+    }
+
+    /** Opens the URL following redirects manually, because HttpURLConnection will not follow http -> https. */
+    private fun openConnection(worker: Running, offset: Long, validator: String?): HttpURLConnection {
+        var current = URL(worker.item.url)
+        var hops = 0
+        while (true) {
+            require(current.protocol == "http" || current.protocol == "https") { "Only HTTP(S) downloads are supported" }
+            val connection = current.openConnection() as HttpURLConnection
+            worker.connection = connection
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 20000
+            connection.readTimeout = 30000
+            connection.setRequestProperty("User-Agent", "NovaBrowser/0.4 GeckoView")
+            // Keep bytes identical to the server copy so Content-Length and Range offsets stay valid.
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            if (offset > 0) {
+                connection.setRequestProperty("Range", "bytes=$offset-")
+                if (validator != null) connection.setRequestProperty("If-Range", validator)
+            }
+            val status = connection.responseCode
+            if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+                val location = connection.getHeaderField("Location")
+                connection.disconnect()
+                if (location.isNullOrBlank() || ++hops > 5) throw IllegalStateException("Too many redirects")
+                val next = URL(current, location)
+                if (!DownloadProtocol.isRedirectAllowed(current.toString(), next.toString())) {
+                    throw IllegalStateException("Blocked unsafe download redirect")
+                }
+                current = next
+                continue
+            }
+            return connection
         }
     }
 

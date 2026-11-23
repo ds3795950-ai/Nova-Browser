@@ -25,7 +25,7 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun all(): List<Autocomplete.LoginEntry> {
         val bytes = readEncryptedBlob() ?: return emptyList()
-        require(bytes.size > 12) { "Password vault data is invalid" }
+        require(bytes.size in MIN_ENCRYPTED_BLOB_BYTES..MAX_VAULT_BYTES) { "Password vault data is invalid or unexpectedly large" }
         val iv = bytes.copyOfRange(0, 12)
         val encrypted = bytes.copyOfRange(12, bytes.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -45,7 +45,10 @@ class PasswordVault(context: Context) {
     }
 
     @Synchronized fun save(login: Autocomplete.LoginEntry) {
+        require(PasswordVaultPolicy.isAllowedOrigin(login.origin)) { "Saved login must use a valid HTTP or HTTPS origin without embedded credentials" }
+        require(PasswordVaultPolicy.isAllowedOptionalOrigin(login.formActionOrigin)) { "Saved login form action must be a valid HTTP or HTTPS origin" }
         val entries = all().filterNot { it.guid == login.guid || (it.origin == login.origin && it.username == login.username) }.toMutableList()
+        require(entries.size < MAX_ENTRIES) { "Password vault entry limit reached" }
         entries.add(login)
         persist(entries)
         val key = credentialKey(login.origin, login.username)
@@ -58,9 +61,11 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun delete(guid: String) {
         val entries = all()
-        val removed = entries.firstOrNull { it.guid == guid }
-        persist(entries.filterNot { it.guid == guid })
-        if (removed != null) {
+        val removed = entries.firstOrNull { it.guid == guid } ?: return
+        val remaining = entries.filterNot { it.guid == guid }
+        // Older vaults may exceed today's entry cap; permit a deletion that reduces that legacy count.
+        persist(remaining, allowOverLimitReduction = entries.size > MAX_ENTRIES)
+        run {
             val key = credentialKey(removed.origin, removed.username)
             val metadata = readJsonPreference(META_KEY)
             val tombstones = readJsonPreference(TOMBSTONES_KEY)
@@ -93,30 +98,46 @@ class PasswordVault(context: Context) {
         return JSONObject().put("schema", 2).put("credentials", credentials).put("deleted", readJsonPreference(TOMBSTONES_KEY))
     }
 
-    @Synchronized fun importSyncBundle(bundle: JSONObject) {
+    private fun validatedSyncBundle(bundle: JSONObject): Triple<List<Autocomplete.LoginEntry>, JSONObject, JSONObject> {
         val merged = mergeSyncBundles(exportSyncBundle(), bundle)
         val credentials = merged.optJSONArray("credentials") ?: JSONArray()
         require(credentials.length() <= 2000) { "Cloud password vault is unexpectedly large" }
         val entries = mutableListOf<Autocomplete.LoginEntry>()
         val metadata = JSONObject()
         for (i in 0 until credentials.length()) {
-            // One malformed cloud entry must not block every future sync; skip it instead.
+            // Ignore one malformed record without blocking every future sync, but never accept unsafe origins.
             runCatching {
                 val item = credentials.getJSONObject(i)
                 val origin = item.getString("origin")
-                require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
+                require(PasswordVaultPolicy.isAllowedOrigin(origin)) { "Invalid saved login origin" }
+                val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
+                require(PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) { "Invalid saved login form action origin" }
                 val username = item.getString("username")
-                val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
-                    .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                val password = item.getString("password")
+                val guid = item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() }
+                require(guid.length <= 128 && username.length <= 4096 && password.length <= 16_384) {
+                    "Cloud password entry exceeds allowed limits"
+                }
+                val entry = Autocomplete.LoginEntry.Builder().guid(guid)
+                    .origin(origin).formActionOrigin(formActionOrigin)
                     .httpRealm(item.optString("httpRealm").ifBlank { null })
-                    .username(username).password(item.getString("password")).build()
+                    .username(username).password(password).build()
                 entries.add(entry)
                 metadata.put(credentialKey(origin, username), item.optLong("updatedAt"))
             }
         }
+        return Triple(entries, metadata, merged.optJSONObject("deleted") ?: JSONObject())
+    }
+
+    @Synchronized fun validateSyncBundle(bundle: JSONObject) {
+        validatedSyncBundle(bundle)
+    }
+
+    @Synchronized fun importSyncBundle(bundle: JSONObject) {
+        val (entries, metadata, tombstones) = validatedSyncBundle(bundle)
         persist(entries)
         prefs.edit().putString(META_KEY, metadata.toString())
-            .putString(TOMBSTONES_KEY, (merged.optJSONObject("deleted") ?: JSONObject()).toString()).apply()
+            .putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
 
     @Synchronized fun importFromSync(array: JSONArray) {
@@ -125,9 +146,11 @@ class PasswordVault(context: Context) {
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
             val origin = item.getString("origin")
-            require(origin.startsWith("https://") || origin.startsWith("http://")) { "Invalid saved login origin" }
+            require(PasswordVaultPolicy.isAllowedOrigin(origin)) { "Invalid saved login origin" }
+            val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
+            require(PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) { "Invalid saved login form action origin" }
             val entry = Autocomplete.LoginEntry.Builder().guid(item.optString("guid").ifBlank { java.util.UUID.randomUUID().toString() })
-                .origin(origin).formActionOrigin(item.optString("formActionOrigin").ifBlank { null })
+                .origin(origin).formActionOrigin(formActionOrigin)
                 .httpRealm(item.optString("httpRealm").ifBlank { null })
                 .username(item.getString("username")).password(item.getString("password")).build()
             merged[entry.origin + "|" + entry.username] = entry
@@ -135,9 +158,15 @@ class PasswordVault(context: Context) {
         persist(merged.values.toList())
     }
 
-    @Synchronized fun clear() { prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).apply(); vaultFile.delete() }
+    @Synchronized fun clear() {
+        check(!vaultFile.exists() || vaultFile.delete()) { "Could not remove encrypted password vault file" }
+        check(prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).commit()) { "Could not clear password vault metadata" }
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (store.containsAlias(alias)) store.deleteEntry(alias)
+    }
 
-    private fun persist(entries: List<Autocomplete.LoginEntry>) {
+    private fun persist(entries: List<Autocomplete.LoginEntry>, allowOverLimitReduction: Boolean = false) {
+        require(entries.size <= MAX_ENTRIES || allowOverLimitReduction) { "Password vault entry limit reached" }
         val json = JSONArray()
         entries.forEach { login ->
             json.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
@@ -148,6 +177,7 @@ class PasswordVault(context: Context) {
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
         val packed = cipher.iv + encrypted
+        require(packed.size <= MAX_VAULT_BYTES) { "Password vault data is too large" }
         val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")
         FileOutputStream(temporary).use { it.write(packed); it.fd.sync() }
         try {
@@ -203,6 +233,9 @@ class PasswordVault(context: Context) {
         private const val KEY_BLOB = "encrypted_entries_v1"
         private const val META_KEY = "credential_updated_at_v1"
         private const val TOMBSTONES_KEY = "credential_tombstones_v1"
+        private const val MAX_ENTRIES = 2000
+        private const val MIN_ENCRYPTED_BLOB_BYTES = 28
+        private const val MAX_VAULT_BYTES = 4 * 1024 * 1024
 
         /** Merges credentials and deletion markers from two devices; newer explicit deletes win. */
         internal fun decodeSyncBundle(serialized: String): JSONObject {

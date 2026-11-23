@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="NovaThemeLight" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#7044C8</item>
+        <item name="android:colorBackground">#F6F3FA</item>
+        <item name="android:windowBackground">#F6F3FA</item>
+        <item name="android:textColorPrimary">#241C2B</item>
+        <item name="android:textColorSecondary">#746A7E</item>
+        <item name="android:statusBarColor">#F6F3FA</item>
+        <item name="android:navigationBarColor">#F6F3FA</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="NovaThemeDark" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#B99AFF</item>
+        <item name="android:colorBackground">#100D15</item>
+        <item name="android:windowBackground">#100D15</item>
+        <item name="android:textColorPrimary">#F4F0FA</item>
+        <item name="android:textColorSecondary">#AAA3B5</item>
+        <item name="android:statusBarColor">#100D15</item>
+        <item name="android:navigationBarColor">#100D15</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

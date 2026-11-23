@@ -22,62 +22,51 @@ import javax.crypto.spec.PBEKeySpec
 internal object CloudCrypto {
     private const val ITERATIONS = 310_000
     private const val KEY_BITS = 256
-    private const val MIN_PASSPHRASE_LENGTH = 10
-    private const val MAX_BACKUP_BYTES = 32 * 1024 * 1024
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
     private fun unb64(value: String) = java.util.Base64.getDecoder().decode(value)
 
     fun encrypt(plainText: String, passphrase: CharArray): JSONObject {
-        require(passphrase.size >= MIN_PASSPHRASE_LENGTH) { "Choose a sync passphrase with at least 10 characters" }
-        val clearBytes = plainText.toByteArray(Charsets.UTF_8)
-        require(clearBytes.size <= MAX_BACKUP_BYTES) { "Cloud backup is too large to encrypt safely" }
+        require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
         val random = SecureRandom()
         val salt = ByteArray(16).also(random::nextBytes)
         val iv = ByteArray(12).also(random::nextBytes)
         val spec = PBEKeySpec(passphrase, salt, ITERATIONS, KEY_BITS)
-        val keyBytes = try {
-            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        } finally { spec.clearPassword() }
+        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        spec.clearPassword()
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
             JSONObject().put("version", 1).put("algorithm", "AES-256-GCM")
                 .put("kdf", "PBKDF2-HMAC-SHA256").put("iterations", ITERATIONS)
                 .put("salt", b64(salt)).put("iv", b64(iv))
-                .put("ciphertext", b64(cipher.doFinal(clearBytes)))
-        } finally {
-            keyBytes.fill(0)
-            clearBytes.fill(0)
-        }
+                .put("ciphertext", b64(cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))))
+        } finally { keyBytes.fill(0) }
     }
 
     fun decrypt(envelope: JSONObject, passphrase: CharArray): String {
-        require(passphrase.size >= MIN_PASSPHRASE_LENGTH) { "Sync passphrase must contain at least 10 characters" }
+        require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
         require(envelope.optInt("version") == 1 && envelope.optString("algorithm") == "AES-256-GCM") { "Unsupported cloud backup format" }
-        require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported cloud backup key derivation" }
+        require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
         val salt = unb64(envelope.getString("salt"))
         val iv = unb64(envelope.getString("iv"))
         val ciphertext = unb64(envelope.getString("ciphertext"))
-        require(salt.size == 16 && iv.size == 12 && ciphertext.size in 16..(MAX_BACKUP_BYTES + 16)) {
-            "Invalid encrypted backup"
-        }
+        require(salt.size == 16 && iv.size == 12 && ciphertext.size >= 16) { "Invalid encrypted backup" }
         val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
-        val keyBytes = try {
-            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        } finally { spec.clearPassword() }
+        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        spec.clearPassword()
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
-            val clearBytes = cipher.doFinal(ciphertext)
-            try { String(clearBytes, Charsets.UTF_8) } finally { clearBytes.fill(0) }
+            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
         } finally { keyBytes.fill(0) }
     }
 }
 
+/** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
+class CloudSyncConflictException(message: String) : IllegalStateException(message)
 
-/** One revision contains both encrypted payloads, so a sync cannot update only half the backup. */
 internal object NovaCloudBundle {
     const val FORMAT = "nova-encrypted-sync-bundle-v1"
 
@@ -95,9 +84,6 @@ internal object NovaCloudBundle {
     }
 }
 
-/** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
-class CloudSyncConflictException(message: String) : IllegalStateException(message)
-
 class NovaCloudSync(context: Context) {
     companion object {
         private const val BASE_URL = BuildConfig.SUPABASE_URL
@@ -107,6 +93,66 @@ class NovaCloudSync(context: Context) {
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
     @Volatile private var snapshotVersion: String? = null
+    @Volatile private var vaultVersion: String? = null
+
+    /** Create a Supabase account using email and password. */
+    fun signUpWithPassword(email: String, password: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        require(password.length >= 8) { "Password must be at least 8 characters" }
+        require(password.length <= 72) { "Password is too long" }
+        val body = JSONObject().put("email", clean).put("password", password).toString()
+        val result = request("POST", "/auth/v1/signup", body)
+        val json = JSONObject(result)
+        if (json.has("access_token") && json.has("refresh_token")) {
+            persistSessionFromAuthResponse(result)
+        } else if (json.optJSONObject("user") != null) {
+            throw IllegalStateException("Account created. Check your email to confirm the address, then sign in.")
+        } else {
+            throw IllegalStateException("Sign-up failed. Try a different email or sign in instead.")
+        }
+    }
+
+    /** Sign in to Nova Cloud using email and password. */
+    fun signInWithPassword(email: String, password: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        require(password.isNotEmpty()) { "Enter your password" }
+        val result = request(
+            "POST",
+            "/auth/v1/token?grant_type=password",
+            JSONObject().put("email", clean).put("password", password).toString()
+        )
+        persistSessionFromAuthResponse(result)
+    }
+
+    /** Ask Supabase to send a password-recovery link without revealing whether the email exists. */
+    fun requestPasswordReset(email: String) {
+        val clean = email.trim().lowercase()
+        require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
+            "Enter a valid email address"
+        }
+        request("POST", "/auth/v1/recover", JSONObject().put("email", clean).toString())
+    }
+
+    private fun persistSessionFromAuthResponse(raw: String) {
+        val session = JSONObject(raw)
+        require(session.has("access_token") && session.has("refresh_token")) {
+            "Supabase did not return a valid session"
+        }
+        session.put("expires_at", System.currentTimeMillis() / 1000 + session.optLong("expires_in", 3600))
+        val userId = session.optJSONObject("user")?.optString("id") ?: session.optString("user_id")
+        session.put("user_id", userId)
+        require(session.optString("user_id").isNotBlank()) { "Supabase session did not include a user ID" }
+        if (session.optJSONObject("user") == null && session.has("email")) {
+            session.put("user", JSONObject().put("email", session.getString("email")).put("id", userId))
+        }
+        saveSession(session)
+    }
 
     fun sendEmailOtp(email: String) {
         val clean = email.trim().lowercase()
@@ -115,8 +161,7 @@ class NovaCloudSync(context: Context) {
     }
 
     fun verifyEmailOtp(email: String, code: String) {
-        val cleanCode = code.trim()
-        require(cleanCode.matches(Regex("[0-9]{6}"))) { "Enter the numeric code from your email" }
+        val cleanCode = NovaEmailOtpPolicy.normalizeCode(code)
         val result = request("POST", "/auth/v1/verify", JSONObject().put("type", "email")
             .put("email", email.trim().lowercase()).put("token", cleanCode).toString())
         val session = JSONObject(result)
@@ -141,11 +186,14 @@ class NovaCloudSync(context: Context) {
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
         val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
-        if (snapshot?.optString("format") == NovaCloudBundle.FORMAT) {
-            return NovaCloudBundle.unpack(snapshot, null)
+        // New backups contain both encrypted payloads in one revision. Read the old vault
+        // table only for legacy two-row backups; never let a stale legacy row override a bundle.
+        val legacyVault = if (snapshot?.optString("format") == NovaCloudBundle.FORMAT) {
+            vaultVersion = null
+            null
+        } else {
+            fetchRow("nova_encrypted_vault", "payload", userId, token)
         }
-        // Read backups written by older Nova builds before the atomic bundle format.
-        val legacyVault = fetchRow("nova_encrypted_vault", "payload", userId, token)
         return NovaCloudBundle.unpack(snapshot, legacyVault)
     }
 
@@ -153,23 +201,23 @@ class NovaCloudSync(context: Context) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        // Keep browser data and password-vault ciphertext in one compare-and-swap row.
-        // This prevents a conflict between two separate writes from leaving a half-updated backup.
+        // Browser and vault ciphertext are one atomic compare-and-swap row. Two separate
+        // REST writes could leave a newer browser backup paired with an older password vault.
         val bundle = NovaCloudBundle.pack(snapshot, vault)
         upsertRow("nova_sync_state", "snapshot", userId, bundle, token, snapshotVersion)
-        snapshotVersion = null
+        vaultVersion = null // Legacy table is read-only after migration to the atomic bundle.
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
         val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
         val rows = org.json.JSONArray(result)
         if (rows.length() == 0) {
-            if (column == "snapshot") snapshotVersion = null
+            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
             return null
         }
         val row = rows.getJSONObject(0)
         val version = row.optString("updated_at").takeIf { it.isNotBlank() }
-        if (column == "snapshot") snapshotVersion = version
+        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
         return row.optJSONObject(column)
     }
 
@@ -184,9 +232,13 @@ class NovaCloudSync(context: Context) {
             request("PATCH", "/rest/v1/$table?user_id=eq.$userId&updated_at=eq.$encodedVersion", body.toString(), token,
                 "return=representation")
         }
-        if (org.json.JSONArray(response).length() == 0) {
+        val rows = org.json.JSONArray(response)
+        if (rows.length() == 0) {
             throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
         }
+        val newVersion = rows.getJSONObject(0).optString("updated_at").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Cloud sync response did not include its new revision")
+        if (column == "snapshot") snapshotVersion = newVersion else vaultVersion = newVersion
     }
 
     private fun validSession(): JSONObject? {
@@ -203,7 +255,7 @@ class NovaCloudSync(context: Context) {
 
     private fun request(method: String, path: String, body: String?, bearer: String? = null, prefer: String? = null): String {
         val connection = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
-            // Auth and refresh tokens must never be forwarded to a redirect target.
+            // Never forward an auth token to a redirect target.
             instanceFollowRedirects = false
             requestMethod = method
             connectTimeout = 20_000
@@ -220,8 +272,7 @@ class NovaCloudSync(context: Context) {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (status !in 200..299) {
-                val message = runCatching { JSONObject(response).optString("msg").ifBlank { JSONObject(response).optString("message") } }.getOrNull()
-                throw IllegalStateException(message?.take(180)?.ifBlank { "Cloud request failed ($status)" } ?: "Cloud request failed ($status)")
+                throw IllegalStateException(NovaEmailOtpPolicy.errorMessage(response, status))
             }
             return response
         } finally { connection.disconnect() }
