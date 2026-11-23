@@ -21,9 +21,12 @@ object BrowserUrlResolver {
         if (scheme in supportedSchemes) return value
         if (isBareHostname(value)) {
             val authority = value.substringBefore('/').substringBefore('?').substringBefore('#')
-            val host = authority.substringBeforeLast(':').takeIf {
-                authority.count { ch -> ch == ':' } == 1 && authority.substringAfterLast(':').all(Char::isDigit)
-            } ?: authority
+            val host = when {
+                authority.startsWith("[") -> authority.substringBefore("]") + "]"
+                authority.count { ch -> ch == ':' } == 1 &&
+                    authority.substringAfterLast(':').all(Char::isDigit) -> authority.substringBeforeLast(':')
+                else -> authority
+            }
             val local = host.equals("localhost", true) ||
                 host.endsWith(".local", true) ||
                 isPrivateIpv4(host) ||
