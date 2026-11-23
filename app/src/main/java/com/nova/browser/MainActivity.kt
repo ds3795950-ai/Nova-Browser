@@ -2387,18 +2387,26 @@ class MainActivity : ComponentActivity() {
 
 
     private fun enforceSessionBudget() {
-        val keep = tabs.sortedByDescending { if (it === currentTab()) Long.MAX_VALUE else it.lastAccess }
-            .take(4).toSet()
-        tabs.forEach { tab ->
-            if (tab !in keep && tab.browserEngine != null && tab.id != splitTabId) {
-                closeTabRuntime(tab)
-                tab.needsReload = tab.lastUrl != HOME_URL
-            }
+        val activeSessions = tabs.filter { it.browserEngine != null || it.session != null }
+        val candidates = activeSessions.map { tab ->
+            SessionBudgetPolicy.Candidate(tab.id, tab.lastAccess, tab.isPrivate, tab.isGuest)
         }
+        val visibleIds = buildSet {
+            currentTab()?.id?.let(::add)
+            splitTabId?.let(::add)
+        }
+        val memoryClassMb = getSystemService(android.app.ActivityManager::class.java).memoryClass
+        val limit = SessionBudgetPolicy.maxRetainedSessions(memoryClassMb)
+        val evictedIds = SessionBudgetPolicy.evictionCandidates(candidates, limit, visibleIds).toSet()
+        activeSessions.filter { it.id in evictedIds }.forEach { tab ->
+            closeTabRuntime(tab)
+            tab.needsReload = tab.lastUrl != HOME_URL
+        }
+
         val activeTab = currentTab()
         if (activeTab?.isGuest == true) resetPageStatus(getString(R.string.guest_session_status), 0)
         else if (activeTab?.isPrivate == true) resetPageStatus(getString(R.string.private_session_status), 0)
-        else setPageStatus(getString(R.string.memory_saver_status), 1)
+        else if (evictedIds.isNotEmpty()) setPageStatus(getString(R.string.memory_saver_status), 1)
     }
 
     private fun showFindBar() {
