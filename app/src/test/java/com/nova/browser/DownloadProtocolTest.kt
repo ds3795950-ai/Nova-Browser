@@ -2,9 +2,26 @@ package com.nova.browser
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DownloadProtocolTest {
+
+    @Test fun allowsSafeRedirectsAndRejectsDowngrades() {
+        assertTrue(DownloadProtocol.isRedirectAllowed("https://a.example/file", "https://b.example/file"))
+        assertTrue(DownloadProtocol.isRedirectAllowed("http://a.example/file", "https://b.example/file"))
+        assertTrue(DownloadProtocol.isRedirectAllowed("http://a.example/file", "http://b.example/file"))
+        assertFalse(DownloadProtocol.isRedirectAllowed("https://a.example/file", "http://b.example/file"))
+    }
+
+    @Test fun rejectsNonWebAndCredentialBearingRedirectTargets() {
+        assertFalse(DownloadProtocol.isRedirectAllowed("https://a.example", "ftp://b.example/file"))
+        assertFalse(DownloadProtocol.isRedirectAllowed("https://a.example", "javascript:alert(1)"))
+        assertFalse(DownloadProtocol.isRedirectAllowed("https://a.example", "https://user:pass@b.example/file"))
+        assertFalse(DownloadProtocol.isRedirectAllowed("https://a.example", "https://b.example:70000/file"))
+    }
+
     @Test fun parsesValidContentRange() {
         val range = DownloadProtocol.parseContentRange("bytes 1024-2047/4096")
         assertEquals(1024L, range?.start)

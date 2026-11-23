@@ -2,10 +2,24 @@ package com.nova.browser
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.Charset
+import java.net.URI
 
 /** Pure validation and filename rules shared by the download pipeline and JVM tests. */
 object DownloadProtocol {
     data class ContentRange(val start: Long, val end: Long, val total: Long?)
+
+
+    /** Rejects non-HTTP redirects, credential-bearing targets, invalid ports and HTTPS downgrades. */
+    fun isRedirectAllowed(fromUrl: String, toUrl: String): Boolean {
+        val from = runCatching { URI(fromUrl) }.getOrNull() ?: return false
+        val to = runCatching { URI(toUrl) }.getOrNull() ?: return false
+        val fromScheme = from.scheme?.lowercase() ?: return false
+        val toScheme = to.scheme?.lowercase() ?: return false
+        if (fromScheme !in setOf("http", "https") || toScheme !in setOf("http", "https")) return false
+        if (from.rawUserInfo != null || to.rawUserInfo != null) return false
+        if (to.rawAuthority.isNullOrBlank() || to.port !in -1..65535) return false
+        return fromScheme != "https" || toScheme != "http"
+    }
 
     fun parseContentRange(value: String?): ContentRange? {
         if (value.isNullOrBlank()) return null

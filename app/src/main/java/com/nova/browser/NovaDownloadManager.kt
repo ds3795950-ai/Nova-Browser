@@ -282,7 +282,11 @@ class NovaDownloadManager(
                 val location = connection.getHeaderField("Location")
                 connection.disconnect()
                 if (location.isNullOrBlank() || ++hops > 5) throw IllegalStateException("Too many redirects")
-                current = URL(current, location)
+                val next = URL(current, location)
+                if (!DownloadProtocol.isRedirectAllowed(current.toString(), next.toString())) {
+                    throw IllegalStateException("Blocked unsafe download redirect")
+                }
+                current = next
                 continue
             }
             return connection
