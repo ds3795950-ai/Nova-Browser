@@ -366,6 +366,38 @@ class MainActivity : ComponentActivity() {
         createTab(false, link.toString(), isGuest = currentTab()?.isGuest == true)
     }
 
+    private fun observeWindowLayout() {
+        lifecycleScope.launch {
+            WindowInfoTracker.getOrCreate(this@MainActivity)
+                .windowLayoutInfo(this@MainActivity)
+                .collect { info ->
+                    val fold = info.displayFeatures.filterIsInstance<FoldingFeature>()
+                        .firstOrNull { it.isSeparating }
+                    applyFoldAwareLayout(fold)
+                }
+        }
+    }
+
+    private fun applyFoldAwareLayout(fold: FoldingFeature?) {
+        separatingFold = fold
+        if (!::browserPane.isInitialized || !::browserView.isInitialized || !::secondaryPane.isInitialized) return
+        val sideBySide = if (fold?.isSeparating == true) {
+            fold.orientation == FoldingFeature.Orientation.VERTICAL
+        } else resources.configuration.screenWidthDp >= 600
+        browserPane.orientation = if (sideBySide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        if (sideBySide) {
+            browserView.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            secondaryPane.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            val hingeGap = if (fold?.isSeparating == true) fold.bounds.width().coerceAtLeast(0) else 0
+            secondaryPane.setPadding(hingeGap, 0, 0, 0)
+        } else {
+            browserView.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            secondaryPane.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            val hingeGap = if (fold?.isSeparating == true) fold.bounds.height().coerceAtLeast(0) else 0
+            secondaryPane.setPadding(0, hingeGap, 0, 0)
+        }
+    }
+
     private fun buildBrowserUi() {
         topChrome = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
