@@ -3,6 +3,7 @@ package com.nova.browser
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import java.net.URI
 
 /** Bounds and validates workspace data before it is encrypted or restored from cloud sync. */
 internal object NovaWorkspaceStoragePolicy {
@@ -67,6 +68,15 @@ internal object NovaWorkspaceStoragePolicy {
         return tombstones.toString()
     }
 
+
+    private fun isSafeWorkspaceUrl(value: String): Boolean {
+        if (value == "about:blank" || value == "about:reader") return true
+        val uri = runCatching { URI(value) }.getOrNull() ?: return false
+        return uri.scheme?.lowercase() in setOf("http", "https") &&
+            !uri.rawAuthority.isNullOrBlank() && uri.rawUserInfo == null &&
+            (uri.port == -1 || uri.port in 1..65535)
+    }
+
     private fun validateWorkspace(raw: String) {
         require(raw.isNotBlank() && raw.length <= MAX_WORKSPACE_CHARS) { "Saved workspace is too large or empty" }
         val workspace = try {
@@ -88,7 +98,9 @@ internal object NovaWorkspaceStoragePolicy {
             val url = tab.opt("url")
             val title = tab.opt("title")
             val group = tab.opt("group")
-            require(url is String && url.length <= MAX_URL_LENGTH) { "Saved workspace contains an invalid URL" }
+            require(url is String && url.length <= MAX_URL_LENGTH && isSafeWorkspaceUrl(url)) {
+                "Saved workspace contains an invalid or unsafe URL"
+            }
             require(title == null || title is String && title.length <= MAX_TITLE_LENGTH) { "Saved workspace contains an oversized title" }
             require(group == null || group is String && group.length <= MAX_NAME_LENGTH) { "Saved workspace contains an oversized tab group" }
         }
