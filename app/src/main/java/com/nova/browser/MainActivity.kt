@@ -5345,7 +5345,7 @@ private fun showCloudOtpEmailEntry() {
                 toast("Requesting sign-in code\u2026")
                 Thread {
                     runCatching { cloudSync.sendEmailOtp(address) }
-                        .onSuccess { runOnUiThread { showCloudOtp(address) } }
+                        .onSuccess { runOnUiThread { showCloudOtp(address, System.currentTimeMillis()) } }
                         .onFailure { runOnUiThread { toast("Could not send code: ${it.message ?: "Network error"}") } }
                 }.start()
             }
@@ -5505,23 +5505,46 @@ private fun showForgotPassword(prefillEmail: String = "") {
             .show()
     }
 
-    private fun showCloudOtp(email: String) {
+    private fun showCloudOtp(email: String, lastSentAtMillis: Long) {
         val input = EditText(this).apply { hint = "6-digit email code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; isSingleLine = true }
-        AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the six-digit code sent to $email")
+        val dialog = AlertDialog.Builder(this).setTitle("Verify email").setMessage("Enter the six-digit code sent to $email")
             .setView(input).setPositiveButton("Verify") { _, _ ->
-                val code = input.text.toString().trim()
+                val code = input.text.toString()
                 toast("Verifying code…")
                 Thread {
                     runCatching { cloudSync.verifyEmailOtp(email, code) }
                         .onSuccess { runOnUiThread { toast("Signed in to Nova Cloud"); showCloudAccount() } }
                         .onFailure { runOnUiThread { toast("Sign-in failed: ${it.message ?: "Try again"}") } }
                 }.start()
-            }.setNeutralButton("Resend code") { _, _ ->
-                Thread { runCatching { cloudSync.sendEmailOtp(email) }
-                    .onSuccess { runOnUiThread { showCloudOtp(email); toast("A new code was requested") } }
-                    .onFailure { runOnUiThread { toast("Could not resend: ${it.message}") } }
+            }.setNeutralButton("Resend code", null).setNegativeButton("Cancel", null).create()
+
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        var lastRequestAt = lastSentAtMillis
+        val ticker = object : Runnable {
+            override fun run() {
+                val remaining = NovaEmailOtpPolicy.remainingCooldownSeconds(lastRequestAt, System.currentTimeMillis())
+                val resend = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                resend.isEnabled = remaining == 0L
+                resend.text = if (remaining > 0L) "Resend in ${remaining}s" else "Resend code"
+                if (remaining > 0L) handler.postDelayed(this, 1_000L)
+            }
+        }
+        dialog.setOnShowListener {
+            val resend = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            resend.setOnClickListener {
+                if (NovaEmailOtpPolicy.remainingCooldownSeconds(lastRequestAt, System.currentTimeMillis()) > 0L) return@setOnClickListener
+                lastRequestAt = System.currentTimeMillis()
+                ticker.run()
+                Thread {
+                    runCatching { cloudSync.sendEmailOtp(email) }
+                        .onSuccess { runOnUiThread { dialog.dismiss(); showCloudOtp(email, lastRequestAt); toast("A new code was requested") } }
+                        .onFailure { runOnUiThread { toast("Could not resend: ${it.message ?: "Network error"}") } }
                 }.start()
-            }.setNegativeButton("Cancel", null).show()
+            }
+            ticker.run()
+        }
+        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
+        dialog.show()
     }
 
     private fun showSyncPassphrase() {

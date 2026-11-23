@@ -161,8 +161,7 @@ class NovaCloudSync(context: Context) {
     }
 
     fun verifyEmailOtp(email: String, code: String) {
-        val cleanCode = code.trim()
-        require(cleanCode.matches(Regex("[0-9]{6}"))) { "Enter the numeric code from your email" }
+        val cleanCode = NovaEmailOtpPolicy.normalizeCode(code)
         val result = request("POST", "/auth/v1/verify", JSONObject().put("type", "email")
             .put("email", email.trim().lowercase()).put("token", cleanCode).toString())
         val session = JSONObject(result)
@@ -273,8 +272,7 @@ class NovaCloudSync(context: Context) {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (status !in 200..299) {
-                val message = runCatching { JSONObject(response).optString("msg").ifBlank { JSONObject(response).optString("message") } }.getOrNull()
-                throw IllegalStateException(message?.take(180)?.ifBlank { "Cloud request failed ($status)" } ?: "Cloud request failed ($status)")
+                throw IllegalStateException(NovaEmailOtpPolicy.errorMessage(response, status))
             }
             return response
         } finally { connection.disconnect() }
