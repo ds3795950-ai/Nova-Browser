@@ -5549,7 +5549,15 @@ private fun showForgotPassword(prefillEmail: String = "") {
                 ticker.run()
                 Thread {
                     runCatching { cloudSync.sendEmailOtp(email) }
-                        .onSuccess { runOnUiThread { dialog.dismiss(); showCloudOtp(email, lastRequestAt); toast("A new code was requested") } }
+                        .onSuccess {
+                            runOnUiThread {
+                                if (dialog.isShowing) {
+                                    dialog.dismiss()
+                                    showCloudOtp(email, lastRequestAt)
+                                    toast("A new code was requested")
+                                }
+                            }
+                        }
                         .onFailure { runOnUiThread { toast("Could not resend: ${it.message ?: "Network error"}") } }
                 }.start()
             }
