@@ -13,13 +13,17 @@ permissions:
 jobs:
   emulator-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      # Some hosted runners do not expose KVM. Allow the emulator to fall back
-      # to the Android emulator's software CPU translator instead of timing out.
-      ANDROID_I_WANT_MY_TCG: "yes"
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Public-repo hosted Linux runners expose /dev/kvm; without this rule the emulator cannot use it.
+      # Software (TCG) emulation of Android 16 never finished booting, so the job hung until timeout.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -44,10 +48,9 @@ jobs:
           cores: 4
           ram-size: 4096
           heap-size: 512
-          # Hosted runners may not expose KVM. Force the emulator's software CPU
-          # translator and avoid snapshot restore so Android 16 can boot reliably.
+          disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
-          emulator-boot-timeout: 1800
+          emulator-boot-timeout: 900
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
           script: gradle :app:connectedDebugAndroidTest --stacktrace
