@@ -55,12 +55,10 @@ jobs:
           disable-animations: false
           script: |
             set +e
-            gradle :app:connectedDebugAndroidTest \
-              -Pandroid.testInstrumentationRunnerArguments.notClass=com.nova.browser.GuestTorRoutingSmokeTest \
-              --stacktrace
+            gradle :app:connectedDebugAndroidTest --stacktrace
             TEST_STATUS=$?
-            mkdir -p app/build/reports/androidTests/connected/debug
-            adb logcat -d -t 4000 > app/build/reports/androidTests/connected/debug/logcat.txt 2>&1 || true
+            mkdir -p android16-test-diagnostics
+            adb logcat -d -t 4000 > android16-test-diagnostics/logcat.txt 2>&1 || true
             exit "$TEST_STATUS"
       - name: Upload Android 16 test reports and logcat
         if: always()
@@ -70,5 +68,6 @@ jobs:
           path: |
             app/build/reports/androidTests/connected/debug/**
             app/build/outputs/androidTest-results/connected/debug/**
+            android16-test-diagnostics/**
           if-no-files-found: warn
           retention-days: 7
