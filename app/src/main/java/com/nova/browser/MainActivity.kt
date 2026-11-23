@@ -3012,6 +3012,13 @@ class MainActivity : ComponentActivity() {
                 val workspaceTombstones = runCatching { JSONObject(prefs.getString("workspace_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
                 val createdAt = maxOf(System.currentTimeMillis(), workspaceTombstones.optLong(name) + 1L)
                 snapshots.add(JSONObject().put("name", name).put("createdAt", createdAt).put("tabs", urls).toString())
+                runCatching {
+                    NovaWorkspaceStoragePolicy.serialize(snapshots)
+                    NovaWorkspaceStoragePolicy.validateTombstones(workspaceTombstones.toString())
+                }.onFailure {
+                    toast("Workspace data is too large or invalid")
+                    return@setPositiveButton
+                }
                 prefs.edit().putStringSet("saved_workspaces", snapshots).apply()
                 toast("Workspace saved")
             }.setNegativeButton("Cancel", null).show()
@@ -3084,6 +3091,10 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Saved workspaces")) return
         val saved = prefs.getStringSet("saved_workspaces", emptySet())?.toList().orEmpty()
         if (saved.isEmpty()) { toast("No saved workspaces yet"); return }
+        if (runCatching { NovaWorkspaceStoragePolicy.serialize(saved.toSet()) }.isFailure) {
+            toast("Saved workspace data is damaged")
+            return
+        }
         val labels = saved.map { runCatching { JSONObject(it).optString("name", "Workspace") }.getOrDefault("Workspace") + " · long-press to delete" }
         val list = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels) }
         val dialog = AlertDialog.Builder(this).setTitle("Saved workspaces").setView(list).setNegativeButton("Close", null).create()
@@ -3107,6 +3118,7 @@ class MainActivity : ComponentActivity() {
     private fun restoreWorkspace(raw: String) {
         if (denyGuestAccess("Restoring workspaces")) return
         runCatching {
+            NovaWorkspaceStoragePolicy.serialize(setOf(raw))
             val data = JSONObject(raw).getJSONArray("tabs")
             val firstNewIndex = tabs.size
             for (i in 0 until data.length()) {
@@ -5575,6 +5587,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
+            NovaSyncSnapshotRepository.validate(merged)
             // Validate without mutating local credentials. A failed upload must not apply remote
             // deletions or partial merges to the device's existing vault.
             passwordVault.validateSyncBundle(mergedVault)

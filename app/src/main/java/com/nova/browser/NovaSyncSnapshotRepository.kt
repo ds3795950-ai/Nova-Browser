@@ -39,16 +39,23 @@ internal object NovaSyncSnapshotRepository {
                     if (url.startsWith("http://") || url.startsWith("https://")) out.put(JSONObject().put("url", url).put("title", Uri.parse(url).host ?: url).put("visitedAt", 0L))
                 }
             }
-            val workspaces = JSONArray()
-            p.getStringSet(key("saved_workspaces", engine), emptySet())?.forEach { raw ->
-                runCatching { JSONObject(raw) }.getOrNull()?.takeIf { it.optString("engine") == engine.name }?.let(workspaces::put)
+            val workspaceEntries = (p.getStringSet(key("saved_workspaces", engine), emptySet()) ?: emptySet())
+                .map { raw -> JSONObject(raw).put("engine", engine.name).toString() }.toSet()
+            val validatedWorkspaceEntries = NovaWorkspaceStoragePolicy.parse(
+                NovaWorkspaceStoragePolicy.serialize(workspaceEntries)
+            )
+            val workspaces = JSONArray().also { array ->
+                validatedWorkspaceEntries.forEach { array.put(JSONObject(it)) }
             }
+            val workspaceTombstones = NovaWorkspaceStoragePolicy.validateTombstones(
+                p.getString(key("workspace_tombstones", engine), "{}") ?: "{}"
+            )
             profiles.put(engine.name, JSONObject()
                 .put("bookmarks", bookmarks)
                 .put("history", history)
                 .put("workspaces", workspaces)
                 .put("bookmark_tombstones", readObject(p.getString(key("bookmark_tombstones", engine), "{}")))
-                .put("workspace_tombstones", readObject(p.getString(key("workspace_tombstones", engine), "{}")))
+                .put("workspace_tombstones", JSONObject(workspaceTombstones))
                 .put("history_cleared_at", p.getLong(key("history_cleared_at", engine), 0L))
                 .put("bookmark_folders", JSONArray(p.getStringSet(key("bookmark_folders", engine), emptySet())?.toList() ?: emptyList<String>()))
             )
@@ -58,10 +65,39 @@ internal object NovaSyncSnapshotRepository {
             .put("show_home_shortcuts", p.getBoolean("show_home_shortcuts", true))
             .put("font_scale_index", p.getInt("font_scale_index", 2))
             .put("desktop_sites", JSONArray(p.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
-        return JSONObject().put("schema", 4).put("profiles", profiles).put("settings", settings)
+        val snapshot = JSONObject().put("schema", 4).put("profiles", profiles).put("settings", settings)
+        validate(snapshot)
+        return snapshot
+    }
+
+    /** Validate cloud workspace payloads before upload or local mutation. */
+    fun validate(snapshot: JSONObject) {
+        val profiles = snapshot.optJSONObject("profiles") ?: return
+        for (engine in BrowserEngineType.values()) {
+            if (!profiles.has(engine.name)) continue
+            val profile = profiles.optJSONObject(engine.name)
+                ?: throw IllegalArgumentException("Cloud browser profile is malformed")
+            val workspaces = profile.optJSONArray("workspaces") ?: JSONArray()
+            val entries = linkedSetOf<String>()
+            for (i in 0 until workspaces.length()) {
+                val item = workspaces.optJSONObject(i)
+                    ?: throw IllegalArgumentException("Cloud workspace entry is malformed")
+                require(item.optString("engine") == engine.name) { "Cloud workspace belongs to a different browser engine" }
+                entries.add(item.toString())
+            }
+            NovaWorkspaceStoragePolicy.serialize(entries)
+            val rawTombstones = profile.opt("workspace_tombstones")
+            val tombstones = when (rawTombstones) {
+                null -> JSONObject()
+                is JSONObject -> rawTombstones
+                else -> throw IllegalArgumentException("Cloud workspace deletion history is malformed")
+            }
+            NovaWorkspaceStoragePolicy.validateTombstones(tombstones.toString())
+        }
     }
 
     fun apply(context: Context, snapshot: JSONObject) {
+        validate(snapshot)
         val p = prefs(context)
         val editor = p.edit()
         val profiles = snapshot.optJSONObject("profiles")
@@ -83,12 +119,17 @@ internal object NovaSyncSnapshotRepository {
                     .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && it.optLong("visitedAt") > clearedAt }
                     .sortedByDescending { it.optLong("visitedAt") }.take(500)
                 val historyArray = JSONArray().also { array -> safeHistory.forEach(array::put) }
-                val workspaces = mutableSetOf<String>()
+                val workspaceEntries = linkedSetOf<String>()
                 val workspaceArray = profile.optJSONArray("workspaces") ?: JSONArray()
                 for (i in 0 until workspaceArray.length()) {
-                    val item = workspaceArray.optJSONObject(i) ?: continue
-                    if (item.optString("engine") == engine.name) workspaces.add(item.toString())
+                    val item = workspaceArray.getJSONObject(i)
+                    if (item.optString("engine") == engine.name) {
+                        workspaceEntries.add(JSONObject(item.toString()).apply { remove("engine") }.toString())
+                    }
                 }
+                val workspaces = NovaWorkspaceStoragePolicy.parse(
+                    NovaWorkspaceStoragePolicy.serialize(workspaceEntries)
+                ).toMutableSet()
                 val folders = profile.optJSONArray("bookmark_folders").toStringSet()
                 editor.putString(key("bookmarks_v2", engine), safeBookmarks.toString())
                     .putStringSet(key("bookmarks", engine), urls)
