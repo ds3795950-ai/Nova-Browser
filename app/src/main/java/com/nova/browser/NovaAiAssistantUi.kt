@@ -659,7 +659,7 @@ internal class NovaAiAssistantUi(
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         AlertDialog.Builder(context).setTitle("${provider.label} API key")
-            .setMessage("Stored encrypted with Android Keystore. Nova sends the key directly to ${provider.label}'s official API.")
+            .setMessage("Stored encrypted with Android Keystore. Nova sends the key directly to ${provider.label}'s official API, not through a Nova server. Provider API usage and billing are controlled by ${provider.label}; a consumer-app subscription does not necessarily include API credits.")
             .setView(field)
             .setPositiveButton("Save") { _, _ ->
                 runCatching { store.setKey(provider, field.text.toString()) }
