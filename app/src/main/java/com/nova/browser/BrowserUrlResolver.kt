@@ -72,7 +72,7 @@ object BrowserUrlResolver {
         if (host.isBlank() || ':' in host) return false
 
         val ascii = runCatching {
-            IDN.toASCII(host.trimEnd('.'), IDN.USE_STD3_ASCII_RULES).lowercase()
+            IDN.toASCII(host.trimEnd('.')).lowercase()
         }.getOrNull() ?: return false
         if (ascii == "localhost") return true
         if (ascii.matches(Regex("[0-9.]+"))) {
@@ -87,9 +87,9 @@ object BrowserUrlResolver {
 
     private fun validDnsLabel(label: String): Boolean =
         label.length in 1..63 &&
-            label.firstOrNull()?.isLetterOrDigit() == true &&
-            label.lastOrNull()?.isLetterOrDigit() == true &&
-            label.all { it.isLetterOrDigit() || it == '-' }
+            (label.firstOrNull()?.isLetterOrDigit() == true || label.firstOrNull() == '_') &&
+            (label.lastOrNull()?.isLetterOrDigit() == true || label.lastOrNull() == '_') &&
+            label.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
     private fun isPrivateIpv4(host: String): Boolean {
         val parts = host.split('.').map { it.toIntOrNull() ?: return false }

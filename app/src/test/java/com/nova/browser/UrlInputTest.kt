@@ -119,6 +119,7 @@ class UrlInputTest {
 
     @Test fun trailingDotHostnameIsNavigated() {
         assertEquals("https://example.com.", BrowserUrlResolver.resolve("example.com."))
+    }
 
     @Test fun localDomainUsesHttp() {
         assertEquals("http://router.local", BrowserUrlResolver.resolve("router.local"))
