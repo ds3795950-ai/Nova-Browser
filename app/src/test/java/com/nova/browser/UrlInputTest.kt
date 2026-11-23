@@ -57,8 +57,23 @@ class UrlInputTest {
         assertEquals("http://192.168.1.1:8080/admin", BrowserUrlResolver.resolve("192.168.1.1:8080/admin"))
     }
 
+    @Test fun privateAddressRangesUseHttp() {
+        assertEquals("http://10.0.0.4", BrowserUrlResolver.resolve("10.0.0.4"))
+        assertEquals("http://172.20.0.4", BrowserUrlResolver.resolve("172.20.0.4"))
+        assertEquals("http://127.0.0.1", BrowserUrlResolver.resolve("127.0.0.1"))
+        assertEquals("http://169.254.1.2", BrowserUrlResolver.resolve("169.254.1.2"))
+    }
+
+    @Test fun publicIpv4UsesHttps() {
+        assertEquals("https://8.8.8.8", BrowserUrlResolver.resolve("8.8.8.8"))
+    }
+
     @Test fun decimalNumberIsSearchedNotNavigated() {
         assertEquals("https://www.google.com/search?q=3.14", BrowserUrlResolver.resolve("3.14"))
+    }
+
+    @Test fun invalidIpv4IsSearched() {
+        assertEquals("https://www.google.com/search?q=999.999.1.1", BrowserUrlResolver.resolve("999.999.1.1"))
     }
 
     @Test fun emailIsSearched() {
@@ -73,12 +88,30 @@ class UrlInputTest {
         assertEquals("view-source:https://example.com", BrowserUrlResolver.resolve("view-source:https://example.com"))
     }
 
+    @Test fun supportedCustomSchemesPassThrough() {
+        assertEquals("mailto:hello@example.com", BrowserUrlResolver.resolve("mailto:hello@example.com"))
+        assertEquals("intent://scan/#Intent;scheme=zxing;end", BrowserUrlResolver.resolve("intent://scan/#Intent;scheme=zxing;end"))
+    }
+
+    @Test fun javascriptSchemeIsTreatedAsSearchText() {
+        assertEquals("https://www.google.com/search?q=javascript%3Aalert%281%29", BrowserUrlResolver.resolve("javascript:alert(1)"))
+    }
+
     @Test fun domainWithPathAndQuery() {
         assertEquals("https://example.com/a?b=1", BrowserUrlResolver.resolve("example.com/a?b=1"))
     }
 
     @Test fun domainWithPort() {
         assertEquals("https://example.com:8080", BrowserUrlResolver.resolve("example.com:8080"))
+    }
+
+    @Test fun acceptsMaximumValidPort() {
+        assertEquals("https://example.com:65535", BrowserUrlResolver.resolve("example.com:65535"))
+    }
+
+    @Test fun rejectsInvalidPorts() {
+        assertEquals("https://www.google.com/search?q=example.com%3A70000", BrowserUrlResolver.resolve("example.com:70000"))
+        assertEquals("https://www.google.com/search?q=example.com%3A0", BrowserUrlResolver.resolve("example.com:0"))
     }
 
     @Test fun unicodeDomainIsNavigated() {
@@ -91,5 +124,21 @@ class UrlInputTest {
 
     @Test fun trailingDotHostnameIsNavigated() {
         assertEquals("https://example.com.", BrowserUrlResolver.resolve("example.com."))
+    }
+
+    @Test fun localDomainUsesHttp() {
+        assertEquals("http://router.local", BrowserUrlResolver.resolve("router.local"))
+    }
+
+    @Test fun ipv6LoopbackUsesHttp() {
+        assertEquals("http://[::1]:8080", BrowserUrlResolver.resolve("[::1]:8080"))
+    }
+
+    @Test fun publicIpv6UsesHttps() {
+        assertEquals("https://[2001:4860:4860::8888]", BrowserUrlResolver.resolve("[2001:4860:4860::8888]"))
+    }
+
+    @Test fun invalidIpv6IsSearched() {
+        assertEquals("https://www.google.com/search?q=%5B2001%3Adb8%3A%3Azz%5D", BrowserUrlResolver.resolve("[2001:db8::zz]"))
     }
 }
