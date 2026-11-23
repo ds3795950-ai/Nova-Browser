@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "name": "Nova AI Page Reader",
+  "version": "1.0.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "nova-ai-reader@nova.browser"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "reader.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

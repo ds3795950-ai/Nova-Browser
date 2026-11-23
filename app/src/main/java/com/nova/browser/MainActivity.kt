@@ -166,6 +166,8 @@ class MainActivity : ComponentActivity() {
     private var downloadsItems: List<NovaDownloadManager.Item> = emptyList()
     private lateinit var searchEngineButton: Button
     private val tabs = mutableListOf<BrowserTab>()
+    private var aiPageReaderExtension: WebExtension? = null
+    private val aiPageText = mutableMapOf<String, String>()
     private var activeIndex = 0
     private var lastUiMode = 0
     private var lastFontScale = 1f
@@ -239,6 +241,7 @@ class MainActivity : ComponentActivity() {
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = sharedRuntime ?: GeckoRuntime.create(applicationContext).also { sharedRuntime = it }
+        installAiPageReader()
         val webScheme = when (prefs.getString("web_color_scheme", "system")) {
             "dark" -> GeckoRuntimeSettings.COLOR_SCHEME_DARK
             "light" -> GeckoRuntimeSettings.COLOR_SCHEME_LIGHT
@@ -1031,6 +1034,7 @@ class MainActivity : ComponentActivity() {
         tab.browserEngine = engine
         engine.installDelegates { configureSession(it, tab) }
         session.open(runtime)
+        attachAiPageReader(session, tab)
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
             engine.loadUrl(tab.lastUrl)
             tab.needsReload = false
@@ -2261,6 +2265,7 @@ class MainActivity : ComponentActivity() {
         }
         session.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
+                aiPageText.remove(tab.id)
                 if (!(tab.isErrorPage && url.startsWith("data:"))) tab.isErrorPage = false
                 tab.isLoading = true
                 if (!tab.isErrorPage) tab.securityStatus = ""
@@ -3944,25 +3949,64 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showAiAssistant() {
-        val providers = AiAssistantRouter.Provider.values()
-        AlertDialog.Builder(this).setTitle("Choose browser AI")
-            .setItems(providers.map { it.label }.toTypedArray()) { _, selected ->
-                val provider = providers[selected]
-                val prompt = EditText(this).apply { hint = "Ask ${provider.label} anything…"; minLines = 2; setSingleLine(false) }
-                val includePage = CheckBox(this).apply { text = "Include current page URL in the prompt"; isChecked = false }
-                val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(prompt); addView(includePage) }
-                AlertDialog.Builder(this).setTitle("Ask ${provider.label}")
-                    .setMessage("Your prompt will be sent to ${provider.label} when you press Send. If you enable the checkbox, Nova also includes only the current page URL—not the page contents.")
-                    .setView(content)
-                    .setPositiveButton("Send") { _, _ ->
-                        val question = prompt.text.toString().trim()
-                        if (question.isBlank()) { toast("Enter a question first"); return@setPositiveButton }
-                        val tab = currentTab()
-                        val page = if (includePage.isChecked) tab?.lastUrl else null
-                        val url = AiAssistantRouter.buildUrl(provider, question, page)
-                        createTab(isPrivate = tab?.isPrivate == true, url = url, isGuest = tab?.isGuest == true)
-                    }.setNegativeButton("Cancel", null).show()
-            }.setNegativeButton("Cancel", null).show()
+        if (denyGuestAccess("AI Assistant")) return
+        val tab = currentTab()
+        NovaAiAssistantUi(
+            context = this,
+            store = NovaAiSecureStore(this),
+            requestPageText = { callback ->
+                val active = currentTab()
+                if (active == null || active.isPrivate || active.isGuest ||
+                    active.engineType != BrowserEngineType.GECKOVIEW ||
+                    active.lastUrl == HOME_URL || active.lastUrl.startsWith("about:") ||
+                    active.lastUrl.startsWith("chrome:")) {
+                    callback(null)
+                } else {
+                    callback(aiPageText[active.id])
+                }
+            },
+            persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
+            notify = ::toast
+        ).show()
+    }
+
+    private fun installAiPageReader() {
+        runtime.getWebExtensionController()
+            .ensureBuiltIn("resource://android/assets/nova_ai_reader/", "nova-ai-reader@nova.browser")
+            .accept({ extension ->
+                aiPageReaderExtension = extension
+                tabs.forEach { tab ->
+                    if (!tab.isPrivate && !tab.isGuest) tab.session?.let { attachAiPageReader(it, tab) }
+                }
+            }, { error ->
+                runOnUiThread { if (!isFinishing && !isDestroyed) toast("AI page reader unavailable: ${error?.localizedMessage ?: "extension install failed"}") }
+            })
+    }
+
+    private fun attachAiPageReader(session: GeckoSession, tab: BrowserTab) {
+        if (tab.isPrivate || tab.isGuest) return
+        val extension = aiPageReaderExtension ?: return
+        session.getWebExtensionController().setMessageDelegate(
+            extension,
+            object : WebExtension.MessageDelegate {
+                override fun onMessage(
+                    nativeApp: String,
+                    message: Any,
+                    sender: WebExtension.MessageSender
+                ): GeckoResult<Any>? {
+                    if (nativeApp != "nova_ai_reader") return null
+                    val payload = message as? JSONObject ?: return null
+                    if (payload.optString("type") != "nova_page_text") return null
+                    val source = sender.session ?: session
+                    val sourceTab = tabs.firstOrNull { it.session === source } ?: return null
+                    if (sourceTab.isPrivate || sourceTab.isGuest) return null
+                    val text = payload.optString("text").take(24000)
+                    if (text.isNotBlank()) aiPageText[sourceTab.id] = text
+                    return null
+                }
+            },
+            "nova_ai_reader"
+        )
     }
 
     private fun showExtensions() {
