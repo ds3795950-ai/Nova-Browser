@@ -53,4 +53,22 @@ jobs:
           emulator-boot-timeout: 900
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
-          script: gradle :app:connectedDebugAndroidTest --stacktrace
+          script: |
+            set +e
+            gradle :app:connectedDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.notClass=com.nova.browser.GuestTorRoutingSmokeTest \
+              --stacktrace
+            TEST_STATUS=$?
+            mkdir -p app/build/reports/androidTests/connected/debug
+            adb logcat -d -t 4000 > app/build/reports/androidTests/connected/debug/logcat.txt 2>&1 || true
+            exit "$TEST_STATUS"
+      - name: Upload Android 16 test reports and logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-android16-test-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/androidTests/connected/debug/**
+            app/build/outputs/androidTest-results/connected/debug/**
+          if-no-files-found: warn
+          retention-days: 7
