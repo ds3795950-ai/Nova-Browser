@@ -80,20 +80,49 @@ internal class NovaAiSecureStore(context:Context) {
         require(value.matches(Regex("[A-Za-z0-9._:-]{1,159}"))) { "Invalid model identifier" }
         check(p.edit().putString("model_${provider.name}",value).commit())
     }
+    private companion object {
+        const val MAX_HISTORY_CHARS = 512 * 1024
+        const val MAX_HISTORY_MESSAGE_CHARS = 32 * 1024
+        const val MAX_ENCRYPTED_HISTORY_CHARS = 768 * 1024
+    }
+
     private fun readMessageArray(a:JSONArray):MutableList<NovaAiMessage> =
-        (0 until a.length()).mapNotNull { i -> runCatching { val o=a.getJSONObject(i); NovaAiMessage(o.getString("role"),o.getString("text"),o.optLong("time")) }.getOrNull() }.toMutableList()
+        (0 until minOf(a.length(), 100)).mapNotNull { i ->
+            runCatching {
+                val o=a.getJSONObject(i)
+                val role=o.getString("role")
+                if (role != "user" && role != "assistant") return@runCatching null
+                val text=o.getString("text")
+                if (text.length > MAX_HISTORY_MESSAGE_CHARS) return@runCatching null
+                NovaAiMessage(role,text,o.optLong("time"))
+            }.getOrNull()
+        }.toMutableList()
     private fun sessions():MutableList<MutableList<NovaAiMessage>> = runCatching {
-        val raw=decrypt(p.getString("history","")!!)
+        val encrypted = p.getString("history", "") ?: ""
+        if (encrypted.isBlank() || encrypted.length > MAX_ENCRYPTED_HISTORY_CHARS) return@runCatching mutableListOf()
+        val raw=decrypt(encrypted)
+        if (raw.length > MAX_HISTORY_CHARS + 128 * 1024) return@runCatching mutableListOf()
         if(raw.trimStart().startsWith("{")) {
             val all=JSONObject(raw).optJSONArray("sessions") ?: JSONArray()
-            (0 until all.length()).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
+            (0 until minOf(all.length(), 20)).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
         } else mutableListOf(readMessageArray(JSONArray(raw)))
     }.getOrDefault(mutableListOf())
     private fun saveSessions(all:List<List<NovaAiMessage>>) {
+        var remaining = MAX_HISTORY_CHARS
+        val bounded = all.takeLast(20).asReversed().map { session ->
+            session.takeLast(100).asReversed().mapNotNull { message ->
+                if (remaining <= 0) null else {
+                    val safeText = message.text.take(minOf(MAX_HISTORY_MESSAGE_CHARS, remaining))
+                    remaining -= safeText.length
+                    if (safeText.isBlank() && message.text.isNotBlank()) null
+                    else NovaAiMessage(message.role, safeText, message.time)
+                }
+            }.asReversed()
+        }.asReversed()
         val root=JSONObject(); val array=JSONArray()
-        all.takeLast(20).forEach { session ->
+        bounded.forEach { session ->
             val entries=JSONArray()
-            session.takeLast(100).forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)) }
+            session.forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)) }
             array.put(entries)
         }
         root.put("sessions",array)

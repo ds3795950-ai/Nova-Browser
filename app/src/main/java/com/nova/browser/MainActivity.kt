@@ -2985,6 +2985,7 @@ class MainActivity : ComponentActivity() {
         val wasActive = index == activeIndex
         val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
+        aiPageText.remove(removed.id)
         if (removed.id == splitTabId) exitSplitScreen()
         closeTabRuntime(removed)
         removed.thumbnail?.recycle(); removed.thumbnail = null
@@ -3793,6 +3794,7 @@ class MainActivity : ComponentActivity() {
         val activeIdBeforeClose = currentTab()?.id
         guestIndices.forEach { index ->
             val removed = tabs.removeAt(index)
+        aiPageText.remove(removed.id)
             if (removed.id == splitTabId) exitSplitScreen()
             closeTabRuntime(removed)
         }
@@ -5307,6 +5309,7 @@ private fun showQuickSettings() {
                 val activeId = currentTab()?.id
                 tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
                     val removed = tabs.removeAt(index)
+        aiPageText.remove(removed.id)
                     if (removed.id == splitTabId) exitSplitScreen()
                     closeTabRuntime(removed)
                     removed.thumbnail?.recycle(); removed.thumbnail = null
@@ -5851,6 +5854,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
             if (::runtime.isInitialized && guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
         }
         tabs.clear()
+        aiPageText.clear()
         // Keep the process-wide GeckoRuntime alive; shutting it down can terminate in-flight downloads.
         super.onDestroy()
     }
