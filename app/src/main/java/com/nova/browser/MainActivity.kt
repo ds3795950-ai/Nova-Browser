@@ -3521,7 +3521,6 @@ class MainActivity : ComponentActivity() {
             },
             getString(R.string.open) to { navigate(entry.url) }
         ))
-    }
 
     private fun editBookmark(entry: BookmarkEntry, onChanged: () -> Unit = {}) {
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
