@@ -168,6 +168,9 @@ class MainActivity : ComponentActivity() {
     private val addressSuggestionHandler = Handler(Looper.getMainLooper())
     private var pendingRemoteSuggestion: Runnable? = null
     private var activeRemoteSuggestionFuture: java.util.concurrent.Future<*>? = null
+    private var activeRemoteSuggestionCancellation: RemoteSearchSuggestions.Cancellation? = null
+    @Volatile private var remoteSuggestionTabId: String? = null
+    @Volatile private var remoteSuggestionsAllowedForActiveTab = false
     private val remoteSuggestionExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var separatingFold: FoldingFeature? = null
     private lateinit var addressSuggestionsAdapter: ArrayAdapter<BrowserSuggestion>
@@ -2689,6 +2692,7 @@ class MainActivity : ComponentActivity() {
 
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
+        cancelPendingRemoteSuggestions()
         if (currentTab()?.isGuest == true && !tabs[index].isGuest) {
             toast("Normal tabs are hidden in Guest Mode")
             return
@@ -2834,6 +2838,10 @@ class MainActivity : ComponentActivity() {
     private fun cancelPendingRemoteSuggestions() {
         pendingRemoteSuggestion?.let(addressSuggestionHandler::removeCallbacks)
         pendingRemoteSuggestion = null
+        remoteSuggestionsAllowedForActiveTab = false
+        remoteSuggestionTabId = null
+        activeRemoteSuggestionCancellation?.cancel()
+        activeRemoteSuggestionCancellation = null
         activeRemoteSuggestionFuture?.cancel(true)
         activeRemoteSuggestionFuture = null
     }
@@ -2844,6 +2852,10 @@ class MainActivity : ComponentActivity() {
         val enabled = prefs.getBoolean("remote_search_suggestions", false)
         if (!RemoteSearchSuggestionPolicy.shouldFetch(enabled, tab.isPrivate, tab.isGuest, query)) return
         val requestedSearchEngine = searchEngine
+        val cancellation = RemoteSearchSuggestions.Cancellation()
+        activeRemoteSuggestionCancellation = cancellation
+        remoteSuggestionTabId = tab.id
+        remoteSuggestionsAllowedForActiveTab = enabled && !tab.isPrivate && !tab.isGuest
         val request = Runnable {
             // The user may switch tabs/modes during the debounce interval. Re-check before
             // making any network request, not only after the response returns.
@@ -2857,9 +2869,14 @@ class MainActivity : ComponentActivity() {
                     query
                 )) return@Runnable
             activeRemoteSuggestionFuture = remoteSuggestionExecutor.submit {
-                if (Thread.currentThread().isInterrupted) return@submit
-                val remote = RemoteSearchSuggestions.fetch(query, requestedSearchEngine)
-                if (Thread.currentThread().isInterrupted) return@submit
+                if (Thread.currentThread().isInterrupted || cancellation.isCancelled()) return@submit
+                val remote = RemoteSearchSuggestions.fetch(query, requestedSearchEngine, cancellation) {
+                    !isFinishing && !isDestroyed &&
+                        remoteSuggestionsAllowedForActiveTab &&
+                        remoteSuggestionTabId == tab.id &&
+                        prefs.getBoolean("remote_search_suggestions", false)
+                }
+                if (Thread.currentThread().isInterrupted || cancellation.isCancelled()) return@submit
                 runOnUiThread {
                     val current = currentTab()
                     if (isDestroyed || current !== tab || !::addressBar.isInitialized || !addressBar.hasFocus() ||
