@@ -651,6 +651,7 @@ internal class NovaAiAssistantUi(
 
     private fun showCurrentConversation() {
         feed.removeAllViews()
+        messageViews.clear()
         if (messages.isEmpty()) {
             showWelcome()
             status.text = "No messages in this conversation yet"
@@ -881,6 +882,11 @@ internal class NovaAiAssistantUi(
         feed.addView(block, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(10)
         })
+        messageViews += block
+        while (messageViews.size > maxRenderedMessages) {
+            val oldest = messageViews.removeAt(0)
+            (oldest.parent as? android.view.ViewGroup)?.removeView(oldest)
+        }
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
@@ -901,11 +907,19 @@ internal class NovaAiAssistantUi(
                     .setMessage(recent[index].text).setPositiveButton("Close", null).show()
             }
             .setNeutralButton("Clear history") { _, _ ->
+                if (persistHistory && !store.clear()) {
+                    notify("Could not clear encrypted conversation history. Please retry.")
+                    return@setNeutralButton
+                }
                 conversationGeneration++
                 busy = false
-                if (persistHistory) store.clear()
                 messages.clear()
+                messageViews.clear()
                 feed.removeAllViews()
+                attachedPageText = null
+                contextChip.visibility = View.GONE
+                pageContextTransferAllowedProviders.clear()
+                pageContextTransferAllowedProviders += provider
                 showWelcome()
                 notify("Conversation history cleared")
             }
