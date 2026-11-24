@@ -1250,7 +1250,7 @@ class MainActivity : ComponentActivity() {
         // Never forward page-controlled components, selectors, actions, or extras to Android.
         val safeIntent = Intent(Intent.ACTION_VIEW, destination).apply {
             addCategory(Intent.CATEGORY_BROWSABLE)
-            parsedIntent.type?.let { type = it }
+            parsedIntent.type?.let { setDataAndType(destination, it) }
         }
         return try {
             startActivity(safeIntent)
