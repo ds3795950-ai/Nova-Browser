@@ -71,7 +71,7 @@ object BrowserUrlResolver {
             return address.contains(':') &&
                 runCatching {
                     val parsed = InetAddress.getByName(address)
-                    parsed is Inet6Address || parsed is Inet4Address
+                    parsed is Inet6Address || (parsed is Inet4Address && address.lowercase(Locale.ROOT).startsWith("::ffff:"))
                 }.getOrDefault(false)
         }
 
@@ -134,7 +134,10 @@ object BrowserUrlResolver {
         val address = runCatching {
             InetAddress.getByName(host.substring(1, host.length - 1))
         }.getOrNull() ?: return false
-        if (address is Inet4Address) return isPrivateIpv4(address.hostAddress)
+        if (address is Inet4Address) {
+            val literal = host.substring(1, host.length - 1).lowercase(Locale.ROOT)
+            return literal.startsWith("::ffff:") && isPrivateIpv4(address.hostAddress)
+        }
         if (address !is Inet6Address) return false
         val firstByte = address.address.firstOrNull()?.toInt()?.and(0xff) ?: return false
         val uniqueLocal = (firstByte and 0xfe) == 0xfc

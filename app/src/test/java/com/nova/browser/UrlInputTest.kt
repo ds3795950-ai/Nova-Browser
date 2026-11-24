@@ -162,6 +162,10 @@ class UrlInputTest {
         assertEquals("https://[::ffff:8.8.8.8]", BrowserUrlResolver.resolve("[::ffff:8.8.8.8]"))
     }
 
+    @Test fun bracketedIpv4WithoutIpv6MappingIsSearched() {
+        assertEquals("https://www.google.com/search?q=%5B127.0.0.1%5D", BrowserUrlResolver.resolve("[127.0.0.1]"))
+    }
+
     @Test fun trailingDotLocalHostsUseHttp() {
         assertEquals("http://localhost.:3000", BrowserUrlResolver.resolve("localhost.:3000"))
         assertEquals("http://printer.local.", BrowserUrlResolver.resolve("printer.local."))
