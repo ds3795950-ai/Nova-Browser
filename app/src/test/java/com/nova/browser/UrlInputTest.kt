@@ -61,6 +61,7 @@ class UrlInputTest {
         assertEquals("http://10.0.0.4", BrowserUrlResolver.resolve("10.0.0.4"))
         assertEquals("http://172.20.0.4", BrowserUrlResolver.resolve("172.20.0.4"))
         assertEquals("http://127.0.0.1", BrowserUrlResolver.resolve("127.0.0.1"))
+        assertEquals("http://169.254.1.2", BrowserUrlResolver.resolve("169.254.1.2"))
     }
 
     @Test fun publicIpv4UsesHttps() {
@@ -100,8 +101,16 @@ class UrlInputTest {
         assertEquals("https://example.com/a?b=1", BrowserUrlResolver.resolve("example.com/a?b=1"))
     }
 
+    @Test fun domainWithBrowserCompatibleBracketedPath() {
+        assertEquals("https://example.com/a[1]", BrowserUrlResolver.resolve("example.com/a[1]"))
+    }
+
     @Test fun domainWithPort() {
         assertEquals("https://example.com:8080", BrowserUrlResolver.resolve("example.com:8080"))
+    }
+
+    @Test fun acceptsMaximumValidPort() {
+        assertEquals("https://example.com:65535", BrowserUrlResolver.resolve("example.com:65535"))
     }
 
     @Test fun rejectsInvalidPorts() {
@@ -125,11 +134,59 @@ class UrlInputTest {
         assertEquals("http://router.local", BrowserUrlResolver.resolve("router.local"))
     }
 
-    @Test fun ipv6LiteralIsAccepted() {
+    @Test fun ipv6LoopbackUsesHttp() {
         assertEquals("http://[::1]:8080", BrowserUrlResolver.resolve("[::1]:8080"))
     }
 
-    @Test fun ipv6SignedPortIsSearchedInsteadOfNavigated() {
+    @Test fun publicIpv6UsesHttps() {
+        assertEquals("https://[2001:4860:4860::8888]", BrowserUrlResolver.resolve("[2001:4860:4860::8888]"))
+    }
+
+    @Test fun underscoreHostLabelsAllowBoundaryUnderscores() {
+        assertEquals("https://_preview.example.com", BrowserUrlResolver.resolve("_preview.example.com"))
+        assertEquals("https://preview_.example.com", BrowserUrlResolver.resolve("preview_.example.com"))
+    }
+
+    @Test fun numericFinalDnsLabelFallsBackToSearch() {
+        assertEquals("https://www.google.com/search?q=v1.23", BrowserUrlResolver.resolve("v1.23"))
+        assertEquals("https://www.google.com/search?q=example.123", BrowserUrlResolver.resolve("example.123"))
+    }
+
+    @Test fun ambiguousLeadingZeroIpv4FallsBackToSearch() {
+        assertEquals("https://www.google.com/search?q=0010.0.0.1", BrowserUrlResolver.resolve("0010.0.0.1"))
+        assertEquals("https://www.google.com/search?q=192.168.001.1", BrowserUrlResolver.resolve("192.168.001.1"))
+    }
+
+    @Test fun ipv4MappedIpv6UsesIpv4LocalityRules() {
+        assertEquals("http://[::ffff:127.0.0.1]", BrowserUrlResolver.resolve("[::ffff:127.0.0.1]"))
+        assertEquals("https://[::ffff:8.8.8.8]", BrowserUrlResolver.resolve("[::ffff:8.8.8.8]"))
+    }
+
+    @Test fun repeatedTrailingDotsFallBackToSearch() {
+        assertEquals("https://www.google.com/search?q=example.com..", BrowserUrlResolver.resolve("example.com.."))
+    }
+
+    @Test fun trailingDotLocalHostsUseHttp() {
+        assertEquals("http://localhost.:3000", BrowserUrlResolver.resolve("localhost.:3000"))
+        assertEquals("http://printer.local.", BrowserUrlResolver.resolve("printer.local."))
+    }
+
+    @Test fun invalidIpv6IsSearched() {
+        assertEquals("https://www.google.com/search?q=%5B2001%3Adb8%3A%3Azz%5D", BrowserUrlResolver.resolve("[2001:db8::zz]"))
+    }
+
+    @Test fun nonAsciiPortDigitsFallBackToSearch() {
+        assertEquals(
+            "https://www.google.com/search?q=example.com%3A%EF%BC%98%EF%BC%90",
+            BrowserUrlResolver.resolve("example.com:８０")
+        )
+        assertEquals(
+            "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%EF%BC%98%EF%BC%90",
+            BrowserUrlResolver.resolve("[::1]:８０")
+        )
+    }
+
+    @Test fun signedIpv6PortFallsBackToSearch() {
         assertEquals(
             "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%2B8080",
             BrowserUrlResolver.resolve("[::1]:+8080")

@@ -62,7 +62,8 @@ class CefriumBrowserEngine(
     private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
-    private val soundAllowedForUrl: (String) -> Boolean = { true }
+    private val soundAllowedForUrl: (String) -> Boolean = { true },
+    private val onEngineRoutingRequired: (String) -> Boolean = { false }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = setOf(
@@ -84,7 +85,7 @@ class CefriumBrowserEngine(
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()
     private var currentState = BrowserEngineState(
-        url = browser.getUrl(),
+        url = browser.getUrl().orEmpty(),
         title = browser.getTitle(),
         progress = browser.getProgress()
     )
@@ -105,7 +106,7 @@ class CefriumBrowserEngine(
             }.getOrDefault(false)
             if (didRestoreInitialNavigationState) {
                 currentState = currentState.copy(
-                    url = browser.getUrl(),
+                    url = browser.getUrl().orEmpty(),
                     title = browser.getTitle(),
                     canGoBack = browser.canGoBack(),
                     canGoForward = browser.canGoForward(),
@@ -116,13 +117,17 @@ class CefriumBrowserEngine(
         // Use the typed 0.21 clients rather than deprecated one-listener-per-event APIs.
         browser.setPageVisible(false)
         browser.setFocus(false)
-        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl()))
+        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl().orEmpty()))
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
                 // These settings belong to the tab's top-level origin, not an embedded iframe.
-                if (request.isForMainFrame) applySiteSettingsForUrl(url)
                 val scheme = Uri.parse(url).scheme?.lowercase()
+                if (request.isForMainFrame) {
+                    applySiteSettingsForUrl(url)
+                    if (scheme in setOf("http", "https", "about", "data") &&
+                        this@CefriumBrowserEngine.onEngineRoutingRequired.invoke(url)) return true
+                }
                 return when (scheme) {
                     "http", "https", "about", "data", "blob", "javascript" -> false
                     "file" -> !url.startsWith("file:///android_asset/", ignoreCase = true)
@@ -340,7 +345,7 @@ class CefriumBrowserEngine(
 
     override fun reload() {
         checkOpen()
-        applySiteSettingsForUrl(browser.getUrl())
+        applySiteSettingsForUrl(browser.getUrl().orEmpty())
         browser.reload()
     }
 

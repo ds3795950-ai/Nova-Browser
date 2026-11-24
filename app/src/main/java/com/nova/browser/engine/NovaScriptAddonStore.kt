@@ -1,4 +1,6 @@
 package com.nova.browser.engine
+import java.net.IDN
+import java.net.InetAddress
 import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,9 +15,9 @@ class NovaScriptAddonStore(context:android.content.Context) {
     private val index=File(root,"index.json")
     @Synchronized fun list():List<NovaScriptAddon> {
         return runCatching {
-            // openRead() restores AtomicFile's backup after an interrupted index replacement.
-            val json = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
-            val rows=JSONArray(json)
+            val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader ->
+                JSONArray(reader.readText())
+            }
             buildList<NovaScriptAddon> {
                 for(i in 0 until rows.length()) {
                     val row=rows.optJSONObject(i)?:continue
@@ -83,14 +85,17 @@ class NovaScriptAddonStore(context:android.content.Context) {
         val rawHost = match.groupValues[3]
         val port = match.groupValues[4]
         if (port.isNotEmpty() && port.toIntOrNull()?.let { it in 1..65535 } != true) return false
+
         if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
             if (wildcard) return false
             val literal = rawHost.substring(1, rawHost.length - 1)
             if (':' !in literal || '%' in literal) return false
-            return runCatching { java.net.InetAddress.getByName(literal) }.isSuccess && scheme == "https"
+            // A colon-containing literal is parsed locally; no DNS lookup is performed.
+            return runCatching { InetAddress.getByName(literal) }.isSuccess && scheme == "https"
         }
+
         if (rawHost.contains(':')) return false
-        val host = runCatching { java.net.IDN.toASCII(rawHost).lowercase() }.getOrNull() ?: return false
+        val host = runCatching { IDN.toASCII(rawHost).lowercase() }.getOrNull() ?: return false
         if (host.isBlank() || host.length > 253) return false
         val labels = host.split('.')
         if (labels.any { label ->

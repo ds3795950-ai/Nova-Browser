@@ -16,18 +16,27 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
 
     fun cefriumProfileName(): String {
         preferences.getString(KEY_PROFILE_NAME, null)?.takeIf { it.isNotBlank() }?.let { return it }
-        val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceAtLeast(1)
+        val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_999)
         return if (generation == 1) BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE else "nova-normal-v$generation"
     }
 
     /** Persist a never-reused identity before callers delete the previous profile. */
-    fun rotateCefriumProfile(): String {
+    fun rotateCefriumProfile(): String? {
         val next = "nova-normal-${java.util.UUID.randomUUID()}"
-        check(preferences.edit().putString(KEY_PROFILE_NAME, next).commit()) {
-            "Could not persist the new Cefrium profile identity"
-        }
+        if (!preferences.edit().putString(KEY_PROFILE_NAME, next).commit()) return null
         return next
     }
+
+    fun retiredCefriumProfiles(): Set<String> =
+        preferences.getStringSet(KEY_RETIRED_PROFILES, emptySet())?.toSet() ?: emptySet()
+
+    fun recordRetiredCefriumProfile(profile: String): Boolean {
+        if (profile.isBlank()) return false
+        return preferences.edit().putStringSet(KEY_RETIRED_PROFILES, retiredCefriumProfiles() + profile).commit()
+    }
+
+    fun forgetRetiredCefriumProfile(profile: String): Boolean =
+        preferences.edit().putStringSet(KEY_RETIRED_PROFILES, retiredCefriumProfiles() - profile).commit()
 
     fun siteAffinity(url: String): BrowserEngineType? = affinity.get(url)
 
@@ -63,6 +72,7 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
         const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
+        const val KEY_RETIRED_PROFILES = "cefrium_retired_profiles"
         const val KEY_PROFILE_NAME = "cefrium_profile_name"
     }
 }
