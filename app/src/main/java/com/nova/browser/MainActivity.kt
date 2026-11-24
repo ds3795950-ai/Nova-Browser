@@ -399,6 +399,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun foldPaneGeometry(): IntArray? {
+        val fold = separatingFold?.takeIf { it.isSeparating } ?: return null
+        if (!::browserPane.isInitialized || browserPane.width <= 0 || browserPane.height <= 0) return null
+        val location = IntArray(2)
+        browserPane.getLocationInWindow(location)
+        return if (fold.orientation == FoldingFeature.Orientation.VERTICAL) {
+            val start = (fold.bounds.left - location[0]).coerceIn(0, browserPane.width)
+            val end = (fold.bounds.right - location[0]).coerceIn(start, browserPane.width)
+            intArrayOf(start, end - start, browserPane.width - end)
+        } else {
+            val start = (fold.bounds.top - location[1]).coerceIn(0, browserPane.height)
+            val end = (fold.bounds.bottom - location[1]).coerceIn(start, browserPane.height)
+            intArrayOf(start, end - start, browserPane.height - end)
+        }
+    }
+
     private fun applyFoldAwareLayout(fold: FoldingFeature?) {
         separatingFold = fold
         if (!::browserPane.isInitialized || !::browserView.isInitialized || !::secondaryPane.isInitialized) return
@@ -406,14 +422,33 @@ class MainActivity : ComponentActivity() {
             fold.orientation == FoldingFeature.Orientation.VERTICAL
         } else resources.configuration.screenWidthDp >= 600
         browserPane.orientation = if (sideBySide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        if (sideBySide) {
+        if (fold?.isSeparating == true && (browserPane.width <= 0 || browserPane.height <= 0)) {
+            browserPane.post { if (!isFinishing && !isDestroyed) applyFoldAwareLayout(fold) }
+            return
+        }
+        val geometry = foldPaneGeometry()
+        if (geometry != null && fold?.orientation == FoldingFeature.Orientation.VERTICAL) {
+            val (primaryWidth, hingeWidth, secondaryWidth) = geometry.toList()
+            secondaryPane.layoutParams = LinearLayout.LayoutParams(
+                secondaryWidth.coerceAtLeast(1), ViewGroup.LayoutParams.MATCH_PARENT
+            ).apply { marginStart = hingeWidth }
+            secondaryPane.setPadding(0, 0, 0, 0)
+            (activePrimaryEngineView ?: browserView).layoutParams =
+                LinearLayout.LayoutParams(primaryWidth.coerceAtLeast(1), ViewGroup.LayoutParams.MATCH_PARENT)
+        } else if (geometry != null) {
+            val (primaryHeight, hingeHeight, secondaryHeight) = geometry.toList()
+            secondaryPane.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, secondaryHeight.coerceAtLeast(1)
+            ).apply { topMargin = hingeHeight }
+            secondaryPane.setPadding(0, 0, 0, 0)
+            (activePrimaryEngineView ?: browserView).layoutParams =
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, primaryHeight.coerceAtLeast(1))
+        } else if (sideBySide) {
             secondaryPane.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-            val hingeGap = if (fold?.isSeparating == true) fold.bounds.width().coerceAtLeast(0) else 0
-            secondaryPane.setPadding(hingeGap, 0, 0, 0)
+            secondaryPane.setPadding(0, 0, 0, 0)
         } else {
             secondaryPane.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-            val hingeGap = if (fold?.isSeparating == true) fold.bounds.height().coerceAtLeast(0) else 0
-            secondaryPane.setPadding(0, hingeGap, 0, 0)
+            secondaryPane.setPadding(0, 0, 0, 0)
         }
         refreshActiveEnginePaneLayoutParams()
     }
@@ -424,6 +459,24 @@ class MainActivity : ComponentActivity() {
         }
         if (::secondaryPane.isInitialized && ::secondaryBrowserView.isInitialized) {
             (activeSecondaryEngineView ?: secondaryBrowserView).layoutParams = enginePaneLayoutParams(secondaryPane)
+        }
+    }
+
+    private fun enginePaneLayoutParams(pane: LinearLayout): LinearLayout.LayoutParams {
+        if (pane === browserPane) {
+            val geometry = foldPaneGeometry()
+            if (geometry != null) {
+                return if (separatingFold?.orientation == FoldingFeature.Orientation.VERTICAL) {
+                    LinearLayout.LayoutParams(geometry[0].coerceAtLeast(1), ViewGroup.LayoutParams.MATCH_PARENT)
+                } else {
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, geometry[0].coerceAtLeast(1))
+                }
+            }
+        }
+        return if (pane.orientation == LinearLayout.HORIZONTAL) {
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        } else {
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
     }
 
@@ -962,6 +1015,7 @@ class MainActivity : ComponentActivity() {
         val actions = mutableListOf<Pair<String, () -> Unit>>()
         if (tab.isGuest) {
             actions += getString(R.string.new_guest_tab) to { createGuestTab() }
+            actions += getString(R.string.guest_settings) to { showSettings() }
             actions += getString(R.string.exit_guest_mode) to { confirmExitGuestMode() }
         } else {
             actions += getString(R.string.new_normal_tab) to { createTab(false, HOME_URL) }
@@ -2945,6 +2999,11 @@ class MainActivity : ComponentActivity() {
         if (tab.isLoading) tab.browserEngine?.stop() else ensureBrowserEngine(tab).reload()
     }
 
+    private fun trimTabThumbnails() {
+        val keepIds = tabs.sortedByDescending { it.lastAccess }.take(12).map { it.id }.toSet()
+        tabs.filter { it.id !in keepIds }.forEach { it.thumbnail = null }
+    }
+
     private fun captureTabThumbnail(tab: BrowserTab) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val engineView = tab.browserEngine?.view ?: return
@@ -2967,6 +3026,7 @@ class MainActivity : ComponentActivity() {
             if (result == PixelCopy.SUCCESS && tabs.any { it.id == tab.id }) {
                 // Do not recycle the old bitmap: an open tab-picker ImageView may still draw it.
                 tab.thumbnail = preview
+                trimTabThumbnails()
             } else preview.recycle()
         }, android.os.Handler(android.os.Looper.getMainLooper()))
     }
@@ -3244,7 +3304,7 @@ class MainActivity : ComponentActivity() {
                     readerOriginalUrl = item.optString("readerOriginalUrl").takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 ))
             }
-            if (tabs.size > firstNewIndex) { activeIndex = tabs.lastIndex; switchTab(activeIndex) }
+            if (tabs.size > firstNewIndex) switchTab(tabs.lastIndex)
             persistTabs(); toast("Workspace restored")
         }.onFailure { toast("Could not restore workspace") }
     }
@@ -4373,6 +4433,8 @@ class MainActivity : ComponentActivity() {
                 val builder = org.mozilla.geckoview.Autocomplete.LoginEntry.Builder()
                     .guid(entry?.guid ?: java.util.UUID.randomUUID().toString())
                     .origin(url).username(username.text.toString()).password(password.text.toString())
+                entry?.httpRealm?.let { builder.httpRealm(it) }
+                entry?.formActionOrigin?.let { builder.formActionOrigin(it) }
                 runCatching { passwordVault.save(builder.build()); switchCefriumTabsForSavedLogins(); onSaved() }
                     .onFailure { toast(getString(R.string.vault_save_failed)) }
             }.setNegativeButton(getString(R.string.cancel), null).show()
