@@ -39,11 +39,15 @@ internal object NovaSyncSnapshotRepository {
                     if (url.startsWith("http://") || url.startsWith("https://")) out.put(JSONObject().put("url", url).put("title", Uri.parse(url).host ?: url).put("visitedAt", 0L))
                 }
             }
-            val workspaceEntries = (p.getStringSet(key("saved_workspaces", engine), emptySet()) ?: emptySet())
-                .map { raw -> JSONObject(raw).put("engine", engine.name).toString() }.toSet()
-            val validatedWorkspaceEntries = NovaWorkspaceStoragePolicy.parse(
-                NovaWorkspaceStoragePolicy.serialize(workspaceEntries)
-            )
+            val validatedWorkspaceEntries = linkedSetOf<String>()
+            (p.getStringSet(key("saved_workspaces", engine), emptySet()) ?: emptySet()).sorted().forEach { raw ->
+                val candidate = runCatching { JSONObject(raw).put("engine", engine.name).toString() }.getOrNull()
+                    ?: return@forEach
+                val next = validatedWorkspaceEntries + candidate
+                if (runCatching { NovaWorkspaceStoragePolicy.serialize(next) }.isSuccess) {
+                    validatedWorkspaceEntries.add(candidate)
+                }
+            }
             val workspaces = JSONArray().also { array ->
                 validatedWorkspaceEntries.forEach { array.put(JSONObject(it)) }
             }
@@ -63,7 +67,7 @@ internal object NovaSyncSnapshotRepository {
         val settings = JSONObject().put("search_engine", searchEngine ?: p.getString("search_engine", "Google"))
             .put("shield_mode", p.getString("shield_mode", "STANDARD"))
             .put("show_home_shortcuts", p.getBoolean("show_home_shortcuts", true))
-            .put("font_scale_index", p.getInt("font_scale_index", 2))
+            .put("font_scale_index", p.getInt("font_scale_index", 1))
             .put("desktop_sites", JSONArray(p.getStringSet("desktop_sites", emptySet())?.toList() ?: emptyList<String>()))
         val snapshot = JSONObject().put("schema", 4).put("profiles", profiles).put("settings", settings)
         validate(snapshot)
@@ -146,7 +150,7 @@ internal object NovaSyncSnapshotRepository {
         editor.putString("search_engine", settings.optString("search_engine", "Google"))
             .putString("shield_mode", settings.optString("shield_mode", "STANDARD"))
             .putBoolean("show_home_shortcuts", settings.optBoolean("show_home_shortcuts", true))
-            .putInt("font_scale_index", settings.optInt("font_scale_index", 2))
+            .putInt("font_scale_index", settings.optInt("font_scale_index", 1))
             .putStringSet("desktop_sites", settings.optJSONArray("desktop_sites").toStringSet())
         editor.apply()
     }

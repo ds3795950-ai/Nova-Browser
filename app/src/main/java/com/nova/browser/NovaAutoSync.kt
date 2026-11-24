@@ -125,6 +125,7 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val remoteVault = remote.second?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
+            vault.validateSyncBundle(mergedVault)
             cloud.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             NovaSyncSnapshotRepository.apply(applicationContext, merged)
             vault.importSyncBundle(mergedVault)

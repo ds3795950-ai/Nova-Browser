@@ -13,7 +13,7 @@ internal object NovaWorkspaceStoragePolicy {
     const val MAX_WORKSPACE_TABS = 100
     const val MAX_NAME_LENGTH = 128
     const val MAX_TITLE_LENGTH = 512
-    const val MAX_URL_LENGTH = 2048
+    const val MAX_URL_LENGTH = 16 * 1024
 
     fun serialize(workspaces: Set<String>): String {
         require(workspaces.size <= MAX_WORKSPACES) { "Too many saved workspaces" }
@@ -71,9 +71,15 @@ internal object NovaWorkspaceStoragePolicy {
 
     private fun isSafeWorkspaceUrl(value: String): Boolean {
         if (value == "about:blank" || value == "about:reader") return true
-        val uri = runCatching { URI(value) }.getOrNull() ?: return false
-        return uri.scheme?.lowercase() in setOf("http", "https") &&
-            !uri.rawAuthority.isNullOrBlank() && uri.rawUserInfo == null &&
+        val schemeEnd = value.indexOf("://")
+        if (schemeEnd <= 0) return false
+        val scheme = value.substring(0, schemeEnd).lowercase()
+        if (scheme !in setOf("http", "https")) return false
+        // Parse only the authority so valid browser path/query characters do not invalidate the URL.
+        val authority = value.substring(schemeEnd + 3).substringBefore('/').substringBefore('?').substringBefore('#')
+        if (authority.isBlank()) return false
+        val uri = runCatching { URI("$scheme://$authority") }.getOrNull() ?: return false
+        return !uri.host.isNullOrBlank() && uri.rawUserInfo == null &&
             (uri.port == -1 || uri.port in 1..65535)
     }
 

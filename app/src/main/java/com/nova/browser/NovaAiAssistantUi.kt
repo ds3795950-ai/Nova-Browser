@@ -77,13 +77,15 @@ internal class NovaAiSecureStore(context:Context) {
     fun hasKey(provider:NovaAiProvider)=runCatching{!getKey(provider).isNullOrBlank()}.getOrDefault(false)
     fun model(provider:NovaAiProvider)=p.getString("model_${provider.name}",provider.defaultModel)?:provider.defaultModel
     fun setModel(provider:NovaAiProvider,value:String){
-        require(value.matches(Regex("[A-Za-z0-9._:-]{1,159}"))) { "Invalid model identifier" }
+        require(NovaAiInputPolicy.isSafeModelIdentifier(value)) { "Invalid model identifier" }
         check(p.edit().putString("model_${provider.name}",value).commit())
     }
     private companion object {
-        const val MAX_HISTORY_CHARS = 512 * 1024
+        const val MAX_HISTORY_BYTES = 512 * 1024
         const val MAX_HISTORY_MESSAGE_CHARS = 32 * 1024
+        const val MAX_LEGACY_HISTORY_BYTES = 4 * 1024 * 1024
         const val MAX_ENCRYPTED_HISTORY_CHARS = 768 * 1024
+        const val MAX_LEGACY_ENCRYPTED_HISTORY_CHARS = 4 * 1024 * 1024
     }
 
     private fun readMessageArray(a:JSONArray):MutableList<NovaAiMessage> =
@@ -97,36 +99,55 @@ internal class NovaAiSecureStore(context:Context) {
                 NovaAiMessage(role,text,o.optLong("time"))
             }.getOrNull()
         }.toMutableList()
-    private fun sessions():MutableList<MutableList<NovaAiMessage>> = runCatching {
-        val encrypted = p.getString("history", "") ?: ""
-        if (encrypted.isBlank() || encrypted.length > MAX_ENCRYPTED_HISTORY_CHARS) return@runCatching mutableListOf()
-        val raw=decrypt(encrypted)
-        if (raw.length > MAX_HISTORY_CHARS + 128 * 1024) return@runCatching mutableListOf()
-        if(raw.trimStart().startsWith("{")) {
-            val all=JSONObject(raw).optJSONArray("sessions") ?: JSONArray()
-            (0 until minOf(all.length(), 20)).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
-        } else mutableListOf(readMessageArray(JSONArray(raw)))
-    }.getOrDefault(mutableListOf())
-    private fun saveSessions(all:List<List<NovaAiMessage>>) {
-        var remaining = MAX_HISTORY_CHARS
-        val bounded = all.takeLast(20).asReversed().map { session ->
-            session.takeLast(100).asReversed().mapNotNull { message ->
-                if (remaining <= 0) null else {
-                    val safeText = message.text.take(minOf(MAX_HISTORY_MESSAGE_CHARS, remaining))
-                    remaining -= safeText.length
-                    if (safeText.isBlank() && message.text.isNotBlank()) null
-                    else NovaAiMessage(message.role, safeText, message.time)
-                }
-            }.asReversed()
-        }.asReversed()
+    private fun serializeSessions(all:List<List<NovaAiMessage>>):String {
         val root=JSONObject(); val array=JSONArray()
-        bounded.forEach { session ->
+        all.forEach { session ->
             val entries=JSONArray()
             session.forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)) }
             array.put(entries)
         }
         root.put("sessions",array)
-        check(p.edit().putString("history",encrypt(root.toString())).commit())
+        return root.toString()
+    }
+    private fun trimSessionsForStorage(all:List<List<NovaAiMessage>>):MutableList<MutableList<NovaAiMessage>> {
+        val bounded=all.takeLast(20).map { session ->
+            session.takeLast(100).map { it.copy(text=it.text.take(MAX_HISTORY_MESSAGE_CHARS)) }.toMutableList()
+        }.toMutableList()
+        while(bounded.isNotEmpty() && serializeSessions(bounded).toByteArray(Charsets.UTF_8).size>MAX_HISTORY_BYTES) {
+            if(bounded.size>1) bounded.removeAt(0)
+            else {
+                val current=bounded.last()
+                if(current.size>1) {
+                    val nextUser=(1 until current.size).firstOrNull { current[it].role=="user" }
+                    val removeCount=nextUser ?: 1
+                    repeat(removeCount.coerceAtMost(current.size)) { current.removeAt(0) }
+                } else if(current.isNotEmpty()) current.removeAt(0) else bounded.removeAt(0)
+            }
+        }
+        return bounded
+    }
+    private fun sessions():MutableList<MutableList<NovaAiMessage>> {
+        val encrypted=p.getString("history","") ?: ""
+        if(encrypted.isBlank() || encrypted.length>MAX_LEGACY_ENCRYPTED_HISTORY_CHARS) return mutableListOf()
+        val raw=runCatching { decrypt(encrypted) }.getOrNull() ?: return mutableListOf()
+        if(raw.toByteArray(Charsets.UTF_8).size>MAX_LEGACY_HISTORY_BYTES) return mutableListOf()
+        val parsed=runCatching {
+            if(raw.trimStart().startsWith("{")) {
+                val all=JSONObject(raw).optJSONArray("sessions") ?: JSONArray()
+                (0 until minOf(all.length(),20)).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
+            } else mutableListOf(readMessageArray(JSONArray(raw)))
+        }.getOrDefault(mutableListOf())
+        val bounded=trimSessionsForStorage(parsed)
+        if(bounded != parsed) runCatching { saveSessions(bounded) }
+        return bounded
+    }
+    private fun saveSessions(all:List<List<NovaAiMessage>>) {
+        val bounded=trimSessionsForStorage(all)
+        val plain=serializeSessions(bounded)
+        require(plain.toByteArray(Charsets.UTF_8).size<=MAX_HISTORY_BYTES) { "AI history exceeds the storage byte limit" }
+        val encrypted=encrypt(plain)
+        require(encrypted.length<=MAX_ENCRYPTED_HISTORY_CHARS) { "Encrypted AI history exceeds the storage limit" }
+        check(p.edit().putString("history",encrypted).commit())
     }
     fun history():List<NovaAiMessage> = sessions().flatten().takeLast(100)
     fun currentHistory():List<NovaAiMessage> = sessions().lastOrNull()?.takeLast(100) ?: emptyList()
@@ -221,7 +242,7 @@ internal object NovaAiApi {
     }}
     fun send(p:NovaAiProvider,key:String,model:String,history:List<NovaAiMessage>,done:(Result<String>)->Unit){pool.execute{
         val r=runCatching {
-            val recent=history.takeLast(20)
+            val recent=NovaAiInputPolicy.boundedHistory(history, MAX_REQUEST_BYTES)
             when(p){
                 NovaAiProvider.CHATGPT,NovaAiProvider.GROK,NovaAiProvider.KIMI,NovaAiProvider.DEEPSEEK->{
                     val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",it.role).put("content",it.text))}
@@ -352,6 +373,7 @@ internal class NovaAiAssistantUi(
     private lateinit var usageWarning: TextView
     private var attachedPageText: String? = null
     private var busy = false
+    private var conversationGeneration = 0L
     private var dialog: AlertDialog? = null
 
     private val palette = NovaThemeManager.palette(context)
@@ -604,6 +626,8 @@ internal class NovaAiAssistantUi(
     }
 
     private fun newChat() {
+        conversationGeneration++
+        busy = false
         messages.clear()
         if (persistHistory) runCatching { store.startNewConversation() }
         attachedPageText = null
@@ -717,7 +741,7 @@ internal class NovaAiAssistantUi(
             return
         }
         val fullPrompt = attachedPageText?.let {
-            "$prompt\n\n--- Current webpage context (user attached) ---\n${it.take(24000)}\n--- End webpage context ---"
+            "$prompt\n\n--- Current webpage context (user attached) ---\n${NovaAiInputPolicy.limitPageContext(it)}\n--- End webpage context ---"
         } ?: prompt
         input.setText("")
         val user = NovaAiMessage("user", fullPrompt)
@@ -726,7 +750,9 @@ internal class NovaAiAssistantUi(
         if (persistHistory) runCatching { store.append(user) }
         busy = true
         status.text = "Thinking · ${provider.label} · ${model}"
+        val requestGeneration = conversationGeneration
         NovaAiApi.send(provider, key, model, messages.toList()) { result ->
+            if (requestGeneration != conversationGeneration) return@send
             if (dialog?.isShowing != true) return@send
             busy = false
             result.onSuccess { answer ->
@@ -789,6 +815,8 @@ internal class NovaAiAssistantUi(
                     .setMessage(recent[index].text).setPositiveButton("Close", null).show()
             }
             .setNeutralButton("Clear history") { _, _ ->
+                conversationGeneration++
+                busy = false
                 if (persistHistory) store.clear()
                 messages.clear()
                 feed.removeAllViews()

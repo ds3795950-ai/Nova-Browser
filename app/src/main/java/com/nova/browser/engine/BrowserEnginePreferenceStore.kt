@@ -19,9 +19,9 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
         return if (generation == 1) BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE else "nova-normal-v$generation"
     }
 
-    fun rotateCefriumProfile(): String {
+    fun rotateCefriumProfile(): String? {
         val next = (preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_998) + 1)
-        preferences.edit().putInt(KEY_PROFILE_GENERATION, next).apply()
+        if (!preferences.edit().putInt(KEY_PROFILE_GENERATION, next).commit()) return null
         return cefriumProfileName()
     }
 

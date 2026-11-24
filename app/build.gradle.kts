@@ -169,9 +169,28 @@ val prepare1VpnAssets by tasks.registering {
             "Upstream 1VPN proxy-auth handler changed; review before bundling."
         }
         val authEndExclusive = authEndIndex + authEnd.length
-        val authStatement = background.substring(authStartIndex, authEndExclusive)
+        val authStart = "chrome.webRequest.onAuthRequired.addListener("
+        val authEnd = ",{urls:[\"<all_urls>\"]},[\"blocking\"])"
+        val authStartIndex = background.indexOf(authStart)
+        val authEndIndex = if (authStartIndex >= 0) background.indexOf(authEnd, authStartIndex) else -1
+        check(authStartIndex >= 0 && authEndIndex > authStartIndex) {
+            "Upstream 1VPN proxy-auth handler changed; review before bundling."
+        }
+        val authEndExclusive = authEndIndex + authEnd.length
+        var authStatement = background.substring(authStartIndex, authEndExclusive)
+        val credentialResolve = Regex("[A-Za-z_$][A-Za-z0-9_$]*\\(\\{\\s*authCredentials\\s*:\\s*([^}]+)\\}\\)")
+        val challengerVariable = Regex("([A-Za-z_$][A-Za-z0-9_$]*)\\.challenger\\.host").find(authStatement)?.groupValues?.get(1)
+        check(credentialResolve.containsMatchIn(authStatement) && challengerVariable != null) {
+            "Upstream 1VPN auth callback changed; cannot safely relay proxy credentials to Cefrium."
+        }
+        authStatement = credentialResolve.replace(authStatement) { match ->
+            val credentialExpression = match.groupValues[1].trim()
+            val callName = match.value.substringBefore("(")
+            "if(globalThis.__novaPublishProxyCredentials){globalThis.__novaPublishProxyCredentials(" + credentialExpression + "," + challengerVariable + ".challenger)};" +
+                callName + "({authCredentials:" + credentialExpression + "})"
+        }
         background = background.replace(
-            authStatement,
+            background.substring(authStartIndex, authEndExclusive),
             "try{" + authStatement + ";globalThis.__novaAuthReady=true}catch(e){globalThis.__novaAuthReady=false;console.error(e)}"
         )
 

@@ -25,7 +25,7 @@ class PasswordVault(context: Context) {
 
     @Synchronized fun all(): List<Autocomplete.LoginEntry> {
         val bytes = readEncryptedBlob() ?: return emptyList()
-        require(bytes.size in MIN_ENCRYPTED_BLOB_BYTES..MAX_VAULT_BYTES) { "Password vault data is invalid or unexpectedly large" }
+        require(PasswordVaultStoragePolicy.canRead(bytes.size)) { "Password vault data is invalid or unexpectedly large" }
         val iv = bytes.copyOfRange(0, 12)
         val encrypted = bytes.copyOfRange(12, bytes.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -64,7 +64,7 @@ class PasswordVault(context: Context) {
         val removed = entries.firstOrNull { it.guid == guid } ?: return
         val remaining = entries.filterNot { it.guid == guid }
         // Older vaults may exceed today's entry cap; permit a deletion that reduces that legacy count.
-        persist(remaining, allowOverLimitReduction = entries.size > MAX_ENTRIES)
+        persist(remaining, allowOverLimitReduction = entries.size > MAX_ENTRIES, allowOversizedReduction = true)
         run {
             val key = credentialKey(removed.origin, removed.username)
             val metadata = readJsonPreference(META_KEY)
@@ -130,7 +130,11 @@ class PasswordVault(context: Context) {
     }
 
     @Synchronized fun validateSyncBundle(bundle: JSONObject) {
-        validatedSyncBundle(bundle)
+        val entries = validatedSyncBundle(bundle).first
+        val plaintextBytes = serializeEntries(entries).toByteArray(Charsets.UTF_8).size
+        require(plaintextBytes + PasswordVaultStoragePolicy.MIN_BLOB_BYTES <= PasswordVaultStoragePolicy.MAX_VAULT_BYTES) {
+            "Password vault data is too large to sync"
+        }
     }
 
     @Synchronized fun importSyncBundle(bundle: JSONObject) {
@@ -165,19 +169,28 @@ class PasswordVault(context: Context) {
         if (store.containsAlias(alias)) store.deleteEntry(alias)
     }
 
-    private fun persist(entries: List<Autocomplete.LoginEntry>, allowOverLimitReduction: Boolean = false) {
-        require(entries.size <= MAX_ENTRIES || allowOverLimitReduction) { "Password vault entry limit reached" }
-        val json = JSONArray()
+    private fun serializeEntries(entries: List<Autocomplete.LoginEntry>): String = JSONArray().also { json ->
         entries.forEach { login ->
             json.put(JSONObject().put("guid", login.guid ?: java.util.UUID.randomUUID().toString())
                 .put("origin", login.origin).put("formActionOrigin", login.formActionOrigin ?: "")
                 .put("httpRealm", login.httpRealm ?: "").put("username", login.username).put("password", login.password))
         }
+    }.toString()
+
+    private fun persist(
+        entries: List<Autocomplete.LoginEntry>,
+        allowOverLimitReduction: Boolean = false,
+        allowOversizedReduction: Boolean = false
+    ) {
+        require(entries.size <= MAX_ENTRIES || allowOverLimitReduction) { "Password vault entry limit reached" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
+        val encrypted = cipher.doFinal(serializeEntries(entries).toByteArray(Charsets.UTF_8))
         val packed = cipher.iv + encrypted
-        require(packed.size <= MAX_VAULT_BYTES) { "Password vault data is too large" }
+        val existingSize = if (vaultFile.isFile) vaultFile.length() else 0L
+        require(PasswordVaultStoragePolicy.canWrite(packed.size, existingSize, allowOversizedReduction)) {
+            "Password vault data is too large"
+        }
         val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")
         FileOutputStream(temporary).use { it.write(packed); it.fd.sync() }
         try {
@@ -190,8 +203,17 @@ class PasswordVault(context: Context) {
     }
 
     private fun readEncryptedBlob(): ByteArray? {
-        if (vaultFile.exists()) return vaultFile.readBytes()
+        if (vaultFile.exists()) {
+            val length = vaultFile.length()
+            require(length in PasswordVaultStoragePolicy.MIN_BLOB_BYTES.toLong()..PasswordVaultStoragePolicy.MAX_LEGACY_VAULT_BYTES.toLong()) {
+                "Password vault data is invalid or unexpectedly large"
+            }
+            return vaultFile.readBytes()
+        }
         val legacy = prefs.getString(KEY_BLOB, null) ?: return null
+        require(legacy.length <= PasswordVaultStoragePolicy.MAX_LEGACY_B64_CHARS) {
+            "Password vault data is invalid or unexpectedly large"
+        }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (store.getKey(alias, null) !is SecretKey) {
             // An OS backup may have restored preferences without the non-exportable Keystore key.
@@ -199,6 +221,7 @@ class PasswordVault(context: Context) {
             throw IllegalStateException("This password vault was restored without its Android Keystore key and cannot be decrypted. Create a new vault on this device.")
         }
         val bytes = Base64.decode(legacy, Base64.NO_WRAP)
+        require(PasswordVaultStoragePolicy.canRead(bytes.size)) { "Password vault data is invalid or unexpectedly large" }
         val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")
         FileOutputStream(temporary).use { it.write(bytes); it.fd.sync() }
         if (!temporary.renameTo(vaultFile)) throw IllegalStateException("Could not migrate password vault to protected storage")
@@ -253,8 +276,14 @@ class PasswordVault(context: Context) {
             val merged = linkedMapOf<String, JSONObject>()
             for (source in listOf(remote.optJSONArray("credentials") ?: JSONArray(), local.optJSONArray("credentials") ?: JSONArray())) {
                 for (i in 0 until source.length()) {
-                    val item = source.getJSONObject(i)
-                    val key = item.optString("origin") + "|" + item.optString("username")
+                    val item = source.optJSONObject(i) ?: continue
+                    val origin = item.opt("origin") as? String ?: continue
+                    val username = item.opt("username") as? String ?: continue
+                    if (item.opt("password") !is String) continue
+                    val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
+                    if (!PasswordVaultPolicy.isAllowedOrigin(origin) ||
+                        !PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) continue
+                    val key = origin + "|" + username
                     val previous = merged[key]
                     if (previous == null || item.optLong("updatedAt") >= previous.optLong("updatedAt")) merged[key] = item
                 }

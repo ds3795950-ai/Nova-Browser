@@ -84,7 +84,7 @@ class CefriumBrowserEngine(
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
     override val view: View = browser.getSurfaceContainer()
     private var currentState = BrowserEngineState(
-        url = browser.getUrl(),
+        url = browser.getUrl().orEmpty(),
         title = browser.getTitle(),
         progress = browser.getProgress()
     )
@@ -105,7 +105,7 @@ class CefriumBrowserEngine(
             }.getOrDefault(false)
             if (didRestoreInitialNavigationState) {
                 currentState = currentState.copy(
-                    url = browser.getUrl(),
+                    url = browser.getUrl().orEmpty(),
                     title = browser.getTitle(),
                     canGoBack = browser.canGoBack(),
                     canGoForward = browser.canGoForward(),
@@ -116,7 +116,7 @@ class CefriumBrowserEngine(
         // Use the typed 0.21 clients rather than deprecated one-listener-per-event APIs.
         browser.setPageVisible(false)
         browser.setFocus(false)
-        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl()))
+        browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl().orEmpty()))
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
@@ -331,7 +331,7 @@ class CefriumBrowserEngine(
 
     override fun reload() {
         checkOpen()
-        applySiteSettingsForUrl(browser.getUrl())
+        applySiteSettingsForUrl(browser.getUrl().orEmpty())
         browser.reload()
     }
 

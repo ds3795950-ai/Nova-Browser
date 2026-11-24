@@ -180,6 +180,7 @@ class MainActivity : ComponentActivity() {
     private val tabs = mutableListOf<BrowserTab>()
     private var aiPageReaderExtension: WebExtension? = null
     private val aiPageText = mutableMapOf<String, String>()
+    private val aiPageUrl = mutableMapOf<String, String>()
     private var activeIndex = 0
     private var lastUiMode = 0
     private var lastFontScale = 1f
@@ -386,15 +387,23 @@ class MainActivity : ComponentActivity() {
         } else resources.configuration.screenWidthDp >= 600
         browserPane.orientation = if (sideBySide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
         if (sideBySide) {
-            browserView.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             secondaryPane.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             val hingeGap = if (fold?.isSeparating == true) fold.bounds.width().coerceAtLeast(0) else 0
             secondaryPane.setPadding(hingeGap, 0, 0, 0)
         } else {
-            browserView.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             secondaryPane.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             val hingeGap = if (fold?.isSeparating == true) fold.bounds.height().coerceAtLeast(0) else 0
             secondaryPane.setPadding(0, hingeGap, 0, 0)
+        }
+        refreshActiveEnginePaneLayoutParams()
+    }
+
+    private fun refreshActiveEnginePaneLayoutParams() {
+        if (::browserPane.isInitialized && ::browserView.isInitialized) {
+            (activePrimaryEngineView ?: browserView).layoutParams = enginePaneLayoutParams(browserPane)
+        }
+        if (::secondaryPane.isInitialized && ::secondaryBrowserView.isInitialized) {
+            (activeSecondaryEngineView ?: secondaryBrowserView).layoutParams = enginePaneLayoutParams(secondaryPane)
         }
     }
 
@@ -978,6 +987,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
+        if (isGuest && splitTabId != null) exitSplitScreen()
         cancelPendingRemoteSuggestions()
         if (currentTab()?.isGuest == true && !isGuest) {
             toast("Normal and Private tabs are unavailable in Guest Mode")
@@ -1276,6 +1286,7 @@ class MainActivity : ComponentActivity() {
         if (!addressBar.hasFocus()) addressBar.setText(url)
         updateTabChrome(tab)
         persistTabs()
+        enforceSessionBudget(setOf(source.id))
         return true
     }
 
@@ -1881,6 +1892,7 @@ class MainActivity : ComponentActivity() {
                 val selected = choices.filter { it.selected }.toMutableSet()
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val builder = AlertDialog.Builder(this@MainActivity).setTitle(prompt.title ?: getString(R.string.select_option))
                 when (prompt.type) {
                     GeckoSession.PromptDelegate.ChoicePrompt.Type.MENU -> builder.setItems(labels) { _, which -> finish(prompt.confirm(choices[which])) }
@@ -1893,10 +1905,10 @@ class MainActivity : ComponentActivity() {
                             if (isChecked) selected.add(choices[which]) else selected.remove(choices[which])
                         }.setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(selected.toTypedArray())) }
                     }
-                    else -> { finish(prompt.dismiss()); return result }
+                    else -> { finishIfPending { prompt.dismiss() }; return result }
                 }
-                val dialog = builder.setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }.create()
-                registerPromptDialog(dialog) { finish(prompt.dismiss()) }
+                val dialog = builder.setNegativeButton(android.R.string.cancel) { _, _ -> finishIfPending { prompt.dismiss() } }.create()
+                registerPromptDialog(dialog) { finishIfPending { prompt.dismiss() } }
                 return result
             }
 
@@ -1917,13 +1929,14 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<PromptResponse>()
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(prompt.title ?: getString(R.string.page_confirmation))
                     .setMessage(prompt.message.orEmpty())
                     .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.POSITIVE)) }
                     .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE)) }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE)) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE) } }
                 return result
             }
 
@@ -1932,14 +1945,15 @@ class MainActivity : ComponentActivity() {
                 val input = EditText(this@MainActivity).apply { setText(prompt.defaultValue.orEmpty()); setSelectAllOnFocus(true) }
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(prompt.title ?: getString(R.string.page_input))
                     .setMessage(prompt.message.orEmpty())
                     .setView(input)
                     .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(input.text.toString())) }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finishIfPending { prompt.dismiss() } }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.dismiss()) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.dismiss() } }
                 return result
             }
 
@@ -1953,6 +1967,7 @@ class MainActivity : ComponentActivity() {
                 form.addView(password)
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val host = prompt.authOptions.uri?.let { Uri.parse(it).host }.orEmpty()
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(prompt.title ?: getString(R.string.authentication_required))
@@ -1962,9 +1977,9 @@ class MainActivity : ComponentActivity() {
                         val response = if (passwordOnly) prompt.confirm(password.text.toString()) else prompt.confirm(username.text.toString(), password.text.toString())
                         finish(response)
                     }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finishIfPending { prompt.dismiss() } }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.dismiss()) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.dismiss() } }
                 return result
             }
 
@@ -1980,13 +1995,14 @@ class MainActivity : ComponentActivity() {
                 }
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(prompt.title ?: getString(R.string.date_time_input))
                     .setView(input)
                     .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(input.text.toString())) }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finishIfPending { prompt.dismiss() } }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.dismiss()) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.dismiss() } }
                 return result
             }
 
@@ -1995,13 +2011,14 @@ class MainActivity : ComponentActivity() {
                 val input = EditText(this@MainActivity).apply { hint = getString(R.string.color_hex_hint); setText(prompt.defaultValue.orEmpty()) }
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(prompt.title ?: getString(R.string.choose_color))
                     .setView(input)
                     .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(input.text.toString())) }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finishIfPending { prompt.dismiss() } }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.dismiss()) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.dismiss() } }
                 return result
             }
 
@@ -2009,13 +2026,14 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<PromptResponse>()
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(getString(R.string.popup_request))
                     .setMessage(prompt.targetUri.orEmpty())
                     .setPositiveButton(getString(R.string.allow)) { _, _ -> finish(prompt.confirm(AllowOrDeny.ALLOW)) }
                     .setNegativeButton(getString(R.string.block)) { _, _ -> finish(prompt.confirm(AllowOrDeny.DENY)) }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.confirm(AllowOrDeny.DENY)) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.confirm(AllowOrDeny.DENY) } }
                 return result
             }
 
@@ -2023,13 +2041,14 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<PromptResponse>()
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(getString(R.string.leave_page_title))
                     .setMessage(getString(R.string.leave_page_message))
                     .setPositiveButton(getString(R.string.leave_page)) { _, _ -> finish(prompt.confirm(AllowOrDeny.ALLOW)) }
                     .setNegativeButton(getString(R.string.stay_page)) { _, _ -> finish(prompt.confirm(AllowOrDeny.DENY)) }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.confirm(AllowOrDeny.DENY)) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.confirm(AllowOrDeny.DENY) } }
                 return result
             }
 
@@ -2063,6 +2082,7 @@ class MainActivity : ComponentActivity() {
                 val login = option.value
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(getString(R.string.save_password_title))
                     .setMessage(getString(R.string.save_password_message, Uri.parse(login.origin).host ?: login.origin))
@@ -2083,6 +2103,7 @@ class MainActivity : ComponentActivity() {
                 val choices = request.options.map { it.value.username.ifBlank { Uri.parse(it.value.origin).host ?: "Saved login" } }.toTypedArray()
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.choose_saved_login))
                     .setItems(choices) { _, which -> finish(request.confirm(request.options[which])) }
                     .setNegativeButton(android.R.string.cancel) { _, _ -> finish(request.dismiss()) }
@@ -2095,13 +2116,14 @@ class MainActivity : ComponentActivity() {
                 val result = GeckoResult<PromptResponse>()
                 var completed = false
                 fun finish(response: PromptResponse) { if (!completed) { completed = true; result.complete(response) } }
+                fun finishIfPending(response: () -> PromptResponse) { if (!completed) finish(response()) }
                 val dialog = AlertDialog.Builder(this@MainActivity)
                     .setTitle(getString(R.string.upload_folder_title))
                     .setMessage(getString(R.string.upload_folder_message, prompt.directoryName ?: getString(R.string.selected_folder)))
                     .setPositiveButton(getString(R.string.allow)) { _, _ -> finish(prompt.confirm(AllowOrDeny.ALLOW)) }
                     .setNegativeButton(getString(R.string.deny)) { _, _ -> finish(prompt.confirm(AllowOrDeny.DENY)) }
                     .create()
-                registerPromptDialog(dialog) { finish(prompt.confirm(AllowOrDeny.DENY)) }
+                registerPromptDialog(dialog) { finishIfPending { prompt.confirm(AllowOrDeny.DENY) } }
                 return result
             }
         }
@@ -2294,6 +2316,7 @@ class MainActivity : ComponentActivity() {
         session.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
                 aiPageText.remove(tab.id)
+                aiPageUrl.remove(tab.id)
                 if (!(tab.isErrorPage && url.startsWith("data:"))) tab.isErrorPage = false
                 tab.isLoading = true
                 if (!tab.isErrorPage) tab.securityStatus = ""
@@ -2370,6 +2393,7 @@ class MainActivity : ComponentActivity() {
                 updateTabChrome(newTab)
                 if (!newTab.isPrivate && !newTab.isGuest) persistTabs()
                 showBrowserPage()
+                enforceSessionBudget(setOf(source.id))
                 return GeckoResult.fromValue(newSession)
             }
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
@@ -2419,7 +2443,7 @@ class MainActivity : ComponentActivity() {
 
 
 
-    private fun enforceSessionBudget() {
+    private fun enforceSessionBudget(preserveTabIds: Set<String> = emptySet()) {
         val activeSessions = tabs.filter { it.browserEngine != null || it.session != null }
         val candidates = activeSessions.map { tab ->
             SessionBudgetPolicy.Candidate(tab.id, tab.lastAccess, tab.isPrivate, tab.isGuest)
@@ -2427,6 +2451,7 @@ class MainActivity : ComponentActivity() {
         val visibleIds = buildSet {
             currentTab()?.id?.let(::add)
             splitTabId?.let(::add)
+            addAll(preserveTabIds)
         }
         val memoryClassMb = getSystemService(android.app.ActivityManager::class.java).memoryClass
         val limit = SessionBudgetPolicy.maxRetainedSessions(memoryClassMb)
@@ -3014,6 +3039,7 @@ class MainActivity : ComponentActivity() {
         val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
         aiPageText.remove(removed.id)
+        aiPageUrl.remove(removed.id)
         if (removed.id == splitTabId) exitSplitScreen()
         closeTabRuntime(removed)
         removed.thumbnail?.recycle(); removed.thumbnail = null
@@ -3411,7 +3437,7 @@ class MainActivity : ComponentActivity() {
             toast(getString(R.string.history_unavailable_private))
             return
         }
-        val items = readHistory().sortedByDescending { it.visitedAt }
+        val items = readHistory().sortedByDescending { it.visitedAt }.toMutableList()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -3499,8 +3525,11 @@ class MainActivity : ComponentActivity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 clearBrowsingHistory {
-                    search.text.clear()
+                    pending?.let(handler::removeCallbacks)
+                    pending = null
+                    items.clear()
                     filteredItems = emptyList()
+                    search.text.clear()
                     adapter.clear()
                     adapter.notifyDataSetChanged()
                     emptyView.visibility = View.VISIBLE
@@ -3823,6 +3852,7 @@ class MainActivity : ComponentActivity() {
         guestIndices.forEach { index ->
             val removed = tabs.removeAt(index)
         aiPageText.remove(removed.id)
+        aiPageUrl.remove(removed.id)
             if (removed.id == splitTabId) exitSplitScreen()
             closeTabRuntime(removed)
         }
@@ -3978,6 +4008,7 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
+    @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
     private fun showAiAssistant() {
         if (denyGuestAccess("AI Assistant")) return
         val tab = currentTab()
@@ -3992,7 +4023,26 @@ class MainActivity : ComponentActivity() {
                     active.lastUrl.startsWith("chrome:")) {
                     callback(null)
                 } else {
-                    callback(aiPageText[active.id])
+                    val expectedUrl = active.lastUrl
+                    val fallback = aiPageText[active.id]?.takeIf { aiPageUrl[active.id] == expectedUrl }
+                    val session = active.session
+                    if (session == null) {
+                        callback(fallback)
+                    } else {
+                        session.evaluateJS("(document.body ? document.body.innerText : '').trim().slice(0, 24000)")
+                            .accept({ value ->
+                                val captured = (value as? String)?.trim()?.take(24000)?.takeIf { it.isNotBlank() }
+                                runOnUiThread {
+                                    val stillCurrent = currentTab()?.id == active.id && active.lastUrl == expectedUrl
+                                    callback(if (stillCurrent) captured ?: fallback else null)
+                                }
+                            }, { _ ->
+                                runOnUiThread {
+                                    val stillCurrent = currentTab()?.id == active.id && active.lastUrl == expectedUrl
+                                    callback(if (stillCurrent) fallback else null)
+                                }
+                            })
+                    }
                 }
             },
             persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
@@ -4031,7 +4081,11 @@ class MainActivity : ComponentActivity() {
                     val sourceTab = tabs.firstOrNull { it.session === source } ?: return null
                     if (sourceTab.isPrivate || sourceTab.isGuest) return null
                     val text = payload.optString("text").take(24000)
-                    if (text.isNotBlank()) aiPageText[sourceTab.id] = text
+                    val pageUrl = payload.optString("url").ifBlank { sourceTab.lastUrl }
+                    if (text.isNotBlank()) {
+                        aiPageText[sourceTab.id] = text
+                        aiPageUrl[sourceTab.id] = pageUrl
+                    }
                     return null
                 }
             },
@@ -4083,14 +4137,18 @@ class MainActivity : ComponentActivity() {
     private fun showCefriumNovaAddons() {
         val addons=novaScriptAddonStore.list()
         val rows=addons.map { "${it.name} · ${if(it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Nova Add-ons · ${addons.size}")
-            .setMessage("Nova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView.")
-            .setItems(rows) { _,which ->
+        AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
+            text = "Nova Add-ons · ${addons.size}\n\nNova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView."
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+            textSize = 14f
+        }).setItems(rows) { _,which ->
                 val addon=addons[which]
                 val actions=if(addon.enabled)arrayOf("Disable","Remove")else arrayOf("Enable","Remove")
-                AlertDialog.Builder(this).setTitle(addon.name)
-                    .setMessage("Allowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}")
-                    .setItems(actions) { _,action ->
+                AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
+                    text = "${addon.name}\n\nAllowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}"
+                    setPadding(dp(24), dp(16), dp(24), dp(8))
+                    textSize = 14f
+                }).setItems(actions) { _,action ->
                         when(actions[action]) {
                             "Enable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,true)}
                                 .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on enabled · reload applied")}
@@ -5020,9 +5078,11 @@ private fun showQuickSettings() {
             "Remember this site's engine",
             "Remember related sign-in domains"
         )
-        AlertDialog.Builder(this).setTitle("Browser engine")
-            .setMessage("Private and Guest tabs always use GeckoView. Cefrium is used only when Nova Shield, 1VPN and saved-password autofill do not require GeckoView. Website data is not automatically migrated between engines.")
-            .setItems(actions) { _, which ->
+        AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
+            text = "Browser engine\n\nPrivate and Guest tabs always use GeckoView. Cefrium is used only when Nova Shield, 1VPN and saved-password autofill do not require GeckoView. Website data is not automatically migrated between engines."
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+            textSize = 14f
+        }).setItems(actions) { _, which ->
                 when (which) {
                     0 -> chooseNormalEngineMode()
                     1 -> switchCurrentTabEngine()
@@ -5259,6 +5319,8 @@ private fun showQuickSettings() {
                         .onSuccess { toast("Encrypted password vault cleared") }
                         .onFailure { toast("Could not clear password vault: ${it.localizedMessage ?: "Unknown error"}") }
                 }
+                val overridesCleared = !selection.siteSettings || clearGeckoSiteOverrides()
+                if (!overridesCleared) toast("Could not clear all Nova GeckoView site overrides")
                 val flags = selection.geckoFlags()
                 val finishCefrium = {
                     if (selection.cefriumProfileData) {
@@ -5271,10 +5333,12 @@ private fun showQuickSettings() {
                     }
                 }
                 if (flags != 0L) {
+                    // Complete Cefrium clearing before the asynchronous Gecko callback can outlive this Activity.
+                    finishCefrium()
                     clearGeckoWebsiteData(flags, activeTabId) { succeeded, message ->
-                        if (succeeded) toast("Selected GeckoView website data cleared")
-                        else toast("GeckoView data clear failed: ${message ?: "Unknown error"}")
-                        finishCefrium()
+                        if (succeeded && overridesCleared) toast("Selected GeckoView website data cleared")
+                        else if (!succeeded) toast("GeckoView data clear failed: ${message ?: "Unknown error"}")
+                        else toast("GeckoView data cleared, but some Nova site overrides remain")
                     }
                 } else {
                     finishCefrium()
@@ -5290,6 +5354,17 @@ private fun showQuickSettings() {
             .remove("history")
             .remove("history_v2")
             .apply()
+    }
+
+    private fun clearGeckoSiteOverrides(): Boolean {
+        val keys = prefs.all.keys.filter { key ->
+            (key.startsWith("site_") && key.contains("_geckoview_") && !key.startsWith("site_default_")) ||
+                key.startsWith("javascript_enabled_geckoview_")
+        }
+        if (keys.isEmpty()) return true
+        val editor = prefs.edit()
+        keys.forEach { editor.remove(it) }
+        return editor.commit()
     }
 
     private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
@@ -5320,13 +5395,16 @@ private fun showQuickSettings() {
 
     private fun clearCefriumProfileDataNow(activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
         val oldProfile = enginePreferences.cefriumProfileName()
+        val newProfile = enginePreferences.rotateCefriumProfile() ?: run {
+            onFinished(false, "Could not persist a new Cefrium profile. Existing profile data was not deleted.")
+            return
+        }
         val cefriumTabs = tabs.filter { it.engineType == BrowserEngineType.CEFRIUM && !it.isPrivate && !it.isGuest }
         cefriumTabs.forEach { tab ->
             runCatching { closeTabRuntime(tab) }
             tab.needsReload = tab.lastUrl != HOME_URL
             tab.cefriumNavigationState = null
         }
-        val newProfile = enginePreferences.rotateCefriumProfile()
         val deletion = runCatching { CefriumProfile.delete(oldProfile) }
         val index = tabs.indexOfFirst { it.id == activeTabId }
         if (index >= 0 && tabs[index].engineType == BrowserEngineType.CEFRIUM) switchTab(index)
@@ -5361,6 +5439,7 @@ private fun showQuickSettings() {
                 tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
                     val removed = tabs.removeAt(index)
         aiPageText.remove(removed.id)
+        aiPageUrl.remove(removed.id)
                     if (removed.id == splitTabId) exitSplitScreen()
                     closeTabRuntime(removed)
                     removed.thumbnail?.recycle(); removed.thumbnail = null
@@ -5751,18 +5830,13 @@ private fun showForgotPassword(prefillEmail: String = "") {
         if (!::browserPane.isInitialized || !::browserView.isInitialized || !::secondaryPane.isInitialized) return
         val wide = newConfig.screenWidthDp >= 600
         browserPane.orientation = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        (browserView.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
-            params.width = if (wide) 0 else ViewGroup.LayoutParams.MATCH_PARENT
-            params.height = if (wide) ViewGroup.LayoutParams.MATCH_PARENT else 0
-            params.weight = 1f
-            browserView.layoutParams = params
-        }
         (secondaryPane.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
             params.width = if (wide) 0 else ViewGroup.LayoutParams.MATCH_PARENT
             params.height = if (wide) ViewGroup.LayoutParams.MATCH_PARENT else 0
             params.weight = 1f
             secondaryPane.layoutParams = params
         }
+        refreshActiveEnginePaneLayoutParams()
     }
 
     override fun onPause() {
@@ -5906,6 +5980,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         }
         tabs.clear()
         aiPageText.clear()
+        aiPageUrl.clear()
         // Keep the process-wide GeckoRuntime alive; shutting it down can terminate in-flight downloads.
         super.onDestroy()
     }

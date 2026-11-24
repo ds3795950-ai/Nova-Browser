@@ -13,9 +13,10 @@ class NovaScriptAddonStore(context:android.content.Context) {
     private val root=File(context.filesDir,"nova_cefrium_addons").apply { mkdirs() }
     private val index=File(root,"index.json")
     @Synchronized fun list():List<NovaScriptAddon> {
-        if(!index.isFile) return emptyList()
         return runCatching {
-            val rows=JSONArray(index.readText(Charsets.UTF_8))
+            val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader ->
+                JSONArray(reader.readText())
+            }
             buildList<NovaScriptAddon> {
                 for(i in 0 until rows.length()) {
                     val row=rows.optJSONObject(i)?:continue
@@ -83,7 +84,7 @@ class NovaScriptAddonStore(context:android.content.Context) {
         val u=runCatching{Uri.parse(parsed)}.getOrNull()?:return false
         val scheme=u.scheme?.lowercase(); val host=u.host?.lowercase().orEmpty()
         if(scheme!="https"&&!(scheme=="http"&&(host=="localhost"||host=="127.0.0.1")))return false
-        if(host.isBlank()||u.userInfo!=null||(u.path?.let{it.isNotEmpty()&&it!="/"}==true)||u.query!=null||u.fragment!=null)return false
+        if(host.isBlank()||host.contains('*')||u.userInfo!=null||(u.path?.let{it.isNotEmpty()&&it!="/"}==true)||u.query!=null||u.fragment!=null)return false
         if(!wild&&rule.contains('*'))return false
         return true
     }

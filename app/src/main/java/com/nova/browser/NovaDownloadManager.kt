@@ -199,10 +199,13 @@ class NovaDownloadManager(
             val etag = connection.getHeaderField("ETag") ?: worker.item.etag
             val modified = connection.getHeaderField("Last-Modified") ?: worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
+            val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 &&
+                (worker.item.etag.isNotBlank() || worker.item.lastModified.isNotBlank())
             val total = when {
                 contentRange?.total != null -> contentRange.total
                 length >= 0 -> offset + length
-                else -> worker.item.total
+                hasValidatedResume -> worker.item.total.takeIf { it > offset } ?: -1L
+                else -> -1L
             }
             val headerName = DownloadProtocol.parseContentDispositionName(connection.getHeaderField("Content-Disposition"))?.let { DownloadProtocol.safeFileName(it) }
             worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified, fileName = headerName ?: worker.item.fileName)

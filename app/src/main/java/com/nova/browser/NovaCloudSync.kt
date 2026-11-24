@@ -22,11 +22,39 @@ import javax.crypto.spec.PBEKeySpec
 internal object CloudCrypto {
     private const val ITERATIONS = 310_000
     private const val KEY_BITS = 256
+    private const val MAX_PLAINTEXT_BYTES = 16 * 1024 * 1024
+    private const val MAX_CIPHERTEXT_BYTES = MAX_PLAINTEXT_BYTES + 16
+    private const val MAX_CIPHERTEXT_B64_CHARS = ((MAX_CIPHERTEXT_BYTES + 2) / 3) * 4
+    private fun utf8ByteCount(value: String, stopAfter: Int): Int {
+        var total = 0
+        var index = 0
+        while (index < value.length) {
+            val first = value[index]
+            val codePoint = if (Character.isHighSurrogate(first) && index + 1 < value.length && Character.isLowSurrogate(value[index + 1])) {
+                Character.toCodePoint(first, value[index + 1])
+            } else first.code
+            total += when {
+                codePoint <= 0x7f -> 1
+                codePoint <= 0x7ff -> 2
+                codePoint <= 0xffff -> 3
+                else -> 4
+            }
+            if (total > stopAfter) return total
+            index += if (codePoint > 0xffff) 2 else 1
+        }
+        return total
+    }
+    internal fun isPlaintextWithinLimit(value: String): Boolean =
+        utf8ByteCount(value, MAX_PLAINTEXT_BYTES) <= MAX_PLAINTEXT_BYTES
+    internal fun isCiphertextWithinLimit(encodedLength: Int): Boolean =
+        encodedLength in 1..MAX_CIPHERTEXT_B64_CHARS
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
     private fun unb64(value: String) = java.util.Base64.getDecoder().decode(value)
 
     fun encrypt(plainText: String, passphrase: CharArray): JSONObject {
         require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
+        require(isPlaintextWithinLimit(plainText)) { "Encrypted backup exceeds the 16 MiB limit" }
+        val plaintextBytes = plainText.toByteArray(Charsets.UTF_8)
         val random = SecureRandom()
         val salt = ByteArray(16).also(random::nextBytes)
         val iv = ByteArray(12).also(random::nextBytes)
@@ -39,7 +67,7 @@ internal object CloudCrypto {
             JSONObject().put("version", 1).put("algorithm", "AES-256-GCM")
                 .put("kdf", "PBKDF2-HMAC-SHA256").put("iterations", ITERATIONS)
                 .put("salt", b64(salt)).put("iv", b64(iv))
-                .put("ciphertext", b64(cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))))
+                .put("ciphertext", b64(cipher.doFinal(plaintextBytes)))
         } finally { keyBytes.fill(0) }
     }
 
@@ -49,10 +77,15 @@ internal object CloudCrypto {
         require(envelope.optString("kdf") == "PBKDF2-HMAC-SHA256") { "Unsupported key derivation" }
         val iterations = envelope.optInt("iterations", ITERATIONS)
         require(iterations in 100_000..1_000_000) { "Invalid encryption parameters" }
-        val salt = unb64(envelope.getString("salt"))
-        val iv = unb64(envelope.getString("iv"))
-        val ciphertext = unb64(envelope.getString("ciphertext"))
-        require(salt.size == 16 && iv.size == 12 && ciphertext.size >= 16) { "Invalid encrypted backup" }
+        val saltText = envelope.getString("salt")
+        val ivText = envelope.getString("iv")
+        val ciphertextText = envelope.getString("ciphertext")
+        require(saltText.length <= 24 && ivText.length <= 16) { "Invalid encrypted backup" }
+        require(isCiphertextWithinLimit(ciphertextText.length)) { "Encrypted backup exceeds the 16 MiB limit" }
+        val salt = unb64(saltText)
+        val iv = unb64(ivText)
+        val ciphertext = unb64(ciphertextText)
+        require(salt.size == 16 && iv.size == 12 && ciphertext.size in 16..MAX_CIPHERTEXT_BYTES) { "Invalid encrypted backup" }
         val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
         val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
         spec.clearPassword()
