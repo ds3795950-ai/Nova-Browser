@@ -128,4 +128,11 @@ class UrlInputTest {
     @Test fun ipv6LiteralIsAccepted() {
         assertEquals("http://[::1]:8080", BrowserUrlResolver.resolve("[::1]:8080"))
     }
+
+    @Test fun ipv6SignedPortIsSearchedInsteadOfNavigated() {
+        assertEquals(
+            "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%2B8080",
+            BrowserUrlResolver.resolve("[::1]:+8080")
+        )
+    }
 }

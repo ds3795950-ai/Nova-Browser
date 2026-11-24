@@ -4088,11 +4088,11 @@ class MainActivity : ComponentActivity() {
 
     private fun showCefriumNovaAddons() {
         val addons = novaScriptAddonStore.list()
-        val rows = addons.map { "\${it.name} · \${if (it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+        val rows = addons.map { "${it.name} · ${if (it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
         val warning = "Nova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView."
         AlertDialog.Builder(this)
             .setCustomTitle(TextView(this).apply {
-                text = "Nova Add-ons · \${addons.size}\n\n$warning"
+                text = "Nova Add-ons · ${addons.size}\n\n$warning"
                 textSize = 14f
                 setPadding(dp(24), dp(18), dp(24), dp(8))
             })
@@ -4101,7 +4101,7 @@ class MainActivity : ComponentActivity() {
                 val actions = if (addon.enabled) arrayOf("Disable", "Remove") else arrayOf("Enable", "Remove")
                 AlertDialog.Builder(this)
                     .setCustomTitle(TextView(this).apply {
-                        text = "\${addon.name}\n\nAllowed websites:\n\${addon.allowedOriginRules.sorted().joinToString("\n")}"
+                        text = "${addon.name}\n\nAllowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}"
                         textSize = 14f
                         setPadding(dp(24), dp(18), dp(24), dp(8))
                     })
@@ -4109,16 +4109,16 @@ class MainActivity : ComponentActivity() {
                         when (actions[action]) {
                             "Enable" -> runCatching { novaScriptAddonStore.setEnabled(addon.id, true) }
                                 .onSuccess { refreshCefriumNovaAddons(); toast("Nova Add-on enabled · reload applied") }
-                                .onFailure { toast("Could not enable add-on: \${it.message}") }
+                                .onFailure { toast("Could not enable add-on: ${it.message}") }
                             "Disable" -> runCatching { novaScriptAddonStore.setEnabled(addon.id, false) }
                                 .onSuccess { refreshCefriumNovaAddons(); toast("Nova Add-on disabled · reload applied") }
-                                .onFailure { toast("Could not disable add-on: \${it.message}") }
+                                .onFailure { toast("Could not disable add-on: ${it.message}") }
                             "Remove" -> AlertDialog.Builder(this)
-                                .setMessage("Remove \${addon.name} and its local script?")
+                                .setMessage("Remove ${addon.name} and its local script?")
                                 .setPositiveButton("Remove") { _, _ ->
                                     runCatching { novaScriptAddonStore.remove(addon.id) }
                                         .onSuccess { refreshCefriumNovaAddons(); toast("Nova Add-on removed") }
-                                        .onFailure { toast("Could not remove add-on: \${it.message}") }
+                                        .onFailure { toast("Could not remove add-on: ${it.message}") }
                                 }
                                 .setNegativeButton("Cancel", null).show()
                         }

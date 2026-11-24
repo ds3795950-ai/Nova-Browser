@@ -1,5 +1,4 @@
 package com.nova.browser.engine
-import android.net.Uri
 import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
