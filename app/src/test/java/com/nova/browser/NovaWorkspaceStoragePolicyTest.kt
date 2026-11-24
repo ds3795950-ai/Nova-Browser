@@ -68,4 +68,16 @@ class NovaWorkspaceStoragePolicyTest {
         assertThrows(IllegalArgumentException::class.java) { NovaWorkspaceStoragePolicy.validateTombstones(JSONObject().put("Work", Long.MAX_VALUE).toString()) }
         assertEquals(JSONObject().put("Work", 123L).toString(), NovaWorkspaceStoragePolicy.validateTombstones(JSONObject().put("Work", 123L).toString()))
     }
+
+    @Test fun acceptsBracketedPathAndPipeInQuery() {
+        val entry = JSONObject(workspace()).put("engine", "GECKOVIEW")
+        entry.getJSONArray("tabs").getJSONObject(0).put("url", "https://example.com/search?filter[type]=news|tech")
+        assertEquals(1, NovaWorkspaceStoragePolicy.parse(NovaWorkspaceStoragePolicy.serialize(setOf(entry.toString()))).size)
+    }
+
+    @Test fun acceptsLongOAuthUrlsWithinWorkspaceLimit() {
+        val entry = JSONObject(workspace()).put("engine", "GECKOVIEW")
+        entry.getJSONArray("tabs").getJSONObject(0).put("url", "https://example.com/callback?state=" + "x".repeat(4096))
+        assertEquals(1, NovaWorkspaceStoragePolicy.parse(NovaWorkspaceStoragePolicy.serialize(setOf(entry.toString()))).size)
+    }
 }

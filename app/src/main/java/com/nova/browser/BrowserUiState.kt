@@ -3,7 +3,9 @@ package com.nova.browser
 internal enum class BrowserMode { NORMAL, PRIVATE, GUEST }
 internal enum class BrowserSecurityState { SECURE, NOT_SECURE, CERTIFICATE_WARNING }
 internal data class BrowserStatusState(val text: String, val priority: Int)
-internal data class BrowserSuggestion(val label: String, val url: String)
+internal data class BrowserSuggestion(val label: String, val url: String) {
+    override fun toString(): String = label
+}
 
 internal object BrowserUiState {
     fun filterSuggestions(query: String, candidates: List<BrowserSuggestion>, limit: Int = 6): List<BrowserSuggestion> {

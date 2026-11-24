@@ -20,7 +20,11 @@ internal object HistoryPolicy {
         if (url.isBlank() || url == "about:blank") return null
         val uri = runCatching { URI(url) }.getOrNull() ?: return null
         if (!(uri.scheme.equals("http", true) || uri.scheme.equals("https", true))) return null
-        val authority = uri.rawAuthority?.takeIf { it.isNotBlank() && uri.rawUserInfo == null } ?: return null
+        // URI.host/rawUserInfo may be null for registry-based authorities such as
+        // "alice:secret@example.com"; reject the raw delimiter before persisting.
+        val authority = uri.rawAuthority?.takeIf {
+            it.isNotBlank() && uri.rawUserInfo == null && '@' !in it
+        } ?: return null
         val query = uri.rawQuery
         if (!query.isNullOrBlank()) {
             val hasSecret = query.split('&').any { part ->

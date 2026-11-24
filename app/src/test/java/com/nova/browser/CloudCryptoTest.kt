@@ -34,6 +34,12 @@ class CloudCryptoTest {
         } catch (_: javax.crypto.AEADBadTagException) { }
     }
 
+    @Test fun encryptedBackupSizeIsBoundedByUtf8BytesBeforeEncryption() {
+        assertEquals(true, CloudCrypto.isPlaintextWithinLimit("€".repeat(100)))
+        assertEquals(false, CloudCrypto.isPlaintextWithinLimit("€".repeat(5_592_406)))
+        assertEquals(false, CloudCrypto.isCiphertextWithinLimit(24 * 1024 * 1024))
+    }
+
     @Test fun eachBackupUsesFreshSaltAndIv() {
         val passphrase = "correct-horse-battery".toCharArray()
         val first = CloudCrypto.encrypt("same backup", passphrase)

@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class NovaDownloadManager(
     private val context: Context,
     storageNamespace: String,
-    private val changed: (List<Item>) -> Unit
+    @Volatile private var changed: ((List<Item>) -> Unit)?
 ) {
     private val storageNamespace = storageNamespace.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() || it == '-' || it == '_' }.also { require(it.isNotBlank()) { "A non-empty engine storage namespace is required" } }
     data class Item(
@@ -57,12 +57,14 @@ class NovaDownloadManager(
 
     init { loadRecords() }
 
+    fun setOnChangedListener(listener: ((List<Item>) -> Unit)?) { changed = listener }
+
     @Synchronized fun items(): List<Item> = records.values.toList().reversed()
 
     @Synchronized private fun put(item: Item) {
         records[item.id] = item
         persist()
-        changed(items())
+        changed?.invoke(items())
         NovaDownloadService.update(context, running.size)
     }
 
@@ -173,8 +175,13 @@ class NovaDownloadManager(
             part.parentFile?.mkdirs()
             var offset = part.length()
             // If-Range needs a strong ETag or a Last-Modified date; otherwise a partial file cannot be validated.
-            val validator = worker.item.etag.takeIf { it.isNotBlank() && !it.startsWith("W/") }
-                ?: worker.item.lastModified.takeIf { it.isNotBlank() }
+            // If an ETag exists but is weak, do not silently fall back to Last-Modified
+            // for If-Range; restart rather than risk appending bytes from another entity.
+            // Resume only when the server supplied a strong entity tag.
+            // Last-Modified is not sufficient to guarantee byte-for-byte identity.
+            val validator = worker.item.etag.takeIf {
+                it.isNotBlank() && !it.startsWith("W/", ignoreCase = true)
+            }
             if (offset > 0 && validator == null) { part.delete(); offset = 0 }
             var connection = openConnection(worker, offset, validator)
             var code = connection.responseCode
@@ -199,10 +206,12 @@ class NovaDownloadManager(
             val etag = connection.getHeaderField("ETag") ?: worker.item.etag
             val modified = connection.getHeaderField("Last-Modified") ?: worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
+            val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 && validator != null
             val total = when {
                 contentRange?.total != null -> contentRange.total
                 length >= 0 -> offset + length
-                else -> worker.item.total
+                hasValidatedResume -> worker.item.total.takeIf { it > offset } ?: -1L
+                else -> -1L
             }
             val headerName = DownloadProtocol.parseContentDispositionName(connection.getHeaderField("Content-Disposition"))?.let { DownloadProtocol.safeFileName(it) }
             worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified, fileName = headerName ?: worker.item.fileName)
@@ -375,6 +384,21 @@ class NovaDownloadManager(
     private fun sanitize(value: String): String = DownloadProtocol.safeFileName(value)
 
     companion object {
+        private val sharedManagers = mutableMapOf<String, NovaDownloadManager>()
+
+        private fun normalizeNamespace(value: String): String =
+            value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+                .also { require(it.isNotBlank()) { "A non-empty engine storage namespace is required" } }
+
+        fun shared(context: Context, namespace: String, listener: (List<Item>) -> Unit): NovaDownloadManager {
+            val normalized = normalizeNamespace(namespace)
+            return synchronized(sharedManagers) {
+                sharedManagers.getOrPut(normalized) {
+                    NovaDownloadManager(context.applicationContext, normalized) { }
+                }.also { it.setOnChangedListener(listener) }
+            }
+        }
+
         fun formatBytes(bytes: Long): String = when {
             bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
             bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))

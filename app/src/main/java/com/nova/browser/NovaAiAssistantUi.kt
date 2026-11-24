@@ -33,7 +33,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 internal enum class NovaAiProvider(val label: String, val defaultModel: String) {
     CHATGPT("ChatGPT", "gpt-4o-mini"), CLAUDE("Claude", "claude-3-5-haiku-latest"),
-    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-2.0-flash"),
+    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-3.8-flash"),
     KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat")
 }
 internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
@@ -46,7 +46,7 @@ private object NovaAiModelCatalog {
         NovaAiProvider.CHATGPT -> listOf("gpt-5-pro", "o3-pro")
         NovaAiProvider.CLAUDE -> listOf("claude-opus-4-1", "claude-opus-4-5")
         NovaAiProvider.GROK -> listOf("grok-4", "grok-4-heavy")
-        NovaAiProvider.GEMINI -> listOf("gemini-2.5-pro", "gemini-3-pro-preview")
+        NovaAiProvider.GEMINI -> listOf("gemini-3.1-pro")
         NovaAiProvider.KIMI -> listOf("kimi-k2-thinking")
         NovaAiProvider.DEEPSEEK -> listOf("deepseek-reasoner")
     }
@@ -77,13 +77,15 @@ internal class NovaAiSecureStore(context:Context) {
     fun hasKey(provider:NovaAiProvider)=runCatching{!getKey(provider).isNullOrBlank()}.getOrDefault(false)
     fun model(provider:NovaAiProvider)=p.getString("model_${provider.name}",provider.defaultModel)?:provider.defaultModel
     fun setModel(provider:NovaAiProvider,value:String){
-        require(value.matches(Regex("[A-Za-z0-9._:-]{1,159}"))) { "Invalid model identifier" }
+        require(NovaAiInputPolicy.isSafeModelIdentifier(value)) { "Invalid model identifier" }
         check(p.edit().putString("model_${provider.name}",value).commit())
     }
     private companion object {
-        const val MAX_HISTORY_CHARS = 512 * 1024
+        const val MAX_HISTORY_BYTES = 512 * 1024
         const val MAX_HISTORY_MESSAGE_CHARS = 32 * 1024
+        const val MAX_LEGACY_HISTORY_BYTES = 4 * 1024 * 1024
         const val MAX_ENCRYPTED_HISTORY_CHARS = 768 * 1024
+        const val MAX_LEGACY_ENCRYPTED_HISTORY_CHARS = 4 * 1024 * 1024
     }
 
     private fun readMessageArray(a:JSONArray):MutableList<NovaAiMessage> =
@@ -97,36 +99,55 @@ internal class NovaAiSecureStore(context:Context) {
                 NovaAiMessage(role,text,o.optLong("time"))
             }.getOrNull()
         }.toMutableList()
-    private fun sessions():MutableList<MutableList<NovaAiMessage>> = runCatching {
-        val encrypted = p.getString("history", "") ?: ""
-        if (encrypted.isBlank() || encrypted.length > MAX_ENCRYPTED_HISTORY_CHARS) return@runCatching mutableListOf()
-        val raw=decrypt(encrypted)
-        if (raw.length > MAX_HISTORY_CHARS + 128 * 1024) return@runCatching mutableListOf()
-        if(raw.trimStart().startsWith("{")) {
-            val all=JSONObject(raw).optJSONArray("sessions") ?: JSONArray()
-            (0 until minOf(all.length(), 20)).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
-        } else mutableListOf(readMessageArray(JSONArray(raw)))
-    }.getOrDefault(mutableListOf())
-    private fun saveSessions(all:List<List<NovaAiMessage>>) {
-        var remaining = MAX_HISTORY_CHARS
-        val bounded = all.takeLast(20).asReversed().map { session ->
-            session.takeLast(100).asReversed().mapNotNull { message ->
-                if (remaining <= 0) null else {
-                    val safeText = message.text.take(minOf(MAX_HISTORY_MESSAGE_CHARS, remaining))
-                    remaining -= safeText.length
-                    if (safeText.isBlank() && message.text.isNotBlank()) null
-                    else NovaAiMessage(message.role, safeText, message.time)
-                }
-            }.asReversed()
-        }.asReversed()
+    private fun serializeSessions(all:List<List<NovaAiMessage>>):String {
         val root=JSONObject(); val array=JSONArray()
-        bounded.forEach { session ->
+        all.forEach { session ->
             val entries=JSONArray()
             session.forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)) }
             array.put(entries)
         }
         root.put("sessions",array)
-        check(p.edit().putString("history",encrypt(root.toString())).commit())
+        return root.toString()
+    }
+    private fun trimSessionsForStorage(all:List<List<NovaAiMessage>>):MutableList<MutableList<NovaAiMessage>> {
+        val bounded=all.takeLast(20).map { session ->
+            session.takeLast(100).map { it.copy(text=it.text.take(MAX_HISTORY_MESSAGE_CHARS)) }.toMutableList()
+        }.toMutableList()
+        while(bounded.isNotEmpty() && serializeSessions(bounded).toByteArray(Charsets.UTF_8).size>MAX_HISTORY_BYTES) {
+            if(bounded.size>1) bounded.removeAt(0)
+            else {
+                val current=bounded.last()
+                if(current.size>1) {
+                    val nextUser=(1 until current.size).firstOrNull { current[it].role=="user" }
+                    val removeCount=nextUser ?: 1
+                    repeat(removeCount.coerceAtMost(current.size)) { current.removeAt(0) }
+                } else if(current.isNotEmpty()) current.removeAt(0) else bounded.removeAt(0)
+            }
+        }
+        return bounded
+    }
+    private fun sessions():MutableList<MutableList<NovaAiMessage>> {
+        val encrypted=p.getString("history","") ?: ""
+        if(encrypted.isBlank() || encrypted.length>MAX_LEGACY_ENCRYPTED_HISTORY_CHARS) return mutableListOf()
+        val raw=runCatching { decrypt(encrypted) }.getOrNull() ?: return mutableListOf()
+        if(raw.toByteArray(Charsets.UTF_8).size>MAX_LEGACY_HISTORY_BYTES) return mutableListOf()
+        val parsed=runCatching {
+            if(raw.trimStart().startsWith("{")) {
+                val all=JSONObject(raw).optJSONArray("sessions") ?: JSONArray()
+                (0 until minOf(all.length(),20)).mapNotNull { all.optJSONArray(it)?.let(::readMessageArray) }.toMutableList()
+            } else mutableListOf(readMessageArray(JSONArray(raw)))
+        }.getOrDefault(mutableListOf())
+        val bounded=trimSessionsForStorage(parsed)
+        if(bounded != parsed) runCatching { saveSessions(bounded) }
+        return bounded
+    }
+    private fun saveSessions(all:List<List<NovaAiMessage>>) {
+        val bounded=trimSessionsForStorage(all)
+        val plain=serializeSessions(bounded)
+        require(plain.toByteArray(Charsets.UTF_8).size<=MAX_HISTORY_BYTES) { "AI history exceeds the storage byte limit" }
+        val encrypted=encrypt(plain)
+        require(encrypted.length<=MAX_ENCRYPTED_HISTORY_CHARS) { "Encrypted AI history exceeds the storage limit" }
+        check(p.edit().putString("history",encrypted).commit())
     }
     fun history():List<NovaAiMessage> = sessions().flatten().takeLast(100)
     fun currentHistory():List<NovaAiMessage> = sessions().lastOrNull()?.takeLast(100) ?: emptyList()
@@ -140,7 +161,7 @@ internal class NovaAiSecureStore(context:Context) {
         all.last().add(m)
         saveSessions(all)
     }
-    fun clear(){p.edit().remove("history").commit()}
+    fun clear(): Boolean = p.edit().remove("history").commit()
 }
 
 internal class NovaAiUsageLimitException(detail: String) : Exception(detail)
@@ -193,8 +214,13 @@ internal object NovaAiApi {
             if(code !in 200..299) {
                 val e=j.optJSONObject("error")
                 val message=(e?.optString("message")?.takeIf{it.isNotBlank()} ?: j.optString("message").ifBlank{"Request failed"})
-                    .replace(Regex("[\\r\\n\\t]+"), " ").take(240)
-                val safeMessage = headers.values.filter { it.length >= 8 }.fold(message) { value, secret -> value.replace(secret, "[redacted]") }
+                    .replace(Regex("[\\r\\n\\t]+"), " ")
+                val secrets = headers.values.flatMap { value ->
+                    listOf(value, value.removePrefix("Bearer ").removePrefix("bearer "))
+                }.filter { it.length >= 8 }.distinct()
+                val safeMessage = secrets.fold(message) { value, secret ->
+                    value.replace(secret, "[redacted]")
+                }.take(240)
                 val errorCode=(e?.optString("code").orEmpty()+" "+e?.optString("type").orEmpty()+" "+e?.optString("status").orEmpty()+" "+j.optString("status")).lowercase()
                 if(code==429 || errorCode.contains("rate_limit") || errorCode.contains("resource_exhausted") || errorCode.contains("insufficient_quota") || errorCode.contains("quota_exceeded")) throw NovaAiUsageLimitException(safeMessage)
                 error("Provider API error ($code): $safeMessage")
@@ -212,16 +238,22 @@ internal object NovaAiApi {
                 NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
                 NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/models" to mapOf("Authorization" to "Bearer $key")
             }
-            val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.CLAUDE||p==NovaAiProvider.GEMINI)"models" else "data")
+            val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.GEMINI)"models" else "data")
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
                 val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
                 id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
-            }.distinct().sorted().ifEmpty{listOf(p.defaultModel)}
+            }.filterNot { id -> p == NovaAiProvider.CHATGPT && id in setOf("gpt-5-pro", "o3-pro") }
+                .distinct().sorted().also { ids ->
+                    require(ids.isNotEmpty()) { "The provider returned no models supported by Nova" }
+                }
         };main.post{done(r)}
     }}
     fun send(p:NovaAiProvider,key:String,model:String,history:List<NovaAiMessage>,done:(Result<String>)->Unit){pool.execute{
         val r=runCatching {
-            val recent=history.takeLast(20)
+            require(!(p == NovaAiProvider.CHATGPT && model in setOf("gpt-5-pro", "o3-pro"))) {
+                "This model requires the OpenAI Responses API, which this client does not currently support."
+            }
+            val recent=NovaAiInputPolicy.boundedHistory(history, MAX_REQUEST_BYTES)
             when(p){
                 NovaAiProvider.CHATGPT,NovaAiProvider.GROK,NovaAiProvider.KIMI,NovaAiProvider.DEEPSEEK->{
                     val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",it.role).put("content",it.text))}
@@ -262,6 +294,12 @@ internal class NovaAiAssistantUi(
     private var availableModelIds = emptySet<String>()
     private var displayedModelIds = listOf(model)
     private var changingModelSelection = false
+    private val modelRefreshGeneration = mutableMapOf<NovaAiProvider, Long>()
+    private val pageContextTransferAllowedProviders = mutableSetOf(NovaAiProvider.CHATGPT)
+    private val messageViews = mutableListOf<View>()
+    private val maxLiveMessages = 100
+    private val maxRenderedMessages = 40
+    private val pageContextMarker = "--- Current webpage context (user attached) ---"
 
     private fun isPremiumModel(id: String) = id in NovaAiModelCatalog.premium(provider)
     private fun isModelLocked(id: String) = isPremiumModel(id) && id !in availableModelIds
@@ -352,6 +390,7 @@ internal class NovaAiAssistantUi(
     private lateinit var usageWarning: TextView
     private var attachedPageText: String? = null
     private var busy = false
+    private var conversationGeneration = 0L
     private var dialog: AlertDialog? = null
 
     private val palette = NovaThemeManager.palette(context)
@@ -509,16 +548,34 @@ internal class NovaAiAssistantUi(
             topMargin = dp(8)
         })
 
+        fun switchProvider(nextProvider: NovaAiProvider) {
+            provider = nextProvider
+            usageWarning.visibility = View.GONE
+            model = store.model(provider)
+            availableModelIds = emptySet()
+            updateModelChoices(model)
+            status.text = if (store.hasKey(provider)) "Checking provider model access…" else "Add " + provider.label + " API key to connect"
+            if (store.hasKey(provider)) refreshModels()
+        }
         providers.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                provider = NovaAiProvider.values()[position]
-                usageWarning.visibility = View.GONE
-                model = store.model(provider)
-                availableModelIds = emptySet()
-                updateModelChoices(model)
-                status.text = if (store.hasKey(provider)) "Checking provider model access…" else "Add ${provider.label} API key to connect"
-                if (store.hasKey(provider)) refreshModels()
+                val nextProvider = NovaAiProvider.values()[position]
+                if (nextProvider == provider) return
+                val carriesPageText = attachedPageText != null || messages.any { pageContextMarker in it.text }
+                if (carriesPageText && nextProvider !in pageContextTransferAllowedProviders) {
+                    AlertDialog.Builder(context)
+                        .setTitle("Share webpage context?")
+                        .setMessage("This conversation contains text from a webpage attached while using " + provider.label + ". Allow Nova to include that text in requests to " + nextProvider.label + "?")
+                        .setPositiveButton("Allow transfer") { _, _ ->
+                            pageContextTransferAllowedProviders += nextProvider
+                            switchProvider(nextProvider)
+                        }
+                        .setNegativeButton("Cancel") { _, _ -> providers.setSelection(provider.ordinal) }
+                        .show()
+                    return
+                }
+                switchProvider(nextProvider)
             }
         }
         models.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -542,7 +599,12 @@ internal class NovaAiAssistantUi(
         }
 
         if (persistHistory) {
-            messages += store.currentHistory()
+            // Page text is intentionally not replayed across sessions because the provider
+            // that originally received it may differ from the provider selected now.
+            messages += store.currentHistory().takeLast(maxLiveMessages).map { message ->
+                if (pageContextMarker in message.text) message.copy(text = message.text.substringBefore(pageContextMarker).trim())
+                else message
+            }.filter { it.text.isNotBlank() }
             if (messages.isNotEmpty()) messages.forEach(::render)
         }
         if (messages.isEmpty()) showWelcome()
@@ -594,6 +656,7 @@ internal class NovaAiAssistantUi(
 
     private fun showCurrentConversation() {
         feed.removeAllViews()
+        messageViews.clear()
         if (messages.isEmpty()) {
             showWelcome()
             status.text = "No messages in this conversation yet"
@@ -604,16 +667,41 @@ internal class NovaAiAssistantUi(
     }
 
     private fun newChat() {
+        if (persistHistory) {
+            val saved = runCatching { store.startNewConversation() }
+            if (saved.isFailure) {
+                notify("Could not start a new conversation because encrypted history could not be saved. Retry after unlocking device storage.")
+                return
+            }
+        }
+        conversationGeneration++
+        busy = false
         messages.clear()
-        if (persistHistory) runCatching { store.startNewConversation() }
+        messageViews.clear()
         attachedPageText = null
+        pageContextTransferAllowedProviders.clear()
+        pageContextTransferAllowedProviders += provider
         contextChip.visibility = View.GONE
         feed.removeAllViews()
         showWelcome()
         input.setText("")
         status.text = "New conversation"
-        // The encrypted store keeps the existing transcript until the user clears history.
-        // This screen starts a fresh in-memory conversation.
+    }
+
+    private fun setAttachedPage(page: String?) {
+        attachedPageText = page?.take(24_000)
+        if (attachedPageText.isNullOrBlank()) {
+            attachedPageText = null
+            contextChip.visibility = View.GONE
+            return
+        }
+        pageContextTransferAllowedProviders += provider
+        contextChip.text = "▣ Current page attached · " + attachedPageText!!.length + " characters   ×"
+        contextChip.visibility = View.VISIBLE
+        contextChip.setOnClickListener {
+            attachedPageText = null
+            contextChip.visibility = View.GONE
+        }
     }
 
     private fun attachPage() {
@@ -624,13 +712,7 @@ internal class NovaAiAssistantUi(
                 status.text = "No readable page found"
                 notify("Could not read the current webpage")
             } else {
-                attachedPageText = page.take(24000)
-                contextChip.text = "▣ Current page attached · ${attachedPageText!!.length} characters   ×"
-                contextChip.visibility = View.VISIBLE
-                contextChip.setOnClickListener {
-                    attachedPageText = null
-                    contextChip.visibility = View.GONE
-                }
+                setAttachedPage(page)
                 status.text = "Current page attached"
             }
         }
@@ -645,9 +727,7 @@ internal class NovaAiAssistantUi(
                 notify("Could not read the current webpage")
                 return@requestPageText
             }
-            attachedPageText = page.take(24000)
-            contextChip.text = "▣ Current page attached · tap × to remove"
-            contextChip.visibility = View.VISIBLE
+            setAttachedPage(page)
             input.setText("Summarise this webpage. Include an overview, key points, important facts and conclusions. Do not invent details.")
             send()
         }
@@ -664,35 +744,56 @@ internal class NovaAiAssistantUi(
             .setPositiveButton("Save") { _, _ ->
                 runCatching { store.setKey(provider, field.text.toString()) }
                     .onSuccess {
-                        status.text = if (store.hasKey(provider)) "API key saved · ${provider.label}" else "API key removed"
-                        if (store.hasKey(provider)) refreshModels()
+                        invalidateModelRefresh(provider)
+                        availableModelIds = emptySet()
+                        status.text = if (store.hasKey(provider)) "API key saved · " + provider.label else "API key removed"
+                        if (store.hasKey(provider)) refreshModels() else updateModelChoices(model)
                     }
                     .onFailure { notify("Could not save key: ${it.message}") }
             }
             .setNeutralButton("Remove") { _, _ ->
-                store.setKey(provider, "")
-                status.text = "API key removed"
+                runCatching { store.setKey(provider, "") }
+                    .onSuccess {
+                        invalidateModelRefresh(provider)
+                        availableModelIds = emptySet()
+                        updateModelChoices(model)
+                        status.text = "API key removed"
+                    }
+                    .onFailure { notify("Could not remove API key: " + (it.message ?: "storage error")) }
             }
             .setNegativeButton("Cancel", null).show()
     }
 
+    private fun invalidateModelRefresh(target: NovaAiProvider) {
+        modelRefreshGeneration[target] = (modelRefreshGeneration[target] ?: 0L) + 1L
+    }
+
     private fun refreshModels() {
-        val key = store.getKey(provider)
+        val requestedProvider = provider
+        val key = runCatching { store.getKey(requestedProvider) }.getOrElse {
+            notify("Saved " + requestedProvider.label + " API key could not be decrypted. Replace it to continue.")
+            editKey()
+            return
+        }
         if (key.isNullOrBlank()) {
-            notify("Add the ${provider.label} API key first")
+            notify("Add the " + requestedProvider.label + " API key first")
             editKey()
             return
         }
         status.text = "Checking models available to this API account…"
-        val requestedProvider = provider
+        val refreshGeneration = (modelRefreshGeneration[requestedProvider] ?: 0L) + 1L
+        modelRefreshGeneration[requestedProvider] = refreshGeneration
         NovaAiApi.models(requestedProvider, key) { result ->
-            if (dialog?.isShowing != true || provider != requestedProvider) return@models
+            if (dialog?.isShowing != true || provider != requestedProvider ||
+                modelRefreshGeneration[requestedProvider] != refreshGeneration ||
+                runCatching { store.getKey(requestedProvider) }.getOrNull() != key) return@models
             result.onSuccess { list ->
                 availableModelIds = list.toSet()
-                val preferred = if (model in availableModelIds || !isPremiumModel(model)) model else store.model(provider)
-                updateModelChoices(preferred)
+                val preferred = if (model in availableModelIds) model else list.firstOrNull() ?: requestedProvider.defaultModel
                 model = preferred
-                status.text = "${availableModelIds.size} models available · premium models locked unless provider API access is confirmed"
+                updateModelChoices(preferred)
+                runCatching { store.setModel(requestedProvider, preferred) }
+                status.text = availableModelIds.size.toString() + " models available · premium models locked unless provider API access is confirmed"
             }.onFailure {
                 availableModelIds = emptySet()
                 updateModelChoices(model)
@@ -707,8 +808,13 @@ internal class NovaAiAssistantUi(
         val prompt = input.text.toString().trim()
         if (prompt.isBlank()) return
         if (prompt.length > 8000) { notify("Keep each prompt under 8,000 characters"); return }
+        if (provider == NovaAiProvider.CHATGPT && model in setOf("gpt-5-pro", "o3-pro")) {
+            notify(model + " requires the OpenAI Responses API, which Nova's current connector does not support. Choose a Chat Completions model.")
+            refreshModels()
+            return
+        }
         if (isModelLocked(model)) {
-            notify("🔒 $model is locked. Enable access to this model through ${provider.label}'s API account, then refresh the model list.")
+            notify("🔒 " + model + " is locked. Enable access to this model through " + provider.label + "'s API account, then refresh the model list.")
             return
         }
         val key = runCatching { store.getKey(provider) }.getOrNull()
@@ -716,30 +822,42 @@ internal class NovaAiAssistantUi(
             editKey()
             return
         }
-        val fullPrompt = attachedPageText?.let {
-            "$prompt\n\n--- Current webpage context (user attached) ---\n${it.take(24000)}\n--- End webpage context ---"
-        } ?: prompt
-        input.setText("")
+        val fullPrompt = if (attachedPageText != null) {
+            prompt + "\n\n" + pageContextMarker + "\n" +
+                NovaAiInputPolicy.limitPageContext(attachedPageText!!) + "\n--- End webpage context ---"
+        } else prompt
         val user = NovaAiMessage("user", fullPrompt)
+        // Prepare the exact bounded history before clearing the composer or committing the turn.
+        val requestHistory = runCatching {
+            NovaAiInputPolicy.boundedHistory(messages + user, 512 * 1024)
+        }.getOrElse {
+            notify("This turn is too large for the provider request. Shorten the prompt or remove the attached page.")
+            return
+        }
+        input.setText("")
         messages += user
+        if (messages.size > maxLiveMessages) messages.removeAt(0)
         render(user)
         if (persistHistory) runCatching { store.append(user) }
         busy = true
-        status.text = "Thinking · ${provider.label} · ${model}"
-        NovaAiApi.send(provider, key, model, messages.toList()) { result ->
+        status.text = "Thinking · " + provider.label + " · " + model
+        val requestGeneration = conversationGeneration
+        NovaAiApi.send(provider, key, model, requestHistory) { result ->
+            if (requestGeneration != conversationGeneration) return@send
             if (dialog?.isShowing != true) return@send
             busy = false
             result.onSuccess { answer ->
                 usageWarning.visibility = View.GONE
                 val reply = NovaAiMessage("assistant", answer)
                 messages += reply
+                if (messages.size > maxLiveMessages) messages.removeAt(0)
                 render(reply)
                 if (persistHistory) runCatching { store.append(reply) }
-                status.text = "${provider.label} · ${model}"
+                status.text = provider.label + " · " + model
             }.onFailure { failure ->
                 if (failure is NovaAiUsageLimitException) {
-                    status.text = "Usage limit reached · ${provider.label}"
-                    usageWarning.text = "⚠ $model is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
+                    status.text = "Usage limit reached · " + provider.label
+                    usageWarning.text = "⚠ " + model + " is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
                     usageWarning.visibility = View.VISIBLE
                 } else {
                     status.text = "Request failed"
@@ -769,6 +887,11 @@ internal class NovaAiAssistantUi(
         feed.addView(block, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(10)
         })
+        messageViews += block
+        while (messageViews.size > maxRenderedMessages) {
+            val oldest = messageViews.removeAt(0)
+            (oldest.parent as? android.view.ViewGroup)?.removeView(oldest)
+        }
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
@@ -789,9 +912,19 @@ internal class NovaAiAssistantUi(
                     .setMessage(recent[index].text).setPositiveButton("Close", null).show()
             }
             .setNeutralButton("Clear history") { _, _ ->
-                if (persistHistory) store.clear()
+                if (persistHistory && !store.clear()) {
+                    notify("Could not clear encrypted conversation history. Please retry.")
+                    return@setNeutralButton
+                }
+                conversationGeneration++
+                busy = false
                 messages.clear()
+                messageViews.clear()
                 feed.removeAllViews()
+                attachedPageText = null
+                contextChip.visibility = View.GONE
+                pageContextTransferAllowedProviders.clear()
+                pageContextTransferAllowedProviders += provider
                 showWelcome()
                 notify("Conversation history cleared")
             }

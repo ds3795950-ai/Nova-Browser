@@ -18,8 +18,16 @@ internal object NovaSyncMerge {
                     profiles.put(engine.name, mergeProfile(localProfile ?: JSONObject(), remoteProfile ?: JSONObject()))
                 }
             }
-            return JSONObject().put("schema", 4).put("profiles", profiles)
+            val localGlobal = local.optJSONObject("global")
+            val remoteGlobal = remote.optJSONObject("global")
+                ?: if (remoteProfiles == null && remote.has("bookmarks")) remote else null
+            val global = if (localGlobal != null || remoteGlobal != null) {
+                mergeProfile(localGlobal ?: JSONObject(), remoteGlobal ?: JSONObject())
+            } else null
+            val result = JSONObject().put("schema", 5).put("profiles", profiles)
                 .put("settings", local.optJSONObject("settings") ?: remote.optJSONObject("settings") ?: JSONObject())
+            if (global != null) result.put("global", global)
+            return result
         }
         return mergeLegacy(local, remote)
     }
