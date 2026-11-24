@@ -101,6 +101,17 @@ import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.NovaScriptAddonStore
 
 /** Nova browser core. Normal tabs may use Cefrium; Private and Guest remain GeckoView-only. */
+private class NovaAddressAutoCompleteTextView(context: Context) : AutoCompleteTextView(context) {
+    override fun enoughToFilter(): Boolean = true
+    override fun performFiltering(text: CharSequence, keyCode: Int) {
+        // Nova supplies an already-ranked list; Android's label-only filter must not replace it.
+    }
+
+    override fun replaceText(text: CharSequence) {
+        // Keep the query and adapter intact until the click listener can use the selected row object.
+    }
+}
+
 class MainActivity : ComponentActivity() {
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(NovaThemeManager.wrapBaseContext(newBase))
@@ -238,6 +249,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         NovaThemeManager.applyBeforeCreate(this)
         super.onCreate(savedInstanceState)
+        currentActivityReference = java.lang.ref.WeakReference(this)
         lastUiMode = resources.configuration.uiMode
         lastFontScale = resources.configuration.fontScale
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -491,7 +503,7 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        addressBar = AutoCompleteTextView(this).apply {
+        addressBar = NovaAddressAutoCompleteTextView(this).apply {
             hint = getString(R.string.address_bar_hint)
             contentDescription = getString(R.string.address_bar_accessibility)
             isSingleLine = true
@@ -519,7 +531,7 @@ class MainActivity : ComponentActivity() {
         }
         addressSuggestionsAdapter = ArrayAdapter<BrowserSuggestion>(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
         // Suggestions are already ranked by Nova; disable Android's second, label-only filter.
-        addressBar.threshold = Int.MAX_VALUE
+        addressBar.threshold = 1
         addressBar.setAdapter(addressSuggestionsAdapter)
         addressBar.setOnItemClickListener { parent, _, position, _ ->
             val selected = parent.getItemAtPosition(position) as? BrowserSuggestion ?: return@setOnItemClickListener
@@ -1199,7 +1211,7 @@ class MainActivity : ComponentActivity() {
             },
             onPopupClosed = { popup -> handleCefriumPopupClosed(popup) },
             onExternalNavigation = { url, hasUserGesture -> openExternalUrlFromCefrium(url, hasUserGesture) },
-            onEngineRoutingRequired = { url -> routeCefriumNavigation(tab, url) },
+            onEngineRoutingRequired = { url, method -> routeCefriumNavigation(tab, url, method) },
             onHttpAuthRequest = { host, realm, isProxy, respond -> showCefriumHttpAuthPrompt(host, realm, isProxy, respond) },
             onContextMenu = { menu -> showCefriumContextMenu(tab, menu) },
             onBeforeUnloadDialog = { message, isReload, answer -> showCefriumBeforeUnloadPrompt(message, isReload, answer) },
@@ -1475,9 +1487,13 @@ class MainActivity : ComponentActivity() {
     private val pendingEngineFallbackTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** Return true to cancel the Cefrium navigation and reopen the destination in GeckoView. */
-    private fun routeCefriumNavigation(tab: BrowserTab, destination: String): Boolean {
+    private fun routeCefriumNavigation(tab: BrowserTab, destination: String, method: String = "GET"): Boolean {
         val selection = engineSelectionForTab(tab, destination)
         if (selection.engine == BrowserEngineType.CEFRIUM) return false
+        if (!method.equals("GET", ignoreCase = true)) {
+            toast("This form cannot be transferred to the other browser engine without losing its submitted data. It was blocked.")
+            return true
+        }
         if (!pendingEngineFallbackTabIds.add(tab.id)) return true
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             try {
@@ -3391,21 +3407,38 @@ class MainActivity : ComponentActivity() {
         }.toMutableList()
     }
 
-    private fun saveBookmarks(items: List<BookmarkEntry>, trackDeletes: Boolean = true) {
-        if (trackDeletes) {
-            val previous = readBookmarks()
+    private fun saveBookmarks(
+        items: List<BookmarkEntry>,
+        trackDeletes: Boolean = true,
+        tombstonesOverride: JSONObject? = null
+    ): Boolean {
+        val previous = readBookmarks()
+        val previousJson = prefs.getString("bookmarks_v2", null)
+        val previousLegacy = prefs.getStringSet("bookmarks", emptySet())?.toSet() ?: emptySet()
+        val previousTombstones = prefs.getString("bookmark_tombstones", "{}") ?: "{}"
+        val tombstones = tombstonesOverride?.let { JSONObject(it.toString()) }
+            ?: runCatching { JSONObject(previousTombstones) }.getOrDefault(JSONObject())
+        if (trackDeletes && tombstonesOverride == null) {
             val retained = items.map { it.url }.toSet()
             val removed = previous.filterNot { it.url in retained }
-            if (removed.isNotEmpty()) {
-                val tombstones = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}") }.getOrDefault(JSONObject())
-                val deletedAt = System.currentTimeMillis()
-                removed.forEach { tombstones.put(it.url, maxOf(deletedAt, it.addedAt + 1L)) }
-                prefs.edit().putString("bookmark_tombstones", tombstones.toString()).apply()
-            }
+            val deletedAt = System.currentTimeMillis()
+            removed.forEach { tombstones.put(it.url, maxOf(deletedAt, it.addedAt + 1L)) }
         }
         val array = JSONArray()
         items.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("folder", it.folder).put("addedAt", it.addedAt)) }
-        prefs.edit().putString("bookmarks_v2", array.toString()).putStringSet("bookmarks", items.map { it.url }.toSet()).apply()
+        val saved = prefs.edit()
+            .putString("bookmarks_v2", array.toString())
+            .putStringSet("bookmarks", items.map { it.url }.toSet())
+            .putString("bookmark_tombstones", tombstones.toString())
+            .commit()
+        if (saved) return true
+
+        // Android updates memory before commit() reports a disk error; restore the previous logical state.
+        val rollback = prefs.edit()
+        if (previousJson == null) rollback.remove("bookmarks_v2") else rollback.putString("bookmarks_v2", previousJson)
+        rollback.putStringSet("bookmarks", previousLegacy).putString("bookmark_tombstones", previousTombstones).apply()
+        toast("Could not save bookmarks. Try again.")
+        return false
     }
 
     private fun toggleBookmark() {
@@ -3487,19 +3520,17 @@ class MainActivity : ComponentActivity() {
 
     private fun restoreBookmarkAfterUndo(deleted: BookmarkEntry) {
         val current = readBookmarks()
+        // A re-added bookmark wins; never overwrite its newer title, folder, or timestamp.
+        if (current.any { it.url == deleted.url }) return
         val tombstones = runCatching {
             JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}")
         }.getOrDefault(JSONObject())
         val deletedAt = tombstones.optLong(deleted.url)
         tombstones.remove(deleted.url)
-        if (!prefs.edit().putString("bookmark_tombstones", tombstones.toString()).commit()) {
-            toast("Could not restore this bookmark. Try again.")
-            return
-        }
-        // A re-added bookmark wins; otherwise restore only the deleted item into the latest list.
-        if (current.any { it.url == deleted.url }) return
         val restored = deleted.copy(addedAt = maxOf(System.currentTimeMillis(), deletedAt + 1L))
-        saveBookmarks(current + restored)
+        if (!saveBookmarks(current + restored, trackDeletes = false, tombstonesOverride = tombstones)) {
+            showUndoSnackbar("Bookmark restore failed", "Retry") { restoreBookmarkAfterUndo(deleted) }
+        }
     }
 
     private fun showBookmarkActions(entry: BookmarkEntry, onChanged: () -> Unit = {}) =
@@ -3510,10 +3541,14 @@ class MainActivity : ComponentActivity() {
                     .setNegativeButton(getString(R.string.cancel), null)
                     .setPositiveButton(getString(R.string.delete)) { _, _ ->
                         val previous = readBookmarks()
-                        saveBookmarks(previous.filterNot { it.url == entry.url })
+                        val deletedEntry = previous.firstOrNull { it.url == entry.url } ?: run {
+                            toast("This bookmark no longer exists")
+                            return@setPositiveButton
+                        }
+                        if (!saveBookmarks(previous.filterNot { it.url == entry.url })) return@setPositiveButton
                         onChanged(); refreshBookmarkButton()
                         showUndoSnackbar(getString(R.string.bookmark_deleted), getString(R.string.undo)) {
-                            restoreBookmarkAfterUndo(entry)
+                            restoreBookmarkAfterUndo(deletedEntry)
                             onChanged()
                             refreshBookmarkButton()
                         }
@@ -5559,6 +5594,18 @@ private fun showQuickSettings() {
         return editor.commit()
     }
 
+    private fun resumePendingGeckoDataClearTab() {
+        if (pendingGeckoDataClearActive) return
+        val tabId = pendingGeckoDataClearResumeTabId ?: return
+        pendingGeckoDataClearResumeTabId = null
+        val index = tabs.indexOfFirst { it.id == tabId }
+        if (currentTab()?.id == tabId && index >= 0 &&
+            tabs[index].engineType == BrowserEngineType.GECKOVIEW &&
+            !tabs[index].isPrivate && !tabs[index].isGuest) {
+            switchTab(index)
+        }
+    }
+
     private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
         if (pendingGeckoDataClearActive) {
             onFinished(false, "A GeckoView data deletion is already in progress")
@@ -5579,16 +5626,25 @@ private fun showQuickSettings() {
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
         val finish = { succeeded: Boolean, message: String? ->
             if (completed.compareAndSet(false, true)) {
-                // Clear the process-wide guard even if this Activity was recreated while Gecko finished.
+                // Clear process state first, then deliver the resume to whichever Activity owns the tabs.
                 pendingGeckoDataClearTabIds.removeAll(affectedIds)
                 pendingGeckoDataClearActive = false
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    val index = tabs.indexOfFirst { it.id == activeTabId }
-                    if (currentTab()?.id == activeTabId && index >= 0 &&
-                        tabs[index].engineType == BrowserEngineType.GECKOVIEW &&
-                        !tabs[index].isPrivate && !tabs[index].isGuest) switchTab(index)
-                    onFinished(succeeded, message)
+                pendingGeckoDataClearResumeTabId = activeTabId
+                val target = currentActivityReference?.get()
+                if (target != null && !target.isFinishing && !target.isDestroyed) {
+                    target.runOnUiThread {
+                        if (target.isFinishing || target.isDestroyed) return@runOnUiThread
+                        target.resumePendingGeckoDataClearTab()
+                        if (target === this) onFinished(succeeded, message)
+                        else target.toast(message ?: if (succeeded) "Selected GeckoView tab resumed after data deletion" else "GeckoView data clear failed: ${message ?: "Unknown error"}")
+                    }
+                } else {
+                    // If completion beats Activity recreation, onResume consumes this retained tab ID.
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        resumePendingGeckoDataClearTab()
+                        onFinished(succeeded, message)
+                    }
                 }
             }
         }
@@ -6120,6 +6176,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
 
     override fun onResume() {
         super.onResume()
+        resumePendingGeckoDataClearTab()
         if (NovaBrowserVpnController.isVpnEnabled()) switchAllCefriumTabsToGecko("1VPN is enabled")
         tabs.forEach { it.browserEngine?.onHostResume() }
     }
@@ -6207,6 +6264,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
     }
 
     override fun onDestroy() {
+        if (currentActivityReference?.get() === this) currentActivityReference = null
         downloadManagers.values.forEach { it.setOnChangedListener(null) }
         guestTorStartPending = false
         if (!isChangingConfigurations || tabs.none { it.isGuest }) TorGuestRoutingController.stop()
@@ -6270,6 +6328,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private const val REQUEST_SITE_PERMISSIONS = 4021
         private const val HOME_URL = "about:blank"
         @Volatile private var sharedRuntime: GeckoRuntime? = null
+        @Volatile private var currentActivityReference: java.lang.ref.WeakReference<MainActivity>? = null
+        @Volatile private var pendingGeckoDataClearResumeTabId: String? = null
         private var retainedTabsForConfiguration: List<BrowserTab>? = null
         private var retainedActiveIndex: Int = 0
         private var retainedSplitTabId: String? = null

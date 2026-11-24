@@ -63,7 +63,7 @@ class CefriumBrowserEngine(
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
     private val soundAllowedForUrl: (String) -> Boolean = { true },
-    private val onEngineRoutingRequired: (String) -> Boolean = { false }
+    private val onEngineRoutingRequired: (String, String) -> Boolean = { _, _ -> false }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = setOf(
@@ -126,7 +126,7 @@ class CefriumBrowserEngine(
                 if (request.isForMainFrame) {
                     applySiteSettingsForUrl(url)
                     if (scheme in setOf("http", "https", "about", "data") &&
-                        this@CefriumBrowserEngine.onEngineRoutingRequired.invoke(url)) return true
+                        this@CefriumBrowserEngine.onEngineRoutingRequired.invoke(url, request.method.orEmpty())) return true
                 }
                 return when (scheme) {
                     "http", "https", "about", "data", "blob", "javascript" -> false

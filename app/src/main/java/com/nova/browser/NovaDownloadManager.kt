@@ -37,7 +37,8 @@ class NovaDownloadManager(
         val etag: String = "",
         val lastModified: String = "",
         val savedUri: String = "",
-        val error: String = ""
+        val error: String = "",
+        val resourceUrl: String = ""
     ) {
         fun progressLabel(): String = if (total > 0) "${(downloaded * 100 / total).coerceIn(0, 100)}% · ${formatBytes(downloaded)} / ${formatBytes(total)}" else "${formatBytes(downloaded)} downloaded"
     }
@@ -74,7 +75,7 @@ class NovaDownloadManager(
             array.put(JSONObject().put("id", item.id).put("url", item.url).put("fileName", item.fileName)
                 .put("mimeType", item.mimeType).put("downloaded", item.downloaded).put("total", item.total)
                 .put("state", item.state).put("etag", item.etag).put("lastModified", item.lastModified)
-                .put("savedUri", item.savedUri).put("error", item.error))
+                .put("savedUri", item.savedUri).put("error", item.error).put("resourceUrl", item.resourceUrl))
         }
         prefs.edit().putString("items", array.toString()).apply()
     }
@@ -88,7 +89,7 @@ class NovaDownloadManager(
                 val item = Item(o.getString("id"), o.getString("url"), o.getString("fileName"),
                     o.optString("mimeType", "application/octet-stream"), o.optLong("downloaded"),
                     o.optLong("total"), o.optString("state", "PAUSED"), o.optString("etag"),
-                    o.optString("lastModified"), o.optString("savedUri"), o.optString("error"))
+                    o.optString("lastModified"), o.optString("savedUri"), o.optString("error"), o.optString("resourceUrl"))
                 records[item.id] = when (item.state) {
                     "RUNNING" -> item.copy(state = "INTERRUPTED", error = "Download was interrupted by Android. It will resume when Nova starts.")
                     "SAVING", "FINALIZING" -> item.copy(state = "INTERRUPTED", error = "The final save was interrupted. Resume to retry the transfer.")
@@ -182,8 +183,14 @@ class NovaDownloadManager(
             val validator = worker.item.etag.takeIf {
                 it.isNotBlank() && !it.startsWith("W/", ignoreCase = true)
             }
-            if (offset > 0 && validator == null) { part.delete(); offset = 0 }
+            if (offset > 0 && (validator == null || worker.item.resourceUrl.isBlank())) { part.delete(); offset = 0 }
             var connection = openConnection(worker, offset, validator)
+            if (offset > 0 && connection.url.toString().take(8192) != worker.item.resourceUrl) {
+                connection.disconnect()
+                part.delete()
+                offset = 0
+                connection = openConnection(worker, 0, null)
+            }
             var code = connection.responseCode
             if (code == 416 && offset > 0) {
                 // The partial file is already complete or no longer matches the server copy: restart cleanly.
@@ -210,11 +217,19 @@ class NovaDownloadManager(
             val total = when {
                 contentRange?.total != null -> contentRange.total
                 length >= 0 -> offset + length
-                hasValidatedResume -> worker.item.total.takeIf { it > offset } ?: -1L
+                hasValidatedResume -> worker.item.total.takeIf { it >= offset } ?: -1L
                 else -> -1L
             }
             val headerName = DownloadProtocol.parseContentDispositionName(connection.getHeaderField("Content-Disposition"))?.let { DownloadProtocol.safeFileName(it) }
-            worker.item = worker.item.copy(downloaded = offset, total = total, state = "RUNNING", etag = etag, lastModified = modified, fileName = headerName ?: worker.item.fileName)
+            worker.item = worker.item.copy(
+                downloaded = offset,
+                total = total,
+                state = "RUNNING",
+                etag = etag,
+                lastModified = modified,
+                fileName = headerName ?: worker.item.fileName,
+                resourceUrl = connection.url.toString().take(8192)
+            )
             put(worker.item)
             connection.inputStream.use { input ->
                 FileOutputStream(part, offset > 0).use { output ->
