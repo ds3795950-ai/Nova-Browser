@@ -1,6 +1,7 @@
 package com.nova.browser
 
 import java.net.IDN
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URI
@@ -34,10 +35,11 @@ object BrowserUrlResolver {
             } else {
                 authority
             }
-            val local = host.equals("localhost", true) ||
-                host.endsWith(".local", true) ||
-                isPrivateIpv4(host) ||
-                isLocalIpv6(host)
+            val normalizedHost = host.trimEnd('.').lowercase(Locale.ROOT)
+            val local = normalizedHost == "localhost" ||
+                normalizedHost.endsWith(".local") ||
+                isPrivateIpv4(normalizedHost) ||
+                isLocalIpLiteral(normalizedHost)
             return (if (local) "http://" else "https://") + value
         }
 
@@ -67,7 +69,10 @@ object BrowserUrlResolver {
             }
             val address = authority.substring(1, closingBracket)
             return address.contains(':') &&
-                runCatching { InetAddress.getByName(address) is Inet6Address }.getOrDefault(false)
+                runCatching {
+                    val parsed = InetAddress.getByName(address)
+                    parsed is Inet6Address || parsed is Inet4Address
+                }.getOrDefault(false)
         }
 
         val colon = authority.lastIndexOf(':')
@@ -91,24 +96,31 @@ object BrowserUrlResolver {
         if (ascii == "localhost") return true
         if (ascii.matches(Regex("[0-9.]+"))) {
             val octets = ascii.split('.')
-            return octets.size == 4 && octets.all { it.toIntOrNull()?.let { n -> n in 0..255 } == true }
+            return octets.size == 4 && octets.all {
+                (it == "0" || !it.startsWith('0')) && it.toIntOrNull()?.let { n -> n in 0..255 } == true
+            }
         }
 
         val labels = ascii.split('.')
         if (labels.any { !validDnsLabel(it) }) return false
+        // WHATWG URL parsing treats a numeric final label as an IPv4 candidate.
+        // If the full host did not pass strict IPv4 validation, search instead.
+        if (labels.last().all(Char::isDigit)) return false
         if (ascii.endsWith(".local")) return true
         return labels.size >= 2 && labels.last().length >= 2
     }
 
     private fun validDnsLabel(label: String): Boolean =
         label.length in 1..63 &&
-            label.firstOrNull()?.isLetterOrDigit() == true &&
-            label.lastOrNull()?.isLetterOrDigit() == true &&
+            label.firstOrNull()?.let { it.isLetterOrDigit() || it == '_' } == true &&
+            label.lastOrNull()?.let { it.isLetterOrDigit() || it == '_' } == true &&
             label.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
     private fun isPrivateIpv4(host: String): Boolean {
-        val parts = host.split('.').map { it.toIntOrNull() ?: return false }
-        if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+        val octets = host.split('.')
+        if (octets.size != 4 || octets.any { it.length > 1 && it.startsWith('0') }) return false
+        val parts = octets.map { it.toIntOrNull() ?: return false }
+        if (parts.any { it !in 0..255 }) return false
         return parts[0] == 0 ||
             parts[0] == 10 ||
             parts[0] == 127 ||
@@ -117,11 +129,13 @@ object BrowserUrlResolver {
             (parts[0] == 169 && parts[1] == 254)
     }
 
-    private fun isLocalIpv6(host: String): Boolean {
+    private fun isLocalIpLiteral(host: String): Boolean {
         if (!host.startsWith("[") || !host.endsWith("]")) return false
         val address = runCatching {
-            InetAddress.getByName(host.substring(1, host.length - 1)) as? Inet6Address
+            InetAddress.getByName(host.substring(1, host.length - 1))
         }.getOrNull() ?: return false
+        if (address is Inet4Address) return isPrivateIpv4(address.hostAddress)
+        if (address !is Inet6Address) return false
         val firstByte = address.address.firstOrNull()?.toInt()?.and(0xff) ?: return false
         val uniqueLocal = (firstByte and 0xfe) == 0xfc
         return address.isAnyLocalAddress || address.isLoopbackAddress ||

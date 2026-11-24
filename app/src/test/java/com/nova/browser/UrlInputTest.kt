@@ -138,6 +138,31 @@ class UrlInputTest {
         assertEquals("https://[2001:4860:4860::8888]", BrowserUrlResolver.resolve("[2001:4860:4860::8888]"))
     }
 
+    @Test fun underscoreHostLabelsAllowBoundaryUnderscores() {
+        assertEquals("https://_preview.example.com", BrowserUrlResolver.resolve("_preview.example.com"))
+        assertEquals("https://preview_.example.com", BrowserUrlResolver.resolve("preview_.example.com"))
+    }
+
+    @Test fun numericFinalDnsLabelFallsBackToSearch() {
+        assertEquals("https://www.google.com/search?q=v1.23", BrowserUrlResolver.resolve("v1.23"))
+        assertEquals("https://www.google.com/search?q=example.123", BrowserUrlResolver.resolve("example.123"))
+    }
+
+    @Test fun ambiguousLeadingZeroIpv4FallsBackToSearch() {
+        assertEquals("https://www.google.com/search?q=0010.0.0.1", BrowserUrlResolver.resolve("0010.0.0.1"))
+        assertEquals("https://www.google.com/search?q=192.168.001.1", BrowserUrlResolver.resolve("192.168.001.1"))
+    }
+
+    @Test fun ipv4MappedIpv6UsesIpv4LocalityRules() {
+        assertEquals("http://[::ffff:127.0.0.1]", BrowserUrlResolver.resolve("[::ffff:127.0.0.1]"))
+        assertEquals("https://[::ffff:8.8.8.8]", BrowserUrlResolver.resolve("[::ffff:8.8.8.8]"))
+    }
+
+    @Test fun trailingDotLocalHostsUseHttp() {
+        assertEquals("http://localhost.:3000", BrowserUrlResolver.resolve("localhost.:3000"))
+        assertEquals("http://printer.local.", BrowserUrlResolver.resolve("printer.local."))
+    }
+
     @Test fun invalidIpv6IsSearched() {
         assertEquals("https://www.google.com/search?q=%5B2001%3Adb8%3A%3Azz%5D", BrowserUrlResolver.resolve("[2001:db8::zz]"))
     }
