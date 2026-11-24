@@ -295,7 +295,7 @@ internal class NovaAiAssistantUi(
     private var displayedModelIds = listOf(model)
     private var changingModelSelection = false
     private val modelRefreshGeneration = mutableMapOf<NovaAiProvider, Long>()
-    private val pageContextTransferAllowedProviders = mutableSetOf(NovaAiProvider.CHATGPT)
+    private val pageContextTransferAllowedProviders = mutableSetOf<NovaAiProvider>()
     private val messageViews = mutableListOf<View>()
     private val maxLiveMessages = 100
     private val maxRenderedMessages = 40

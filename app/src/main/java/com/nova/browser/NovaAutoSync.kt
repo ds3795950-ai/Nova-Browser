@@ -120,11 +120,18 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             val vault = PasswordVault.shared(applicationContext)
             val localVault = vault.exportSyncBundle()
             val remote = cloud.downloadEncrypted()
-            val remoteSnapshot = remote.first
+            val remoteSnapshot = remote.snapshot
+            val remoteVault = remote.encryptedVaultPayloads.fold(JSONObject()) { mergedRemote, payload ->
+                PasswordVault.mergeSyncBundles(
+                    mergedRemote,
+                    PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(payload, passphrase))
+                )
+            }
             val merged = if (remoteSnapshot == null) localSnapshot else NovaSyncMerge.merge(localSnapshot,
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
-            val remoteVault = remote.second?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
+            // Validate the exact union before uploading or mutating either local collection.
+            NovaSyncSnapshotRepository.validate(merged)
             vault.validateSyncBundle(mergedVault)
             cloud.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             val applyResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)

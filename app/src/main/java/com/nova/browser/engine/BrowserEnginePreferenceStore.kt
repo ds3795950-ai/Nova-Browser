@@ -15,14 +15,21 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
     }
 
     fun cefriumProfileName(): String {
+        preferences.getString(KEY_PROFILE_NAME, null)?.takeIf { it.isNotBlank() }?.let { return it }
         val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_999)
         return if (generation == 1) BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE else "nova-normal-v$generation"
     }
 
     fun rotateCefriumProfile(): String? {
-        val next = (preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_998) + 1)
-        if (!preferences.edit().putInt(KEY_PROFILE_GENERATION, next).commit()) return null
-        return cefriumProfileName()
+        val previous = cefriumProfileName()
+        val next = "nova-normal-${java.util.UUID.randomUUID()}"
+        if (!preferences.edit().putString(KEY_PROFILE_NAME, next).commit()) {
+            // SharedPreferences updates memory before reporting a disk-write failure. Restore the
+            // old active identity immediately so retrying Clear cannot orphan the real profile.
+            preferences.edit().putString(KEY_PROFILE_NAME, previous).apply()
+            return null
+        }
+        return next
     }
 
     fun retiredCefriumProfiles(): Set<String> =
@@ -70,6 +77,7 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
         const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
+        const val KEY_PROFILE_NAME = "cefrium_profile_name"
         const val KEY_RETIRED_PROFILES = "cefrium_retired_profiles"
     }
 }

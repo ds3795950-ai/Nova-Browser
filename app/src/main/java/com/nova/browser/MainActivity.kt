@@ -6004,11 +6004,15 @@ private fun showForgotPassword(prefillEmail: String = "") {
             val localVault = passwordVault.exportSyncBundle()
             val remote = cloudSync.downloadEncrypted()
             check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
-            val remoteSnapshot = remote.first
-            val remoteVaultPayload = remote.second
+            val remoteSnapshot = remote.snapshot
+            val remoteVault = remote.encryptedVaultPayloads.fold(JSONObject()) { mergedRemote, payload ->
+                PasswordVault.mergeSyncBundles(
+                    mergedRemote,
+                    PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(payload, passphrase))
+                )
+            }
             val merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(local,
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
-            val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             NovaSyncSnapshotRepository.validate(merged)
             // Validate without mutating local credentials. A failed upload must not apply remote
@@ -6017,26 +6021,44 @@ private fun showForgotPassword(prefillEmail: String = "") {
             check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
+            // The worker clears its input array in finally. Keep a separate copy for the UI
+            // completion, which may execute after the worker has already returned.
+            val passphraseForStore = passphrase.copyOf()
             runOnUiThread {
-                synchronized(cloudSyncStateLock) {
-                    if (operationGeneration != cloudSyncGeneration || isFinishing || isDestroyed) return@synchronized
-                    // UI preferences and the vault may have changed while the network upload ran.
-                    // Never replace those newer local edits with the earlier merge.
-                    if (!NovaJsonEquality.areEqual(buildSyncSnapshot(), local)) {
-                        toast("Cloud upload finished, but local browser data changed during sync. Local edits were preserved; run Sync now again.")
-                        return@synchronized
+                try {
+                    synchronized(cloudSyncStateLock) {
+                        if (operationGeneration != cloudSyncGeneration || isFinishing || isDestroyed) return@synchronized
+                        // UI preferences and the vault may have changed while the network upload ran.
+                        // Never replace those newer local edits with the earlier merge.
+                        if (!NovaJsonEquality.areEqual(buildSyncSnapshot(), local)) {
+                            toast("Cloud upload finished, but local browser data changed during sync. Local edits were preserved; run Sync now again.")
+                            return@synchronized
+                        }
+                        if (!passwordVault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
+                            toast("Cloud upload finished, but the password vault changed during sync. Local edits were preserved; run Sync now again.")
+                            return@synchronized
+                        }
+                        applySyncSnapshot(merged)
+                        if (prefs.getBoolean("cloud_sync_enabled", false)) {
+                            try {
+                                AutoSyncPassphraseStore.save(this, passphraseForStore)
+                                NovaAutoSync.schedule(this)
+                            } catch (error: Exception) {
+                                // The browser data merge succeeded, but auto-sync must remain off
+                                // until its local Keystore-protected passphrase can be saved.
+                                prefs.edit().putBoolean("cloud_sync_enabled", false).apply()
+                                NovaAutoSync.cancel(this)
+                                prefs.edit().putString("cloud_sync_user_id", userId).apply()
+                                toast("Cloud sync completed, but automatic sync setup failed: ${error.message ?: "secure key storage unavailable"}")
+                                return@synchronized
+                            }
+                        }
+                        // Do not turn sync back on here: the user may have paused it while upload ran.
+                        prefs.edit().putString("cloud_sync_user_id", userId).apply()
+                        toast("Encrypted cloud sync completed")
                     }
-                    if (!passwordVault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
-                        toast("Cloud upload finished, but the password vault changed during sync. Local edits were preserved; run Sync now again.")
-                        return@synchronized
-                    }
-                    applySyncSnapshot(merged)
-                    if (prefs.getBoolean("cloud_sync_enabled", false)) {
-                        AutoSyncPassphraseStore.save(this, passphrase)
-                        NovaAutoSync.schedule(this)
-                    }
-                    prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
-                    toast("Encrypted cloud sync completed")
+                } finally {
+                    passphraseForStore.fill('\u0000')
                 }
             }
         } catch (error: Exception) {

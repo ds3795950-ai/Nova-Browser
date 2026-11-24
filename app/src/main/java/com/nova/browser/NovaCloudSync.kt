@@ -100,6 +100,11 @@ internal object CloudCrypto {
 /** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
 class CloudSyncConflictException(message: String) : IllegalStateException(message)
 
+internal data class NovaCloudDownload(
+    val snapshot: JSONObject?,
+    val encryptedVaultPayloads: List<JSONObject>
+)
+
 internal object NovaCloudBundle {
     const val FORMAT = "nova-encrypted-sync-bundle-v1"
 
@@ -223,7 +228,7 @@ class NovaCloudSync(context: Context) {
         vaultUpdatedAt = null
     }
 
-    fun downloadEncrypted(): Pair<JSONObject?, JSONObject?> {
+    fun downloadEncrypted(): NovaCloudDownload {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
@@ -232,16 +237,15 @@ class NovaCloudSync(context: Context) {
         // so its revision must participate in the next compare-and-swap.
         val legacyVault = fetchRow("nova_encrypted_vault", "payload", userId, token)
         val unpacked = NovaCloudBundle.unpack(snapshot, legacyVault)
-        if (snapshot?.optString("format") == NovaCloudBundle.FORMAT && legacyVault != null) {
-            val bundleRevision = snapshotUpdatedAt
-            val legacyRevision = vaultUpdatedAt
-            val legacyIsNewer = bundleRevision == null || legacyRevision == null ||
-                runCatching {
-                    java.time.OffsetDateTime.parse(legacyRevision).isAfter(java.time.OffsetDateTime.parse(bundleRevision))
-                }.getOrDefault(legacyRevision > bundleRevision)
-            if (legacyIsNewer) return unpacked.first to legacyVault
+        val payloads = buildList {
+            unpacked.second?.let { add(it) }
+            if (snapshot?.optString("format") == NovaCloudBundle.FORMAT && legacyVault != null) {
+                // Do not choose one encrypted vault by row timestamp: each may contain credentials
+                // or tombstones absent from the other. Callers decrypt both and merge their contents.
+                add(legacyVault)
+            }
         }
-        return unpacked
+        return NovaCloudDownload(unpacked.first, payloads)
     }
 
     fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {

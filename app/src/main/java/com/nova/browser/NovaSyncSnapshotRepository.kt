@@ -41,7 +41,7 @@ internal object NovaSyncSnapshotRepository {
             }
             val validatedWorkspaceEntries = linkedSetOf<String>()
             (p.getStringSet(key("saved_workspaces", engine), emptySet()) ?: emptySet()).sorted().forEach { raw ->
-                val candidate = runCatching { JSONObject(raw).put("engine", engine.name).toString() }.getOrNull()
+                val candidate = runCatching { JSONObject(raw).toString() }.getOrNull()
                     ?: return@forEach
                 val next = validatedWorkspaceEntries + candidate
                 if (runCatching { NovaWorkspaceStoragePolicy.serialize(next) }.isSuccess) {
@@ -55,6 +55,7 @@ internal object NovaSyncSnapshotRepository {
                 p.getString(key("workspace_tombstones", engine), "{}") ?: "{}"
             )
             profiles.put(engine.name, JSONObject()
+                .put("engine", engine.name)
                 .put("bookmarks", bookmarks)
                 .put("history", history)
                 .put("workspaces", workspaces)
@@ -120,10 +121,17 @@ internal object NovaSyncSnapshotRepository {
     private fun validateWorkspaceCollection(profile: JSONObject, expectedEngine: String?) {
         val workspaces = profile.optJSONArray("workspaces") ?: JSONArray()
         val entries = linkedSetOf<String>()
+        if (expectedEngine != null && profile.has("engine")) {
+            require(profile.optString("engine") == expectedEngine) {
+                "Cloud workspace profile belongs to a different browser engine"
+            }
+        }
         for (i in 0 until workspaces.length()) {
             val item = workspaces.optJSONObject(i)
                 ?: throw IllegalArgumentException("Cloud workspace entry is malformed")
-            if (expectedEngine != null) {
+            // Older snapshots carry engine provenance on each entry; newer snapshots carry it
+            // once on the containing profile so max-sized workspace records are not enlarged.
+            if (expectedEngine != null && item.has("engine")) {
                 require(item.optString("engine") == expectedEngine) {
                     "Cloud workspace belongs to a different browser engine"
                 }
