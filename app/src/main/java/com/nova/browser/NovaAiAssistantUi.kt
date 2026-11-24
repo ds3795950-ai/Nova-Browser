@@ -599,7 +599,12 @@ internal class NovaAiAssistantUi(
         }
 
         if (persistHistory) {
-            messages += store.currentHistory()
+            // Page text is intentionally not replayed across sessions because the provider
+            // that originally received it may differ from the provider selected now.
+            messages += store.currentHistory().takeLast(maxLiveMessages).map { message ->
+                if (pageContextMarker in message.text) message.copy(text = message.text.substringBefore(pageContextMarker).trim())
+                else message
+            }.filter { it.text.isNotBlank() }
             if (messages.isNotEmpty()) messages.forEach(::render)
         }
         if (messages.isEmpty()) showWelcome()
