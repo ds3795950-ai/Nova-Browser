@@ -254,22 +254,31 @@ class CefriumBrowserEngine(
         novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
         novaAddonScriptHandlers.clear()
         addons.filter { it.enabled }.forEach { addon ->
-            require(addon.allowedOriginRules.isNotEmpty()) { "Nova Add-on requires an origin allowlist" }
-            val idLiteral = org.json.JSONObject.quote(addon.id)
-            val nameLiteral = org.json.JSONObject.quote(addon.name)
-            val wrapped = """
-                (() => {
-                  try {
-                    globalThis.__novaAddonLoaded = globalThis.__novaAddonLoaded || Object.create(null);
-                    if (globalThis.__novaAddonLoaded[$idLiteral]) return;
-                    globalThis.__novaAddonLoaded[$idLiteral] = true;
-                    ${addon.script}
-                  } catch (error) {
-                    console.error("[Nova Add-on: " + $nameLiteral + "]", error);
-                  }
-                })();
-            """.trimIndent()
-            novaAddonScriptHandlers[addon.id] = browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
+            if (addon.allowedOriginRules.isEmpty()) {
+                android.util.Log.w("NovaBrowser", "Skipping add-on ${addon.id}: empty origin allowlist")
+                return@forEach
+            }
+            runCatching {
+                val idLiteral = org.json.JSONObject.quote(addon.id)
+                val nameLiteral = org.json.JSONObject.quote(addon.name)
+                val wrapped = """
+                    (() => {
+                      try {
+                        globalThis.__novaAddonLoaded = globalThis.__novaAddonLoaded || Object.create(null);
+                        if (globalThis.__novaAddonLoaded[$idLiteral]) return;
+                        globalThis.__novaAddonLoaded[$idLiteral] = true;
+                        ${addon.script}
+                      } catch (error) {
+                        console.error("[Nova Add-on: " + $nameLiteral + "]", error);
+                      }
+                    })();
+                """.trimIndent()
+                browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
+            }.onSuccess { handler ->
+                novaAddonScriptHandlers[addon.id] = handler
+            }.onFailure { error ->
+                android.util.Log.w("NovaBrowser", "Could not register Nova add-on ${addon.id}", error)
+            }
         }
     }
     /** Persist a per-origin website permission decision in this Cefrium profile. */

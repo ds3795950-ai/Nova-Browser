@@ -1,6 +1,7 @@
 package com.nova.browser
 
 import java.net.IDN
+import java.net.InetAddress
 import java.net.URI
 import java.net.URLEncoder
 
@@ -27,10 +28,11 @@ object BrowserUrlResolver {
                     authority.substringAfterLast(':').all(Char::isDigit) -> authority.substringBeforeLast(':')
                 else -> authority
             }
-            val local = host.equals("localhost", true) ||
-                host.endsWith(".local", true) ||
-                isPrivateIpv4(host) ||
-                (host.startsWith("[") && host.endsWith("]"))
+            val normalizedHost = if (host.startsWith("[") && host.endsWith("]")) host else host.removeSuffix(".")
+            val local = normalizedHost.equals("localhost", true) ||
+                normalizedHost.endsWith(".local", true) ||
+                isPrivateIpv4(normalizedHost) ||
+                (normalizedHost.startsWith("[") && normalizedHost.endsWith("]") && isLocalIpv6(normalizedHost))
             return (if (local) "http://" else "https://") + value
         }
 
@@ -55,7 +57,9 @@ object BrowserUrlResolver {
             val suffix = authority.substring(closingBracket + 1)
             if (suffix.isNotEmpty()) {
                 if (!suffix.startsWith(':')) return false
-                val port = suffix.drop(1).toIntOrNull() ?: return false
+                val portText = suffix.drop(1)
+                if (portText.isEmpty() || !portText.all(Char::isDigit)) return false
+                val port = portText.toIntOrNull() ?: return false
                 if (port !in 1..65535) return false
             }
             return runCatching { URI("https://$authority").host != null }.getOrDefault(false)
@@ -71,18 +75,24 @@ object BrowserUrlResolver {
         } else authority
         if (host.isBlank() || ':' in host) return false
 
+        if (host.endsWith("..")) return false
+        val normalizedHost = if (host.endsWith(".")) host.dropLast(1) else host
         val ascii = runCatching {
-            IDN.toASCII(host.trimEnd('.')).lowercase()
+            IDN.toASCII(normalizedHost).lowercase()
         }.getOrNull() ?: return false
         if (ascii == "localhost") return true
         if (ascii.matches(Regex("[0-9.]+"))) {
             val octets = ascii.split('.')
-            return octets.size == 4 && octets.all { it.toIntOrNull()?.let { n -> n in 0..255 } == true }
+            return octets.size == 4 && octets.all { part ->
+                part == "0" || (!part.startsWith("0") && part.toIntOrNull()?.let { it in 0..255 } == true)
+            }
         }
         if (ascii.endsWith(".local")) return ascii.split('.').all(::validDnsLabel)
         if (!ascii.contains('.')) return false
         val labels = ascii.split('.')
-        return labels.all(::validDnsLabel) && labels.last().length >= 2
+        return labels.all(::validDnsLabel) &&
+            labels.last().length >= 2 &&
+            !labels.last().all(Char::isDigit)
     }
 
     private fun validDnsLabel(label: String): Boolean =
@@ -94,10 +104,25 @@ object BrowserUrlResolver {
     private fun isPrivateIpv4(host: String): Boolean {
         val parts = host.split('.').map { it.toIntOrNull() ?: return false }
         if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+        return isPrivateIpv4(parts)
+    }
+
+    private fun isPrivateIpv4(parts: List<Int>): Boolean {
+        if (parts.size != 4 || parts.any { it !in 0..255 }) return false
         return parts[0] == 10 ||
             parts[0] == 127 ||
             (parts[0] == 172 && parts[1] in 16..31) ||
             (parts[0] == 192 && parts[1] == 168) ||
             (parts[0] == 169 && parts[1] == 254)
+    }
+
+    private fun isLocalIpv6(host: String): Boolean {
+        val literal = host.removePrefix("[").removeSuffix("]")
+        val address = runCatching { InetAddress.getByName(literal) }.getOrNull() ?: return false
+        val bytes = address.address
+        if (bytes.size == 4) return isPrivateIpv4(bytes.map { it.toInt() and 0xff })
+        if (address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress) return true
+        // IPv6 unique-local addresses (fc00::/7) are private LAN addresses.
+        return bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
     }
 }

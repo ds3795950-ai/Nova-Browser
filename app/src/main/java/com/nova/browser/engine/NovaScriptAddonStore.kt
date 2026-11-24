@@ -1,5 +1,6 @@
 package com.nova.browser.engine
-import android.net.Uri
+import java.net.IDN
+import java.net.InetAddress
 import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
@@ -77,16 +78,43 @@ class NovaScriptAddonStore(context:android.content.Context) {
             throw IllegalStateException("Could not save add-on index", error)
         }
     }
-    private fun validOrigin(rule:String):Boolean {
-        if(rule=="*"||rule.contains('@')||rule.contains('?')||rule.contains('#'))return false
-        val wild=rule.startsWith("https://*.")||rule.startsWith("http://*.")
-        val parsed=if(wild)rule.replace("://*.","://wildcard-check.")else rule
-        val u=runCatching{Uri.parse(parsed)}.getOrNull()?:return false
-        val scheme=u.scheme?.lowercase(); val host=u.host?.lowercase().orEmpty()
-        if(scheme!="https"&&!(scheme=="http"&&(host=="localhost"||host=="127.0.0.1")))return false
-        if(host.isBlank()||host.contains('*')||u.userInfo!=null||(u.path?.let{it.isNotEmpty()&&it!="/"}==true)||u.query!=null||u.fragment!=null)return false
-        if(!wild&&rule.contains('*'))return false
+    private fun validOrigin(rule: String): Boolean {
+        val match = ORIGIN_PATTERN.matchEntire(rule) ?: return false
+        val scheme = match.groupValues[1].lowercase()
+        val wildcard = match.groupValues[2].isNotEmpty()
+        val rawHost = match.groupValues[3]
+        val port = match.groupValues[4]
+        if (port.isNotEmpty() && port.toIntOrNull()?.let { it in 1..65535 } != true) return false
+
+        if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
+            if (wildcard) return false
+            val literal = rawHost.substring(1, rawHost.length - 1)
+            if (':' !in literal || '%' in literal) return false
+            // A colon-containing literal is parsed locally; no DNS lookup is performed.
+            return runCatching { InetAddress.getByName(literal) }.isSuccess && scheme == "https"
+        }
+
+        if (rawHost.contains(':')) return false
+        val host = runCatching { IDN.toASCII(rawHost).lowercase() }.getOrNull() ?: return false
+        if (host.isBlank() || host.length > 253) return false
+        val labels = host.split('.')
+        if (labels.any { label ->
+                label.isBlank() || label.length > 63 ||
+                    !label.first().isLetterOrDigit() || !label.last().isLetterOrDigit() ||
+                    label.any { !it.isLetterOrDigit() && it != '-' }
+            }) return false
+        val numericAddress = host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
+        if (numericAddress && host.split('.').any { it.toIntOrNull()?.let { n -> n in 0..255 } != true }) return false
+        if (wildcard && (labels.size < 2 || numericAddress || host == "localhost")) return false
+        if (scheme == "http" && host != "localhost" && host != "127.0.0.1") return false
         return true
     }
-    private companion object{const val MAX_BYTES=256*1024}
+
+    private companion object {
+        const val MAX_BYTES = 256 * 1024
+        val ORIGIN_PATTERN = Regex(
+            """^(https?)://(\*\.)?(\[[0-9A-Fa-f:.]+\]|[^/?#@:*]+)(?::([0-9]{1,5}))?$""",
+            RegexOption.IGNORE_CASE
+        )
+    }
 }

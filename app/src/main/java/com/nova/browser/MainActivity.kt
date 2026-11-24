@@ -764,6 +764,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showHomeScreen() {
+        // A Guest session must never reveal a retained Normal split pane.
+        if (currentTab()?.isGuest == true && splitTabId != null) exitSplitScreen()
         homeScroll.visibility = View.VISIBLE
         if (splitTabId != null) {
             browserPane.visibility = View.VISIBLE
@@ -2696,6 +2698,8 @@ class MainActivity : ComponentActivity() {
         if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
         AlertDialog.Builder(this).setTitle("Open second pane")
             .setItems(candidates.map { it.title.ifBlank { it.lastUrl } }.toTypedArray()) { _, which ->
+                // Guest Tor may finish connecting while this chooser is open.
+                if (denyGuestAccess("Split screen")) return@setItems
                 val tab = candidates[which]
                 if (splitTabId != null) exitSplitScreen()
                 enforceCefriumCompatibility(tab)
@@ -2724,6 +2728,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreSplitPane() {
+        if (currentTab()?.isGuest == true) {
+            if (splitTabId != null) exitSplitScreen()
+            return
+        }
         val second = tabs.firstOrNull { it.id == splitTabId } ?: run { splitTabId = null; return }
         enforceCefriumCompatibility(second)
         val engine = ensureBrowserEngine(second)

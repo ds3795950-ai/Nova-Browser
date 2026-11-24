@@ -128,4 +128,45 @@ class UrlInputTest {
     @Test fun ipv6LiteralIsAccepted() {
         assertEquals("http://[::1]:8080", BrowserUrlResolver.resolve("[::1]:8080"))
     }
+
+    @Test fun publicIpv6UsesHttps() {
+        assertEquals("https://[2001:db8::1]", BrowserUrlResolver.resolve("[2001:db8::1]"))
+    }
+
+    @Test fun ipv4MappedIpv6UsesIpv4LocalityRules() {
+        assertEquals("http://[::ffff:127.0.0.1]", BrowserUrlResolver.resolve("[::ffff:127.0.0.1]"))
+        assertEquals("https://[::ffff:8.8.8.8]", BrowserUrlResolver.resolve("[::ffff:8.8.8.8]"))
+    }
+
+    @Test fun localhostWithTrailingDotUsesHttp() {
+        assertEquals("http://localhost.:3000", BrowserUrlResolver.resolve("localhost.:3000"))
+    }
+
+    @Test fun rejectsSignedIpv6Port() {
+        assertEquals(
+            "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%2B8080",
+            BrowserUrlResolver.resolve("[::1]:+8080")
+        )
+    }
+
+    @Test fun rejectsAmbiguousLeadingZeroIpv4() {
+        assertEquals(
+            "https://www.google.com/search?q=0010.0.0.1",
+            BrowserUrlResolver.resolve("0010.0.0.1")
+        )
+    }
+
+    @Test fun rejectsDnsNameWithNumericFinalLabel() {
+        assertEquals(
+            "https://www.google.com/search?q=v1.23",
+            BrowserUrlResolver.resolve("v1.23")
+        )
+    }
+
+    @Test fun rejectsRepeatedTrailingDots() {
+        assertEquals(
+            "https://www.google.com/search?q=example.com..",
+            BrowserUrlResolver.resolve("example.com..")
+        )
+    }
 }
