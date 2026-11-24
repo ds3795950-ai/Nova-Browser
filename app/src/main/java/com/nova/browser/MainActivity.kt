@@ -3465,7 +3465,7 @@ class MainActivity : ComponentActivity() {
             .setNeutralButton(getString(R.string.clear_history), null)
             .setNegativeButton(getString(R.string.close), null)
             .create()
-        var filteredItems = items
+        var filteredItems: List<HistoryEntry> = items
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         fun render(rawQuery: String) {
