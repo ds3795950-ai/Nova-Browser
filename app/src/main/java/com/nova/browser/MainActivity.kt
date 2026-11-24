@@ -1481,14 +1481,16 @@ class MainActivity : ComponentActivity() {
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             try {
                 if (tabs.none { it.id == tab.id } || tab.engineType != BrowserEngineType.CEFRIUM) return@post
+                val latestSelection = engineSelectionForTab(tab, destination)
+                if (latestSelection.engine == BrowserEngineType.CEFRIUM) return@post
                 val wasActive = currentTab()?.id == tab.id
                 val wasSecondary = splitTabId == tab.id
                 closeTabRuntime(tab)
-                tab.engineType = selection.engine
+                tab.engineType = latestSelection.engine
                 tab.lastUrl = destination
                 tab.cefriumNavigationState = null
                 tab.needsReload = destination != HOME_URL
-                tab.engineFallbackReason = selection.reason
+                tab.engineFallbackReason = latestSelection.reason
                 persistTabs()
                 if (wasActive) {
                     val index = tabs.indexOfFirst { it.id == tab.id }

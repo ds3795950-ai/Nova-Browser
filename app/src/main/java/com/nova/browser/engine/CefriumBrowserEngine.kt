@@ -125,7 +125,7 @@ class CefriumBrowserEngine(
                 val scheme = Uri.parse(url).scheme?.lowercase()
                 if (request.isForMainFrame) {
                     applySiteSettingsForUrl(url)
-                    if (scheme in setOf("http", "https", "about", "data", "blob", "javascript") &&
+                    if (scheme in setOf("http", "https", "about", "data") &&
                         this@CefriumBrowserEngine.onEngineRoutingRequired.invoke(url)) return true
                 }
                 return when (scheme) {
