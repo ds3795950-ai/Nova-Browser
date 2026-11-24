@@ -308,6 +308,10 @@ class MainActivity : ComponentActivity() {
         }
         val retained = retainedTabsForConfiguration
         if (retained != null) {
+            aiPageText.putAll(retainedAiPageText.orEmpty())
+            aiPageUrl.putAll(retainedAiPageUrl.orEmpty())
+            retainedAiPageText = null
+            retainedAiPageUrl = null
             tabs.addAll(retained)
             activeIndex = retainedActiveIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
             splitTabId = retainedSplitTabId
@@ -1453,6 +1457,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun closeTabRuntime(tab: BrowserTab) {
+        aiPageText.remove(tab.id)
+        aiPageUrl.remove(tab.id)
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             (tab.browserEngine as? CefriumBrowserEngine)?.serializeNavigationState()?.let { rawState ->
                 tab.cefriumNavigationState = CefriumTabStateCipher.encrypt(rawState)
@@ -2404,6 +2410,7 @@ class MainActivity : ComponentActivity() {
                 val popupEngine = GeckoViewBrowserEngine(newSession, browserView)
                 newTab.browserEngine = popupEngine
                 popupEngine.installDelegates { configureSession(it, newTab) }
+                if (!newTab.isPrivate && !newTab.isGuest) attachAiPageReader(newSession, newTab)
                 tabs.add(newTab)
                 activeIndex = tabs.lastIndex
                 popupEngine.attachTo(browserView)
@@ -6028,6 +6035,14 @@ private fun showForgotPassword(prefillEmail: String = "") {
             tabs.forEach { tab -> closeTabRuntime(tab); tab.thumbnail?.recycle(); tab.thumbnail = null }
             if (::runtime.isInitialized && guestContextId.isNotBlank()) runtime.storageController.clearDataForSessionContext(guestContextId)
         }
+        if (isChangingConfigurations) {
+            val retainableIds = tabs.filter { !it.isPrivate && !it.isGuest }.map { it.id }.toSet()
+            retainedAiPageText = aiPageText.filterKeys { it in retainableIds }
+            retainedAiPageUrl = aiPageUrl.filterKeys { it in retainableIds }
+        } else {
+            retainedAiPageText = null
+            retainedAiPageUrl = null
+        }
         tabs.clear()
         aiPageText.clear()
         aiPageUrl.clear()
@@ -6043,6 +6058,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private var retainedActiveIndex: Int = 0
         private var retainedSplitTabId: String? = null
         private var retainedGuestContextId: String? = null
+        private var retainedAiPageText: Map<String, String>? = null
+        private var retainedAiPageUrl: Map<String, String>? = null
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
     }
 }
