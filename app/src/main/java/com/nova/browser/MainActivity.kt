@@ -170,7 +170,7 @@ class MainActivity : ComponentActivity() {
     private var activeRemoteSuggestionFuture: java.util.concurrent.Future<*>? = null
     private val remoteSuggestionExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var separatingFold: FoldingFeature? = null
-    private lateinit var addressSuggestionsAdapter: ArrayAdapter<String>
+    private lateinit var addressSuggestionsAdapter: ArrayAdapter<BrowserSuggestion>
     private lateinit var tabLabel: TextView
     private lateinit var pageStatus: TextView
     private lateinit var root: LinearLayout
@@ -2810,7 +2810,6 @@ class MainActivity : ComponentActivity() {
             readHistory().asSequence().take(80).forEach { entry ->
                 candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
             }
-        }
             readBookmarks().asSequence().take(80).forEach { entry ->
                 candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
             }
@@ -3358,7 +3357,10 @@ class MainActivity : ComponentActivity() {
                 entry.copy(addedAt = maxOf(now, deletedAt + 1L))
             } else entry
         }
-        prefs.edit().putString("bookmark_tombstones", tombstones.toString()).commit()
+        if (!prefs.edit().putString("bookmark_tombstones", tombstones.toString()).commit()) {
+            toast("Could not restore this bookmark. Try again.")
+            return
+        }
         saveBookmarks(restored)
     }
 
