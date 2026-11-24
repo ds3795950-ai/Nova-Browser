@@ -802,8 +802,13 @@ internal class NovaAiAssistantUi(
         val prompt = input.text.toString().trim()
         if (prompt.isBlank()) return
         if (prompt.length > 8000) { notify("Keep each prompt under 8,000 characters"); return }
+        if (provider == NovaAiProvider.CHATGPT && model in setOf("gpt-5-pro", "o3-pro")) {
+            notify(model + " requires the OpenAI Responses API, which Nova's current connector does not support. Choose a Chat Completions model.")
+            refreshModels()
+            return
+        }
         if (isModelLocked(model)) {
-            notify("🔒 $model is locked. Enable access to this model through ${provider.label}'s API account, then refresh the model list.")
+            notify("🔒 " + model + " is locked. Enable access to this model through " + provider.label + "'s API account, then refresh the model list.")
             return
         }
         val key = runCatching { store.getKey(provider) }.getOrNull()
@@ -811,18 +816,27 @@ internal class NovaAiAssistantUi(
             editKey()
             return
         }
-        val fullPrompt = attachedPageText?.let {
-            "$prompt\n\n--- Current webpage context (user attached) ---\n${NovaAiInputPolicy.limitPageContext(it)}\n--- End webpage context ---"
-        } ?: prompt
-        input.setText("")
+        val fullPrompt = if (attachedPageText != null) {
+            prompt + "\n\n" + pageContextMarker + "\n" +
+                NovaAiInputPolicy.limitPageContext(attachedPageText!!) + "\n--- End webpage context ---"
+        } else prompt
         val user = NovaAiMessage("user", fullPrompt)
+        // Prepare the exact bounded history before clearing the composer or committing the turn.
+        val requestHistory = runCatching {
+            NovaAiInputPolicy.boundedHistory(messages + user, 512 * 1024)
+        }.getOrElse {
+            notify("This turn is too large for the provider request. Shorten the prompt or remove the attached page.")
+            return
+        }
+        input.setText("")
         messages += user
+        if (messages.size > maxLiveMessages) messages.removeAt(0)
         render(user)
         if (persistHistory) runCatching { store.append(user) }
         busy = true
-        status.text = "Thinking · ${provider.label} · ${model}"
+        status.text = "Thinking · " + provider.label + " · " + model
         val requestGeneration = conversationGeneration
-        NovaAiApi.send(provider, key, model, messages.toList()) { result ->
+        NovaAiApi.send(provider, key, model, requestHistory) { result ->
             if (requestGeneration != conversationGeneration) return@send
             if (dialog?.isShowing != true) return@send
             busy = false
@@ -830,13 +844,14 @@ internal class NovaAiAssistantUi(
                 usageWarning.visibility = View.GONE
                 val reply = NovaAiMessage("assistant", answer)
                 messages += reply
+                if (messages.size > maxLiveMessages) messages.removeAt(0)
                 render(reply)
                 if (persistHistory) runCatching { store.append(reply) }
-                status.text = "${provider.label} · ${model}"
+                status.text = provider.label + " · " + model
             }.onFailure { failure ->
                 if (failure is NovaAiUsageLimitException) {
-                    status.text = "Usage limit reached · ${provider.label}"
-                    usageWarning.text = "⚠ $model is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
+                    status.text = "Usage limit reached · " + provider.label
+                    usageWarning.text = "⚠ " + model + " is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
                     usageWarning.visibility = View.VISIBLE
                 } else {
                     status.text = "Request failed"
