@@ -233,7 +233,7 @@ internal object NovaAiApi {
                 NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
                 NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/models" to mapOf("Authorization" to "Bearer $key")
             }
-            val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.CLAUDE||p==NovaAiProvider.GEMINI)"models" else "data")
+            val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.GEMINI)"models" else "data")
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
                 val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
                 id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}

@@ -47,13 +47,13 @@ object CefriumVpnController {
         profiles[profile] = WeakReference(profile)
         val summary = applyAllProfiles()
         if (enabled) publish(enabledStatus(summary))
-        else if (!summary.allDisabledCleanly) publish("Could not clear 1VPN proxy settings on a new Cefrium profile")
+        else publish(CefriumVpnStatusPolicy.disabledStatus(summary.allDisabledCleanly))
     }
 
     fun refreshProfiles() {
         val summary = applyAllProfiles()
         if (enabled) publish(enabledStatus(summary))
-        else if (!summary.allDisabledCleanly) publish("Could not clear 1VPN proxy settings on every Cefrium profile")
+        else publish(CefriumVpnStatusPolicy.disabledStatus(summary.allDisabledCleanly))
     }
 
     fun provideProxyCredentials(host: String, port: Int, isProxy: Boolean, callback: (String, String) -> Unit, cancel: () -> Unit) {

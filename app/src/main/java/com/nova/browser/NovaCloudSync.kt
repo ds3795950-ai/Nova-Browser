@@ -141,10 +141,11 @@ class NovaCloudSync(context: Context) {
         val json = JSONObject(result)
         if (json.has("access_token") && json.has("refresh_token")) {
             persistSessionFromAuthResponse(result)
-        } else if (json.optJSONObject("user") != null) {
+        } else if (json.optJSONObject("user") != null ||
+            (json.optString("id").isNotBlank() && json.optString("email").isNotBlank() && json.has("confirmation_sent_at"))) {
             throw IllegalStateException("Account created. Check your email to confirm the address, then sign in.")
         } else {
-            throw IllegalStateException("Sign-up failed. Try a different email or sign in instead.")
+            throw IllegalStateException("Sign-up could not be completed. Check the address and try again.")
         }
     }
 
@@ -169,7 +170,9 @@ class NovaCloudSync(context: Context) {
         require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
             "Enter a valid email address"
         }
-        request("POST", "/auth/v1/recover", JSONObject().put("email", clean).toString())
+        // Always present the same user-facing outcome to avoid account enumeration.
+        runCatching { request("POST", "/auth/v1/recover", JSONObject().put("email", clean).toString()) }
+            .onFailure { android.util.Log.w("NovaCloudSync", "Password recovery request failed", it) }
     }
 
     private fun persistSessionFromAuthResponse(raw: String) {
@@ -212,6 +215,8 @@ class NovaCloudSync(context: Context) {
     fun signOut() {
         runCatching { validSession()?.let { request("POST", "/auth/v1/logout", "{}", it.getString("access_token")) } }
         sessionFile.delete()
+        snapshotVersion = null
+        vaultVersion = null
     }
 
     fun downloadEncrypted(): Pair<JSONObject?, JSONObject?> {

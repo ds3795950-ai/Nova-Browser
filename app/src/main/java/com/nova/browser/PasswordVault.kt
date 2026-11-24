@@ -47,6 +47,11 @@ class PasswordVault(context: Context) {
     @Synchronized fun save(login: Autocomplete.LoginEntry) {
         require(PasswordVaultPolicy.isAllowedOrigin(login.origin)) { "Saved login must use a valid HTTP or HTTPS origin without embedded credentials" }
         require(PasswordVaultPolicy.isAllowedOptionalOrigin(login.formActionOrigin)) { "Saved login form action must be a valid HTTP or HTTPS origin" }
+        require((login.guid?.length ?: 0) <= 128 && login.origin.length <= 2048 &&
+            (login.formActionOrigin?.length ?: 0) <= 2048 && (login.httpRealm?.length ?: 0) <= 4096 &&
+            login.username.length <= 4096 && login.password.length in 1..16_384) {
+            "Saved login fields exceed the allowed size limits"
+        }
         val entries = all().filterNot { it.guid == login.guid || (it.origin == login.origin && it.username == login.username) }.toMutableList()
         require(entries.size < MAX_ENTRIES) { "Password vault entry limit reached" }
         entries.add(login)
@@ -279,8 +284,12 @@ class PasswordVault(context: Context) {
                     val item = source.optJSONObject(i) ?: continue
                     val origin = item.opt("origin") as? String ?: continue
                     val username = item.opt("username") as? String ?: continue
-                    if (item.opt("password") !is String) continue
+                    val password = item.opt("password") as? String ?: continue
+                    val guid = item.optString("guid")
+                    if (guid.length > 128 || username.length > 4096 || password.isEmpty() || password.length > 16_384) continue
+                    if (origin.length > 2048) continue
                     val formActionOrigin = item.optString("formActionOrigin").ifBlank { null }
+                    if ((formActionOrigin?.length ?: 0) > 2048 || item.optString("httpRealm").length > 4096) continue
                     if (!PasswordVaultPolicy.isAllowedOrigin(origin) ||
                         !PasswordVaultPolicy.isAllowedOptionalOrigin(formActionOrigin)) continue
                     val key = origin + "|" + username

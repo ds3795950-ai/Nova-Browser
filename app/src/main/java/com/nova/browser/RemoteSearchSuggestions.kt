@@ -30,7 +30,19 @@ internal object RemoteSearchSuggestions {
             val responseCode = connection.responseCode
             if (Thread.currentThread().isInterrupted) return emptyList()
             if (responseCode != HttpURLConnection.HTTP_OK || connection.contentLengthLong > 64 * 1024) return emptyList()
-            val text = connection.inputStream.bufferedReader().use { it.readText().take(64 * 1024) }
+            val text = connection.inputStream.use { stream ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val count = stream.read(buffer, 0, minOf(buffer.size, 64 * 1024 + 1 - total))
+                    if (count < 0) break
+                    total += count
+                    if (total > 64 * 1024) throw IllegalStateException("Search suggestion response is too large")
+                    output.write(buffer, 0, count)
+                }
+                String(output.toByteArray(), Charsets.UTF_8)
+            }
             if (Thread.currentThread().isInterrupted) return emptyList()
             val json = JSONArray(text)
             when (engine) {

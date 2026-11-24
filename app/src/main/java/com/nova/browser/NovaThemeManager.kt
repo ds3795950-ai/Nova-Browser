@@ -52,6 +52,16 @@ internal object NovaThemeManager {
     fun isDark(context: Context): Boolean =
         resolvesDark(currentMode(context), isSystemDark(context))
 
+    /** Apply explicit light/dark mode to resource qualifiers before Activity inflation. */
+    fun wrapBaseContext(base: Context): Context {
+        val mode = currentMode(base)
+        if (mode == NovaThemeMode.SYSTEM) return base
+        val configuration = Configuration(base.resources.configuration)
+        val night = if (mode == NovaThemeMode.DARK) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        configuration.uiMode = (configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+        return base.createConfigurationContext(configuration)
+    }
+
     fun applyBeforeCreate(activity: Activity) {
         activity.setTheme(if (isDark(activity)) R.style.NovaThemeDark else R.style.NovaThemeLight)
     }
