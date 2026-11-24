@@ -548,16 +548,34 @@ internal class NovaAiAssistantUi(
             topMargin = dp(8)
         })
 
+        fun switchProvider(nextProvider: NovaAiProvider) {
+            provider = nextProvider
+            usageWarning.visibility = View.GONE
+            model = store.model(provider)
+            availableModelIds = emptySet()
+            updateModelChoices(model)
+            status.text = if (store.hasKey(provider)) "Checking provider model access…" else "Add " + provider.label + " API key to connect"
+            if (store.hasKey(provider)) refreshModels()
+        }
         providers.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                provider = NovaAiProvider.values()[position]
-                usageWarning.visibility = View.GONE
-                model = store.model(provider)
-                availableModelIds = emptySet()
-                updateModelChoices(model)
-                status.text = if (store.hasKey(provider)) "Checking provider model access…" else "Add ${provider.label} API key to connect"
-                if (store.hasKey(provider)) refreshModels()
+                val nextProvider = NovaAiProvider.values()[position]
+                if (nextProvider == provider) return
+                val carriesPageText = attachedPageText != null || messages.any { pageContextMarker in it.text }
+                if (carriesPageText && nextProvider !in pageContextTransferAllowedProviders) {
+                    AlertDialog.Builder(context)
+                        .setTitle("Share webpage context?")
+                        .setMessage("This conversation contains text from a webpage attached while using " + provider.label + ". Allow Nova to include that text in requests to " + nextProvider.label + "?")
+                        .setPositiveButton("Allow transfer") { _, _ ->
+                            pageContextTransferAllowedProviders += nextProvider
+                            switchProvider(nextProvider)
+                        }
+                        .setNegativeButton("Cancel") { _, _ -> providers.setSelection(provider.ordinal) }
+                        .show()
+                    return
+                }
+                switchProvider(nextProvider)
             }
         }
         models.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -643,18 +661,41 @@ internal class NovaAiAssistantUi(
     }
 
     private fun newChat() {
+        if (persistHistory) {
+            val saved = runCatching { store.startNewConversation() }
+            if (saved.isFailure) {
+                notify("Could not start a new conversation because encrypted history could not be saved. Retry after unlocking device storage.")
+                return
+            }
+        }
         conversationGeneration++
         busy = false
         messages.clear()
-        if (persistHistory) runCatching { store.startNewConversation() }
+        messageViews.clear()
         attachedPageText = null
+        pageContextTransferAllowedProviders.clear()
+        pageContextTransferAllowedProviders += provider
         contextChip.visibility = View.GONE
         feed.removeAllViews()
         showWelcome()
         input.setText("")
         status.text = "New conversation"
-        // The encrypted store keeps the existing transcript until the user clears history.
-        // This screen starts a fresh in-memory conversation.
+    }
+
+    private fun setAttachedPage(page: String?) {
+        attachedPageText = page?.take(24_000)
+        if (attachedPageText.isNullOrBlank()) {
+            attachedPageText = null
+            contextChip.visibility = View.GONE
+            return
+        }
+        pageContextTransferAllowedProviders += provider
+        contextChip.text = "▣ Current page attached · " + attachedPageText!!.length + " characters   ×"
+        contextChip.visibility = View.VISIBLE
+        contextChip.setOnClickListener {
+            attachedPageText = null
+            contextChip.visibility = View.GONE
+        }
     }
 
     private fun attachPage() {
@@ -665,13 +706,7 @@ internal class NovaAiAssistantUi(
                 status.text = "No readable page found"
                 notify("Could not read the current webpage")
             } else {
-                attachedPageText = page.take(24000)
-                contextChip.text = "▣ Current page attached · ${attachedPageText!!.length} characters   ×"
-                contextChip.visibility = View.VISIBLE
-                contextChip.setOnClickListener {
-                    attachedPageText = null
-                    contextChip.visibility = View.GONE
-                }
+                setAttachedPage(page)
                 status.text = "Current page attached"
             }
         }
@@ -686,9 +721,7 @@ internal class NovaAiAssistantUi(
                 notify("Could not read the current webpage")
                 return@requestPageText
             }
-            attachedPageText = page.take(24000)
-            contextChip.text = "▣ Current page attached · tap × to remove"
-            contextChip.visibility = View.VISIBLE
+            setAttachedPage(page)
             input.setText("Summarise this webpage. Include an overview, key points, important facts and conclusions. Do not invent details.")
             send()
         }
