@@ -25,6 +25,17 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
         return cefriumProfileName()
     }
 
+    fun retiredCefriumProfiles(): Set<String> =
+        preferences.getStringSet(KEY_RETIRED_PROFILES, emptySet())?.toSet() ?: emptySet()
+
+    fun recordRetiredCefriumProfile(profile: String): Boolean {
+        if (profile.isBlank()) return false
+        return preferences.edit().putStringSet(KEY_RETIRED_PROFILES, retiredCefriumProfiles() + profile).commit()
+    }
+
+    fun forgetRetiredCefriumProfile(profile: String): Boolean =
+        preferences.edit().putStringSet(KEY_RETIRED_PROFILES, retiredCefriumProfiles() - profile).commit()
+
     fun siteAffinity(url: String): BrowserEngineType? = affinity.get(url)
 
     fun setSiteAffinity(url: String, engine: BrowserEngineType): Boolean = affinity.set(url, engine)
@@ -59,5 +70,6 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
         const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
+        const val KEY_RETIRED_PROFILES = "cefrium_retired_profiles"
     }
 }

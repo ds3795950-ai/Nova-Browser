@@ -1169,6 +1169,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun ensureCefriumEngine(tab: BrowserTab, existingBrowser: CefriumBrowser? = null): CefriumBrowserEngine {
+        retryRetiredCefriumProfileDeletes()
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
         check(!tab.isPrivate && !tab.isGuest) { "Private and Guest tabs must use GeckoView" }
         val profile = CefriumProfile.get(enginePreferences.cefriumProfileName())
@@ -5542,9 +5543,24 @@ private fun showQuickSettings() {
         }.onFailure { finish(false, it.localizedMessage) }
     }
 
+    private fun retryRetiredCefriumProfileDeletes() {
+        val activeProfile = enginePreferences.cefriumProfileName()
+        enginePreferences.retiredCefriumProfiles().forEach { retired ->
+            if (retired == activeProfile) return@forEach
+            runCatching { CefriumProfile.delete(retired) }
+                .onSuccess { enginePreferences.forgetRetiredCefriumProfile(retired) }
+                .onFailure { android.util.Log.w("NovaBrowser", "Retired Cefrium profile cleanup will be retried", it) }
+        }
+    }
+
     private fun clearCefriumProfileDataNow(activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
         val oldProfile = enginePreferences.cefriumProfileName()
+        if (!enginePreferences.recordRetiredCefriumProfile(oldProfile)) {
+            onFinished(false, "Could not record the old Cefrium profile for cleanup. Existing data was not deleted.")
+            return
+        }
         val newProfile = enginePreferences.rotateCefriumProfile() ?: run {
+            // The old profile is still active; startup retry explicitly skips active profiles.
             onFinished(false, "Could not persist a new Cefrium profile. Existing profile data was not deleted.")
             return
         }
@@ -5555,14 +5571,18 @@ private fun showQuickSettings() {
             tab.cefriumNavigationState = null
         }
         val deletion = runCatching { CefriumProfile.delete(oldProfile) }
+        if (deletion.isSuccess) {
+            // A normal false return is Cefrium's deferred-delete result; only exceptions need retry.
+            enginePreferences.forgetRetiredCefriumProfile(oldProfile)
+        }
         val index = tabs.indexOfFirst { it.id == activeTabId }
-        if (index >= 0 && tabs[index].engineType == BrowserEngineType.CEFRIUM) switchTab(index)
+        if (index >= 0 && tabs[index].engineType == BrowserEngineType.CEFRIUM && currentTab()?.id == activeTabId) switchTab(index)
         if (splitTabId != null && cefriumTabs.any { it.id == splitTabId }) restoreSplitPane()
         persistTabs()
         when {
-            deletion.isFailure -> onFinished(false, "New clean Cefrium profile active ($newProfile); old profile deletion failed")
+            deletion.isFailure -> onFinished(false, "New clean Cefrium profile active ($newProfile); old profile deletion failed and is queued for retry")
             deletion.getOrNull() == true -> onFinished(true, "Cefrium profile cleared; new clean profile active")
-            else -> onFinished(true, "New clean Cefrium profile active; old profile deletion will finish on next restart")
+            else -> onFinished(true, "Cefrium profile cleared; old profile deletion is scheduled for restart")
         }
     }
 
