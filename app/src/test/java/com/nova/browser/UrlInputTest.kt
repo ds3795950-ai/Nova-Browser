@@ -175,6 +175,17 @@ class UrlInputTest {
         assertEquals("https://www.google.com/search?q=%5B2001%3Adb8%3A%3Azz%5D", BrowserUrlResolver.resolve("[2001:db8::zz]"))
     }
 
+    @Test fun nonAsciiPortDigitsFallBackToSearch() {
+        assertEquals(
+            "https://www.google.com/search?q=example.com%3A%EF%BC%98%EF%BC%90",
+            BrowserUrlResolver.resolve("example.com:８０")
+        )
+        assertEquals(
+            "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%EF%BC%98%EF%BC%90",
+            BrowserUrlResolver.resolve("[::1]:８０")
+        )
+    }
+
     @Test fun signedIpv6PortFallsBackToSearch() {
         assertEquals(
             "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%2B8080",
