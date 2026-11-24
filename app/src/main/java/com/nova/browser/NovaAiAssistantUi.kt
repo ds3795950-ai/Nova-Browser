@@ -738,35 +738,56 @@ internal class NovaAiAssistantUi(
             .setPositiveButton("Save") { _, _ ->
                 runCatching { store.setKey(provider, field.text.toString()) }
                     .onSuccess {
-                        status.text = if (store.hasKey(provider)) "API key saved · ${provider.label}" else "API key removed"
-                        if (store.hasKey(provider)) refreshModels()
+                        invalidateModelRefresh(provider)
+                        availableModelIds = emptySet()
+                        status.text = if (store.hasKey(provider)) "API key saved · " + provider.label else "API key removed"
+                        if (store.hasKey(provider)) refreshModels() else updateModelChoices(model)
                     }
                     .onFailure { notify("Could not save key: ${it.message}") }
             }
             .setNeutralButton("Remove") { _, _ ->
-                store.setKey(provider, "")
-                status.text = "API key removed"
+                runCatching { store.setKey(provider, "") }
+                    .onSuccess {
+                        invalidateModelRefresh(provider)
+                        availableModelIds = emptySet()
+                        updateModelChoices(model)
+                        status.text = "API key removed"
+                    }
+                    .onFailure { notify("Could not remove API key: " + (it.message ?: "storage error")) }
             }
             .setNegativeButton("Cancel", null).show()
     }
 
+    private fun invalidateModelRefresh(target: NovaAiProvider) {
+        modelRefreshGeneration[target] = (modelRefreshGeneration[target] ?: 0L) + 1L
+    }
+
     private fun refreshModels() {
-        val key = store.getKey(provider)
+        val requestedProvider = provider
+        val key = runCatching { store.getKey(requestedProvider) }.getOrElse {
+            notify("Saved " + requestedProvider.label + " API key could not be decrypted. Replace it to continue.")
+            editKey()
+            return
+        }
         if (key.isNullOrBlank()) {
-            notify("Add the ${provider.label} API key first")
+            notify("Add the " + requestedProvider.label + " API key first")
             editKey()
             return
         }
         status.text = "Checking models available to this API account…"
-        val requestedProvider = provider
+        val refreshGeneration = (modelRefreshGeneration[requestedProvider] ?: 0L) + 1L
+        modelRefreshGeneration[requestedProvider] = refreshGeneration
         NovaAiApi.models(requestedProvider, key) { result ->
-            if (dialog?.isShowing != true || provider != requestedProvider) return@models
+            if (dialog?.isShowing != true || provider != requestedProvider ||
+                modelRefreshGeneration[requestedProvider] != refreshGeneration ||
+                runCatching { store.getKey(requestedProvider) }.getOrNull() != key) return@models
             result.onSuccess { list ->
                 availableModelIds = list.toSet()
-                val preferred = if (model in availableModelIds || !isPremiumModel(model)) model else store.model(provider)
-                updateModelChoices(preferred)
+                val preferred = if (model in availableModelIds) model else list.firstOrNull() ?: requestedProvider.defaultModel
                 model = preferred
-                status.text = "${availableModelIds.size} models available · premium models locked unless provider API access is confirmed"
+                updateModelChoices(preferred)
+                runCatching { store.setModel(requestedProvider, preferred) }
+                status.text = availableModelIds.size.toString() + " models available · premium models locked unless provider API access is confirmed"
             }.onFailure {
                 availableModelIds = emptySet()
                 updateModelChoices(model)
