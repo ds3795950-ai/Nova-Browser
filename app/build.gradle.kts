@@ -169,14 +169,6 @@ val prepare1VpnAssets by tasks.registering {
             "Upstream 1VPN proxy-auth handler changed; review before bundling."
         }
         val authEndExclusive = authEndIndex + authEnd.length
-        val authStart = "chrome.webRequest.onAuthRequired.addListener("
-        val authEnd = ",{urls:[\"<all_urls>\"]},[\"blocking\"])"
-        val authStartIndex = background.indexOf(authStart)
-        val authEndIndex = if (authStartIndex >= 0) background.indexOf(authEnd, authStartIndex) else -1
-        check(authStartIndex >= 0 && authEndIndex > authStartIndex) {
-            "Upstream 1VPN proxy-auth handler changed; review before bundling."
-        }
-        val authEndExclusive = authEndIndex + authEnd.length
         var authStatement = background.substring(authStartIndex, authEndExclusive)
         val credentialResolve = Regex("[A-Za-z_$][A-Za-z0-9_$]*\\(\\{\\s*authCredentials\\s*:\\s*([^}]+)\\}\\)")
         val challengerVariable = Regex("([A-Za-z_$][A-Za-z0-9_$]*)\\.challenger\\.host").find(authStatement)?.groupValues?.get(1)
