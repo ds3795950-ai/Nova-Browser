@@ -33,7 +33,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 internal enum class NovaAiProvider(val label: String, val defaultModel: String) {
     CHATGPT("ChatGPT", "gpt-4o-mini"), CLAUDE("Claude", "claude-3-5-haiku-latest"),
-    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-2.0-flash"),
+    GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-3.8-flash"),
     KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat")
 }
 internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
@@ -46,7 +46,7 @@ private object NovaAiModelCatalog {
         NovaAiProvider.CHATGPT -> listOf("gpt-5-pro", "o3-pro")
         NovaAiProvider.CLAUDE -> listOf("claude-opus-4-1", "claude-opus-4-5")
         NovaAiProvider.GROK -> listOf("grok-4", "grok-4-heavy")
-        NovaAiProvider.GEMINI -> listOf("gemini-2.5-pro", "gemini-3-pro-preview")
+        NovaAiProvider.GEMINI -> listOf("gemini-3.1-pro")
         NovaAiProvider.KIMI -> listOf("kimi-k2-thinking")
         NovaAiProvider.DEEPSEEK -> listOf("deepseek-reasoner")
     }
@@ -161,7 +161,7 @@ internal class NovaAiSecureStore(context:Context) {
         all.last().add(m)
         saveSessions(all)
     }
-    fun clear(){p.edit().remove("history").commit()}
+    fun clear(): Boolean = p.edit().remove("history").commit()
 }
 
 internal class NovaAiUsageLimitException(detail: String) : Exception(detail)
@@ -214,8 +214,13 @@ internal object NovaAiApi {
             if(code !in 200..299) {
                 val e=j.optJSONObject("error")
                 val message=(e?.optString("message")?.takeIf{it.isNotBlank()} ?: j.optString("message").ifBlank{"Request failed"})
-                    .replace(Regex("[\\r\\n\\t]+"), " ").take(240)
-                val safeMessage = headers.values.filter { it.length >= 8 }.fold(message) { value, secret -> value.replace(secret, "[redacted]") }
+                    .replace(Regex("[\\r\\n\\t]+"), " ")
+                val secrets = headers.values.flatMap { value ->
+                    listOf(value, value.removePrefix("Bearer ").removePrefix("bearer "))
+                }.filter { it.length >= 8 }.distinct()
+                val safeMessage = secrets.fold(message) { value, secret ->
+                    value.replace(secret, "[redacted]")
+                }.take(240)
                 val errorCode=(e?.optString("code").orEmpty()+" "+e?.optString("type").orEmpty()+" "+e?.optString("status").orEmpty()+" "+j.optString("status")).lowercase()
                 if(code==429 || errorCode.contains("rate_limit") || errorCode.contains("resource_exhausted") || errorCode.contains("insufficient_quota") || errorCode.contains("quota_exceeded")) throw NovaAiUsageLimitException(safeMessage)
                 error("Provider API error ($code): $safeMessage")
@@ -237,11 +242,17 @@ internal object NovaAiApi {
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
                 val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
                 id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
-            }.distinct().sorted().ifEmpty{listOf(p.defaultModel)}
+            }.filterNot { id -> p == NovaAiProvider.CHATGPT && id in setOf("gpt-5-pro", "o3-pro") }
+                .distinct().sorted().also { ids ->
+                    require(ids.isNotEmpty()) { "The provider returned no models supported by Nova" }
+                }
         };main.post{done(r)}
     }}
     fun send(p:NovaAiProvider,key:String,model:String,history:List<NovaAiMessage>,done:(Result<String>)->Unit){pool.execute{
         val r=runCatching {
+            require(!(p == NovaAiProvider.CHATGPT && model in setOf("gpt-5-pro", "o3-pro"))) {
+                "This model requires the OpenAI Responses API, which this client does not currently support."
+            }
             val recent=NovaAiInputPolicy.boundedHistory(history, MAX_REQUEST_BYTES)
             when(p){
                 NovaAiProvider.CHATGPT,NovaAiProvider.GROK,NovaAiProvider.KIMI,NovaAiProvider.DEEPSEEK->{
@@ -283,6 +294,12 @@ internal class NovaAiAssistantUi(
     private var availableModelIds = emptySet<String>()
     private var displayedModelIds = listOf(model)
     private var changingModelSelection = false
+    private val modelRefreshGeneration = mutableMapOf<NovaAiProvider, Long>()
+    private val pageContextTransferAllowedProviders = mutableSetOf(NovaAiProvider.CHATGPT)
+    private val messageViews = mutableListOf<View>()
+    private val maxLiveMessages = 100
+    private val maxRenderedMessages = 40
+    private val pageContextMarker = "--- Current webpage context (user attached) ---"
 
     private fun isPremiumModel(id: String) = id in NovaAiModelCatalog.premium(provider)
     private fun isModelLocked(id: String) = isPremiumModel(id) && id !in availableModelIds
