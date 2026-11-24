@@ -3492,7 +3492,7 @@ class MainActivity : ComponentActivity() {
             .setNeutralButton(getString(R.string.clear_history), null)
             .setNegativeButton(getString(R.string.close), null)
             .create()
-        var filteredItems = items
+        var filteredItems: List<HistoryEntry> = items
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         fun render(rawQuery: String) {
@@ -4033,24 +4033,9 @@ class MainActivity : ComponentActivity() {
                 } else {
                     val expectedUrl = active.lastUrl
                     val fallback = aiPageText[active.id]?.takeIf { aiPageUrl[active.id] == expectedUrl }
-                    val session = active.session
-                    if (session == null) {
-                        callback(fallback)
-                    } else {
-                        session.evaluateJS("(document.body ? document.body.innerText : '').trim().slice(0, 24000)")
-                            .accept({ value ->
-                                val captured = (value as? String)?.trim()?.take(24000)?.takeIf { it.isNotBlank() }
-                                runOnUiThread {
-                                    val stillCurrent = currentTab()?.id == active.id && active.lastUrl == expectedUrl
-                                    callback(if (stillCurrent) captured ?: fallback else null)
-                                }
-                            }, { _ ->
-                                runOnUiThread {
-                                    val stillCurrent = currentTab()?.id == active.id && active.lastUrl == expectedUrl
-                                    callback(if (stillCurrent) fallback else null)
-                                }
-                            })
-                    }
+                    // GeckoView intentionally exposes no direct page-JavaScript evaluation API.
+                    // The built-in Nova reader extension asynchronously maintains this tab-bound cache.
+                    callback(fallback)
                 }
             },
             persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
