@@ -22,8 +22,8 @@ internal object CefriumVpnStatusPolicy {
         else "Could not enforce the fail-closed proxy on every Cefrium profile; do not assume traffic is protected"
         return when {
             allProxyReady && allWebRtcProtected -> "1VPN proxy configured · ${location.uppercase()} · WebRTC protection active"
-            allTrafficBlocked && !allProxyReady && allWebRtcProtected -> "1VPN endpoint could not be applied; Cefrium browsing is blocked by the fail-closed proxy"
-            allTrafficBlocked && !allProxyReady -> "Cefrium browsing is blocked by the fail-closed proxy, but WebRTC protection failed and is not verified"
+            allTrafficBlocked && !allProxyReady && allWebRtcProtected -> "Proxy fallback is partial: some Cefrium profiles may be blocked while others still use the configured proxy"
+            allTrafficBlocked && !allProxyReady -> "Proxy fallback is partial: some Cefrium profiles may be blocked while others still use the configured proxy; WebRTC protection failed and is not verified"
             allProxyReady && !allWebRtcProtected -> "1VPN proxy configured, but WebRTC protection failed; leak protection is not verified"
             else -> "Could not apply 1VPN proxy to every Cefrium profile; direct routing may be possible"
         }
