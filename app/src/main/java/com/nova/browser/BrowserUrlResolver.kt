@@ -65,7 +65,7 @@ object BrowserUrlResolver {
             if (suffix.isNotEmpty()) {
                 if (!suffix.startsWith(':')) return false
                 val portText = suffix.drop(1)
-                if (portText.isEmpty() || !portText.all(Char::isDigit)) return false
+                if (portText.isEmpty() || !portText.all { it in '0'..'9' }) return false
                 val port = portText.toIntOrNull() ?: return false
                 if (port !in 1..65535) return false
             }
@@ -80,7 +80,7 @@ object BrowserUrlResolver {
         val colon = authority.lastIndexOf(':')
         val host = if (colon >= 0) {
             val portText = authority.substring(colon + 1)
-            if (portText.isEmpty() || !portText.all(Char::isDigit)) return false
+            if (portText.isEmpty() || !portText.all { it in '0'..'9' }) return false
             val port = portText.toIntOrNull() ?: return false
             if (port !in 1..65535) return false
             authority.substring(0, colon)
