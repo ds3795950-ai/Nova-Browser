@@ -1068,7 +1068,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
-        if (!isPrivate && !isGuest && pendingGeckoDataClearTabIds.isNotEmpty()) {
+        if (!isPrivate && !isGuest && pendingGeckoDataClearActive) {
             toast("Wait for browsing-data deletion to finish before opening a Normal tab")
             return
         }
@@ -1136,7 +1136,7 @@ class MainActivity : ComponentActivity() {
     private fun tabKey(session: GeckoSession): String = tabs.firstOrNull { it.session === session }?.id ?: ""
 
     private fun ensureSession(tab: BrowserTab): GeckoSession {
-        check(tab.isPrivate || tab.isGuest || tab.id !in pendingGeckoDataClearTabIds) {
+        check(tab.isPrivate || tab.isGuest || (!pendingGeckoDataClearActive && tab.id !in pendingGeckoDataClearTabIds)) {
             "Browsing-data deletion is still running for this tab"
         }
         tab.session?.let { existing ->
@@ -2754,7 +2754,7 @@ class MainActivity : ComponentActivity() {
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
         cancelPendingRemoteSuggestions()
-        if (!tabs[index].isPrivate && !tabs[index].isGuest && tabs[index].id in pendingGeckoDataClearTabIds) {
+        if (!tabs[index].isPrivate && !tabs[index].isGuest && tabs[index].engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) {
             toast("This tab is temporarily unavailable while browsing data is being deleted")
             return
         }
@@ -2976,7 +2976,7 @@ class MainActivity : ComponentActivity() {
     private fun navigate(input: String) {
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         val tab = currentTab() ?: return
-        if (tab.id in pendingGeckoDataClearTabIds) { toast("Wait for browsing-data deletion to finish before navigating this tab"); return }
+        if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) { toast("Wait for browsing-data deletion to finish before navigating this tab"); return }
         prepareDesktopModeForNavigation(tab, target)
         tab.lastUrl = target
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
@@ -3006,7 +3006,7 @@ class MainActivity : ComponentActivity() {
 
     private fun reloadPage() {
         currentTab()?.let { tab ->
-            if (tab.id in pendingGeckoDataClearTabIds) toast("Wait for browsing-data deletion to finish before reloading")
+            if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) toast("Wait for browsing-data deletion to finish before reloading")
             else ensureBrowserEngine(tab).reload()
         }
     }
@@ -3832,7 +3832,7 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleDesktopSite() {
         val tab = currentTab() ?: return
-        if (tab.id in pendingGeckoDataClearTabIds) { toast("Wait for browsing-data deletion to finish before changing this tab"); return }
+        if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) { toast("Wait for browsing-data deletion to finish before changing this tab"); return }
         if (tab.isPrivate || tab.isGuest) { toast("Desktop preference is not saved in private or Guest Mode"); return }
         val host = Uri.parse(tab.lastUrl).host ?: run { toast("Open a website first"); return }
         val sites = desktopSites
@@ -3862,7 +3862,7 @@ class MainActivity : ComponentActivity() {
 
     private fun openReaderMode() {
         val tab = currentTab() ?: return
-        if (tab.id in pendingGeckoDataClearTabIds) { toast("Wait for browsing-data deletion to finish before opening Reader Mode"); return }
+        if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) { toast("Wait for browsing-data deletion to finish before opening Reader Mode"); return }
         val url = tab.lastUrl
         if (!url.startsWith("http")) { toast("Open an article first"); return }
         tab.readerOriginalUrl = url
@@ -5507,6 +5507,7 @@ private fun showQuickSettings() {
         if (splitTabId != null) exitSplitScreen()
         val affectedTabs = tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.GECKOVIEW }
         val affectedIds = affectedTabs.map { it.id }.toSet()
+        pendingGeckoDataClearActive = true
         pendingGeckoDataClearTabIds.addAll(affectedIds)
         affectedTabs.forEach { tab ->
             if (tab.browserEngine != null) {
@@ -5520,6 +5521,7 @@ private fun showQuickSettings() {
             if (completed.compareAndSet(false, true)) {
                 // Clear the process-wide guard even if this Activity was recreated while Gecko finished.
                 pendingGeckoDataClearTabIds.removeAll(affectedIds)
+                pendingGeckoDataClearActive = false
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     val index = tabs.indexOfFirst { it.id == activeTabId }
@@ -6168,6 +6170,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private var retainedAiPageText: Map<String, String>? = null
         private var retainedAiPageUrl: Map<String, String>? = null
         private val pendingGeckoDataClearTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        @Volatile private var pendingGeckoDataClearActive = false
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
     }
 }
