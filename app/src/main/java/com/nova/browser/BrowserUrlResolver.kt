@@ -64,7 +64,9 @@ object BrowserUrlResolver {
             val suffix = authority.substring(closingBracket + 1)
             if (suffix.isNotEmpty()) {
                 if (!suffix.startsWith(':')) return false
-                val port = suffix.drop(1).toIntOrNull() ?: return false
+                val portText = suffix.drop(1)
+                if (portText.isEmpty() || !portText.all(Char::isDigit)) return false
+                val port = portText.toIntOrNull() ?: return false
                 if (port !in 1..65535) return false
             }
             val address = authority.substring(1, closingBracket)

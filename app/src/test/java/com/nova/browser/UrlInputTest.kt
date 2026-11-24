@@ -174,4 +174,11 @@ class UrlInputTest {
     @Test fun invalidIpv6IsSearched() {
         assertEquals("https://www.google.com/search?q=%5B2001%3Adb8%3A%3Azz%5D", BrowserUrlResolver.resolve("[2001:db8::zz]"))
     }
+
+    @Test fun signedIpv6PortFallsBackToSearch() {
+        assertEquals(
+            "https://www.google.com/search?q=%5B%3A%3A1%5D%3A%2B8080",
+            BrowserUrlResolver.resolve("[::1]:+8080")
+        )
+    }
 }
