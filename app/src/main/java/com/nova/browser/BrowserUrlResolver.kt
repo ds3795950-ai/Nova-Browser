@@ -34,7 +34,7 @@ object BrowserUrlResolver {
             } else {
                 authority
             }
-            val normalizedHost = host.trimEnd('.').lowercase(Locale.ROOT)
+            val normalizedHost = host.removeSuffix(".").lowercase(Locale.ROOT)
             val local = normalizedHost == "localhost" ||
                 normalizedHost.endsWith(".local") ||
                 isPrivateIpv4(normalizedHost) ||
@@ -71,7 +71,7 @@ object BrowserUrlResolver {
             return address.contains(':') &&
                 runCatching {
                     val parsed = InetAddress.getByName(address)
-                    parsed is Inet6Address || (parsed is Inet4Address && address.lowercase(Locale.ROOT).startsWith("::ffff:"))
+                    parsed is Inet6Address || parsed is Inet4Address
                 }.getOrDefault(false)
         }
 
@@ -86,11 +86,11 @@ object BrowserUrlResolver {
         if (host.isBlank() || ':' in host) return false
 
         val ascii = runCatching {
-            IDN.toASCII(host.trimEnd('.'), IDN.USE_STD3_ASCII_RULES).lowercase(Locale.ROOT)
+            IDN.toASCII(host.removeSuffix("."), IDN.USE_STD3_ASCII_RULES).lowercase(Locale.ROOT)
         }.getOrElse {
             // Preserve the browser's existing support for underscore-containing host labels.
             if ('_' !in host || !host.all { it.isLetterOrDigit() || it in "._-" }) return false
-            host.trimEnd('.').lowercase(Locale.ROOT)
+            host.removeSuffix(".").lowercase(Locale.ROOT)
         }
         if (ascii.isBlank()) return false
         if (ascii == "localhost") return true
@@ -134,10 +134,7 @@ object BrowserUrlResolver {
         val address = runCatching {
             InetAddress.getByName(host.substring(1, host.length - 1))
         }.getOrNull() ?: return false
-        if (address is Inet4Address) {
-            val literal = host.substring(1, host.length - 1).lowercase(Locale.ROOT)
-            return literal.startsWith("::ffff:") && isPrivateIpv4(address.hostAddress)
-        }
+        if (address is Inet4Address) return isPrivateIpv4(address.hostAddress)
         if (address !is Inet6Address) return false
         val firstByte = address.address.firstOrNull()?.toInt()?.and(0xff) ?: return false
         val uniqueLocal = (firstByte and 0xfe) == 0xfc
