@@ -54,10 +54,7 @@ jobs:
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
           script: >-
-            set +e; gradle :app:connectedDebugAndroidTest --stacktrace; TEST_STATUS=$?;
-            mkdir -p android16-test-diagnostics;
-            adb logcat -d -t 4000 > android16-test-diagnostics/logcat.txt 2>&1 || true;
-            exit "$TEST_STATUS"
+            set +e; gradle :app:connectedDebugAndroidTest --stacktrace; TEST_STATUS=$?; mkdir -p android16-test-diagnostics; adb devices -l > android16-test-diagnostics/adb-devices.txt 2>&1 || true; adb logcat -d -t 5000 > android16-test-diagnostics/logcat.txt 2>&1 || true; exit "$TEST_STATUS"
       - name: Upload Android 16 test reports and logcat
         if: always()
         uses: actions/upload-artifact@v4
