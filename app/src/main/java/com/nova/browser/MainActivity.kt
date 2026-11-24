@@ -101,6 +101,10 @@ import com.nova.browser.engine.NovaScriptAddonStore
 
 /** Nova browser core. Normal tabs may use Cefrium; Private and Guest remain GeckoView-only. */
 class MainActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(NovaThemeManager.wrapBaseContext(newBase))
+    }
+
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var cefriumPermissionLauncher: ActivityResultLauncher<Array<String>>
     private var pendingCefriumPermissionDecision: ((Boolean) -> Unit)? = null
@@ -137,8 +141,10 @@ class MainActivity : ComponentActivity() {
 
     private fun downloadManager(engineType: BrowserEngineType): NovaDownloadManager = synchronized(downloadManagers) {
         downloadManagers.getOrPut(engineType) {
-            NovaDownloadManager(this, EngineProfileStoragePolicy.suffix(engineType)) { items ->
-                runOnUiThread { if (currentTab()?.engineType == engineType) updateDownloadSummary(items) }
+            NovaDownloadManager.shared(applicationContext, EngineProfileStoragePolicy.suffix(engineType)) { items ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && currentTab()?.engineType == engineType) updateDownloadSummary(items)
+                }
             }.also { it.resumeInterrupted() }
         }
     }
@@ -156,6 +162,9 @@ class MainActivity : ComponentActivity() {
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
     private lateinit var addressBar: AutoCompleteTextView
     private var addressSuggestionItems: List<BrowserSuggestion> = emptyList()
+    private var isSelectingAddressSuggestion = false
+    private val cloudSyncStateLock = Any()
+    @Volatile private var cloudSyncGeneration = 0L
     private val addressSuggestionHandler = Handler(Looper.getMainLooper())
     private var pendingRemoteSuggestion: Runnable? = null
     private var activeRemoteSuggestionFuture: java.util.concurrent.Future<*>? = null
@@ -243,7 +252,11 @@ class MainActivity : ComponentActivity() {
                 if (findBar != null) { closeFindBar(); return }
                 if (isFullscreen) {
                     val fullscreenTab = fullscreenTabId?.let { id -> tabs.firstOrNull { it.id == id } } ?: currentTab()
-                    if (fullscreenTab?.engineType == BrowserEngineType.CEFRIUM) { fullscreenTab.browserEngine?.exitFullscreen(); return }
+                    if (fullscreenTab != null) {
+                        if (fullscreenTab.engineType == BrowserEngineType.CEFRIUM) fullscreenTab.browserEngine?.exitFullscreen()
+                        else fullscreenTab.session?.exitFullScreen()
+                        return
+                    }
                 }
                 if (splitTabId != null) { exitSplitScreen(); return }
                 if (tab?.canGoBack == true && homeScroll.visibility != View.VISIBLE) { tab.browserEngine?.goBack(); return }
@@ -443,18 +456,23 @@ class MainActivity : ComponentActivity() {
                 } else false
             }
         }
-        addressSuggestionsAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
-        addressBar.threshold = 1
+        addressSuggestionsAdapter = ArrayAdapter<BrowserSuggestion>(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
+        // Suggestions are already ranked by Nova; disable Android's second, label-only filter.
+        addressBar.threshold = Int.MAX_VALUE
         addressBar.setAdapter(addressSuggestionsAdapter)
-        addressBar.setOnItemClickListener { _, _, position, _ ->
-            val selected = addressSuggestionItems.getOrNull(position) ?: return@setOnItemClickListener
-            addressBar.setText(selected.url)
+        addressBar.setOnItemClickListener { parent, _, position, _ ->
+            val selected = parent.getItemAtPosition(position) as? BrowserSuggestion ?: return@setOnItemClickListener
+            isSelectingAddressSuggestion = true
+            addressBar.setText(selected.url, false)
             addressBar.setSelection(addressBar.text.length)
             addressBar.dismissDropDown()
+            isSelectingAddressSuggestion = false
         }
         addressBar.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateAddressSuggestions(s?.toString().orEmpty()) }
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!isSelectingAddressSuggestion) updateAddressSuggestions(s?.toString().orEmpty())
+            }
             override fun afterTextChanged(s: Editable?) = Unit
         })
         addressBar.setOnFocusChangeListener { _, hasFocus ->
@@ -2793,15 +2811,16 @@ class MainActivity : ComponentActivity() {
                 candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
             }
         }
-        readBookmarks().asSequence().take(80).forEach { entry ->
-            candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
+            readBookmarks().asSequence().take(80).forEach { entry ->
+                candidates += BrowserSuggestion(entry.title.ifBlank { entry.url }, entry.url)
+            }
         }
         val ranked = BrowserUiState.filterSuggestions(typed, candidates, 6)
         val searchUrl = BrowserUrlResolver.resolve(typed, searchEngine)
         val searchSuggestion = searchUrl?.let { BrowserSuggestion(getString(R.string.search_for_query, typed), it) }
         addressSuggestionItems = (ranked + listOfNotNull(searchSuggestion)).distinctBy { it.url }.take(7)
         addressSuggestionsAdapter.clear()
-        addressSuggestionsAdapter.addAll(addressSuggestionItems.map { it.label })
+        addressSuggestionsAdapter.addAll(addressSuggestionItems)
         if (addressSuggestionItems.isNotEmpty()) addressBar.showDropDown() else addressBar.dismissDropDown()
         scheduleRemoteSuggestions(typed, ranked, searchSuggestion)
     }
@@ -2850,7 +2869,7 @@ class MainActivity : ComponentActivity() {
                     }
                     addressSuggestionItems = (local + remoteItems + listOfNotNull(searchSuggestion)).distinctBy { it.url }.take(7)
                     addressSuggestionsAdapter.clear()
-                    addressSuggestionsAdapter.addAll(addressSuggestionItems.map { it.label })
+                    addressSuggestionsAdapter.addAll(addressSuggestionItems)
                     if (addressSuggestionItems.isNotEmpty()) addressBar.showDropDown()
                 }
             }
@@ -2917,17 +2936,15 @@ class MainActivity : ComponentActivity() {
         val location = IntArray(2)
         sourcePane.getLocationInWindow(location)
         val sourceRect = android.graphics.Rect(location[0], location[1], location[0] + width, location[1] + height)
-        val bitmap = runCatching { Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) }.getOrNull() ?: return
-        PixelCopy.request(window, sourceRect, bitmap, { result ->
+        val scale = minOf(1f, 360f / width, 640f / height)
+        val previewWidth = (width * scale).toInt().coerceAtLeast(1)
+        val previewHeight = (height * scale).toInt().coerceAtLeast(1)
+        val preview = runCatching { Bitmap.createBitmap(previewWidth, previewHeight, Bitmap.Config.ARGB_8888) }.getOrNull() ?: return
+        PixelCopy.request(window, sourceRect, preview, { result ->
             if (result == PixelCopy.SUCCESS && tabs.any { it.id == tab.id }) {
-                val scale = minOf(1f, 360f / bitmap.width, 640f / bitmap.height)
-                val previewWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
-                val previewHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
-                val preview = if (previewWidth == bitmap.width && previewHeight == bitmap.height) bitmap
-                    else Bitmap.createScaledBitmap(bitmap, previewWidth, previewHeight, true).also { bitmap.recycle() }
-                tab.thumbnail?.takeIf { it !== preview }?.recycle()
+                // Do not recycle the old bitmap: an open tab-picker ImageView may still draw it.
                 tab.thumbnail = preview
-            } else bitmap.recycle()
+            } else preview.recycle()
         }, android.os.Handler(android.os.Looper.getMainLooper()))
     }
 
@@ -3329,7 +3346,23 @@ class MainActivity : ComponentActivity() {
         dialog.show()
     }
 
-    private fun showBookmarkActions(entry: BookmarkEntry, onChanged: () -> Unit = {}) {
+    private fun restoreBookmarksAfterUndo(previous: List<BookmarkEntry>) {
+        val tombstones = runCatching {
+            JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}")
+        }.getOrDefault(JSONObject())
+        val now = System.currentTimeMillis()
+        val restored = previous.map { entry ->
+            val deletedAt = tombstones.optLong(entry.url)
+            if (deletedAt > 0L) {
+                tombstones.remove(entry.url)
+                entry.copy(addedAt = maxOf(now, deletedAt + 1L))
+            } else entry
+        }
+        prefs.edit().putString("bookmark_tombstones", tombstones.toString()).commit()
+        saveBookmarks(restored)
+    }
+
+    private fun showBookmarkActions(entry: BookmarkEntry, onChanged: () -> Unit = {})
         showBottomSheetMenu(entry.title, listOf(
             getString(R.string.edit_bookmark) to { editBookmark(entry, onChanged) },
             getString(R.string.delete_bookmark) to {
@@ -3339,7 +3372,11 @@ class MainActivity : ComponentActivity() {
                         val previous = readBookmarks()
                         saveBookmarks(previous.filterNot { it.url == entry.url })
                         onChanged(); refreshBookmarkButton()
-                        showUndoSnackbar(getString(R.string.bookmark_deleted), getString(R.string.undo)) { saveBookmarks(previous); onChanged(); refreshBookmarkButton() }
+                        showUndoSnackbar(getString(R.string.bookmark_deleted), getString(R.string.undo)) {
+                            restoreBookmarksAfterUndo(previous)
+                            onChanged()
+                            refreshBookmarkButton()
+                        }
                     }.show()
             },
             getString(R.string.open) to { navigate(entry.url) }
@@ -4284,8 +4321,7 @@ class MainActivity : ComponentActivity() {
             },
             getString(R.string.edit_login) to { editPasswordEntry(entry, onChanged) },
             getString(R.string.copy_password) to {
-                (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(getString(R.string.password), entry.password))
-                toast(getString(R.string.password_copied))
+                copyToClipboard(getString(R.string.password), entry.password)
             },
             getString(R.string.delete_login) to {
                 AlertDialog.Builder(this).setTitle(getString(R.string.delete_login)).setMessage(getString(R.string.delete_login_confirm))
@@ -5499,10 +5535,13 @@ private fun showQuickSettings() {
                 }
             }.setNeutralButton("Sign out") { _, _ ->
                 Thread {
+                    invalidateCloudSync()
                     cloudSync.signOut()
                     NovaAutoSync.cancel(this@MainActivity)
                     AutoSyncPassphraseStore.clear(this@MainActivity)
-                    prefs.edit().putBoolean("cloud_sync_enabled", false).remove("cloud_sync_user_id").apply()
+                    // Keep the account binding: a later sign-in must not merge another account
+                    // into this device's existing local browser profile.
+                    prefs.edit().putBoolean("cloud_sync_enabled", false).apply()
                     runOnUiThread { toast("Signed out. Local browsing data is unchanged.") }
                 }.start()
             }.setNegativeButton("Close", null).show()
@@ -5748,8 +5787,16 @@ private fun showForgotPassword(prefillEmail: String = "") {
             }.setNegativeButton("Cancel", null).show()
     }
 
+    private fun invalidateCloudSync() {
+        synchronized(cloudSyncStateLock) { cloudSyncGeneration++ }
+    }
+
+    private fun isCloudSyncCurrent(generation: Long): Boolean =
+        synchronized(cloudSyncStateLock) { generation == cloudSyncGeneration }
+
     @Synchronized
     private fun performCloudSync(passphrase: CharArray) {
+        val operationGeneration = synchronized(cloudSyncStateLock) { cloudSyncGeneration }
         try {
             val userId = cloudSync.signedInUserId() ?: throw IllegalStateException("Sign in to Nova Cloud first")
             val boundUserId = prefs.getString("cloud_sync_user_id", null)
@@ -5759,6 +5806,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
             val local = buildSyncSnapshot()
             val localVault = passwordVault.exportSyncBundle()
             val remote = cloudSync.downloadEncrypted()
+            check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
             val remoteSnapshot = remote.first
             val remoteVaultPayload = remote.second
             val merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(local,
@@ -5769,18 +5817,24 @@ private fun showForgotPassword(prefillEmail: String = "") {
             // Validate without mutating local credentials. A failed upload must not apply remote
             // deletions or partial merges to the device's existing vault.
             passwordVault.validateSyncBundle(mergedVault)
+            check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
-            // Commit the local merge only after the encrypted cloud write succeeds.
-            passwordVault.importSyncBundle(mergedVault)
-            if (prefs.getBoolean("cloud_sync_enabled", false)) {
-                AutoSyncPassphraseStore.save(this, passphrase)
-                NovaAutoSync.schedule(this)
+            synchronized(cloudSyncStateLock) {
+                check(operationGeneration == cloudSyncGeneration) { "Cloud sync was cancelled because you signed out" }
+                passwordVault.importSyncBundle(mergedVault)
             }
             runOnUiThread {
-                applySyncSnapshot(merged)
-                prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
-                toast("Encrypted cloud sync completed")
+                synchronized(cloudSyncStateLock) {
+                    if (operationGeneration != cloudSyncGeneration || isFinishing || isDestroyed) return@synchronized
+                    applySyncSnapshot(merged)
+                    if (prefs.getBoolean("cloud_sync_enabled", false)) {
+                        AutoSyncPassphraseStore.save(this, passphrase)
+                        NovaAutoSync.schedule(this)
+                    }
+                    prefs.edit().putBoolean("cloud_sync_enabled", true).putString("cloud_sync_user_id", userId).apply()
+                    toast("Encrypted cloud sync completed")
+                }
             }
         } catch (error: Exception) {
             runOnUiThread { toast("Cloud sync failed: ${error.message ?: "Check connection and passphrase"}") }
@@ -5928,6 +5982,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
     }
 
     override fun onDestroy() {
+        downloadManagers.values.forEach { it.setOnChangedListener(null) }
         guestTorStartPending = false
         if (!isChangingConfigurations || tabs.none { it.isGuest }) TorGuestRoutingController.stop()
         cancelPendingRemoteSuggestions()
