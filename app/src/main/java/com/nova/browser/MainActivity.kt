@@ -5940,13 +5940,19 @@ private fun showForgotPassword(prefillEmail: String = "") {
             check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
-            synchronized(cloudSyncStateLock) {
-                check(operationGeneration == cloudSyncGeneration) { "Cloud sync was cancelled because you signed out" }
-                passwordVault.importSyncBundle(mergedVault)
-            }
             runOnUiThread {
                 synchronized(cloudSyncStateLock) {
                     if (operationGeneration != cloudSyncGeneration || isFinishing || isDestroyed) return@synchronized
+                    // UI preferences and the vault may have changed while the network upload ran.
+                    // Never replace those newer local edits with the earlier merge.
+                    if (!buildSyncSnapshot().similar(local)) {
+                        toast("Cloud upload finished, but local browser data changed during sync. Local edits were preserved; run Sync now again.")
+                        return@synchronized
+                    }
+                    if (!passwordVault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
+                        toast("Cloud upload finished, but the password vault changed during sync. Local edits were preserved; run Sync now again.")
+                        return@synchronized
+                    }
                     applySyncSnapshot(merged)
                     if (prefs.getBoolean("cloud_sync_enabled", false)) {
                         AutoSyncPassphraseStore.save(this, passphrase)

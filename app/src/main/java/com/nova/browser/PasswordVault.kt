@@ -149,6 +149,13 @@ class PasswordVault(context: Context) {
             .putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
 
+    /** Commit a downloaded merge only if the local vault still matches the snapshot uploaded. */
+    @Synchronized fun importSyncBundleIfUnchanged(expectedLocal: JSONObject, merged: JSONObject): Boolean {
+        if (!exportSyncBundle().similar(expectedLocal)) return false
+        importSyncBundle(merged)
+        return true
+    }
+
     @Synchronized fun importFromSync(array: JSONArray) {
         require(array.length() <= 2000) { "Cloud password vault is unexpectedly large" }
         val merged = all().associateBy { it.origin + "|" + it.username }.toMutableMap()

@@ -127,8 +127,28 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             vault.validateSyncBundle(mergedVault)
             cloud.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
-            NovaSyncSnapshotRepository.apply(applicationContext, merged)
-            vault.importSyncBundle(mergedVault)
+            val applyResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
+            val applyLatch = java.util.concurrent.CountDownLatch(1)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    if (!NovaSyncSnapshotRepository.build(applicationContext).similar(localSnapshot)) {
+                        applyResult.set(false)
+                    } else if (!vault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
+                        applyResult.set(false)
+                    } else {
+                        NovaSyncSnapshotRepository.apply(applicationContext, merged)
+                        applyResult.set(true)
+                    }
+                } catch (_: Exception) {
+                    applyResult.set(false)
+                } finally {
+                    applyLatch.countDown()
+                }
+            }
+            if (!applyLatch.await(30, TimeUnit.SECONDS) || applyResult.get() != true) {
+                prefs.edit().putString("cloud_sync_last_error", "Local browser data or passwords changed during sync; local edits were preserved. Sync again.").apply()
+                return Result.retry()
+            }
             prefs.edit().putLong("cloud_sync_last_success_at", System.currentTimeMillis()).remove("cloud_sync_last_error").apply()
             return Result.success()
         } catch (error: javax.crypto.AEADBadTagException) {
