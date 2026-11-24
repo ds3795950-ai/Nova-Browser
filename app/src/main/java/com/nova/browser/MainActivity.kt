@@ -1198,6 +1198,7 @@ class MainActivity : ComponentActivity() {
             },
             onPopupClosed = { popup -> handleCefriumPopupClosed(popup) },
             onExternalNavigation = { url, hasUserGesture -> openExternalUrlFromCefrium(url, hasUserGesture) },
+            onEngineRoutingRequired = { url -> routeCefriumNavigation(tab, url) },
             onHttpAuthRequest = { host, realm, isProxy, respond -> showCefriumHttpAuthPrompt(host, realm, isProxy, respond) },
             onContextMenu = { menu -> showCefriumContextMenu(tab, menu) },
             onBeforeUnloadDialog = { message, isReload, answer -> showCefriumBeforeUnloadPrompt(message, isReload, answer) },
@@ -1421,18 +1422,22 @@ class MainActivity : ComponentActivity() {
         if (!state.isLoading && stateUrl.isNotBlank()) captureTabThumbnail(tab)
     }
 
-    private fun resolveEngineForTab(tab: BrowserTab, url: String = tab.lastUrl): BrowserEngineType {
+    private fun engineSelectionForTab(tab: BrowserTab, url: String = tab.lastUrl): com.nova.browser.engine.EngineSelection {
         val profile = when {
             tab.isGuest -> BrowserProfileKind.GUEST
             tab.isPrivate -> BrowserProfileKind.PRIVATE
             else -> BrowserProfileKind.NORMAL
         }
-        val selection = enginePreferences.resolve(
+        return enginePreferences.resolve(
             url = url,
             profile = profile,
             cefriumAvailable = true,
             cefriumCompatible = cefriumCompatibilityReason(tab, url) == null
         )
+    }
+
+    private fun resolveEngineForTab(tab: BrowserTab, url: String = tab.lastUrl): BrowserEngineType {
+        val selection = engineSelectionForTab(tab, url)
         tab.engineFallbackReason = selection.reason.takeIf { selection.usedFallback }
         return selection.engine
     }
@@ -1454,14 +1459,48 @@ class MainActivity : ComponentActivity() {
         return null
     }
 
-    private fun enforceCefriumCompatibility(tab: BrowserTab) {
+    private fun enforceCefriumCompatibility(tab: BrowserTab, url: String = tab.lastUrl) {
         if (tab.engineType != BrowserEngineType.CEFRIUM) return
-        val reason = cefriumCompatibilityReason(tab) ?: return
+        val selection = engineSelectionForTab(tab, url)
+        if (selection.engine == BrowserEngineType.CEFRIUM) return
         closeTabRuntime(tab)
-        tab.engineType = BrowserEngineType.GECKOVIEW
+        tab.engineType = selection.engine
+        tab.lastUrl = url
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
-        tab.engineFallbackReason = reason
+        tab.engineFallbackReason = selection.reason
+    }
+
+    private val pendingEngineFallbackTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Return true to cancel the Cefrium navigation and reopen the destination in GeckoView. */
+    private fun routeCefriumNavigation(tab: BrowserTab, destination: String): Boolean {
+        val selection = engineSelectionForTab(tab, destination)
+        if (selection.engine == BrowserEngineType.CEFRIUM) return false
+        if (!pendingEngineFallbackTabIds.add(tab.id)) return true
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try {
+                if (tabs.none { it.id == tab.id } || tab.engineType != BrowserEngineType.CEFRIUM) return@post
+                val wasActive = currentTab()?.id == tab.id
+                val wasSecondary = splitTabId == tab.id
+                closeTabRuntime(tab)
+                tab.engineType = selection.engine
+                tab.lastUrl = destination
+                tab.cefriumNavigationState = null
+                tab.needsReload = destination != HOME_URL
+                tab.engineFallbackReason = selection.reason
+                persistTabs()
+                if (wasActive) {
+                    val index = tabs.indexOfFirst { it.id == tab.id }
+                    if (index >= 0) switchTab(index)
+                } else if (wasSecondary) {
+                    restoreSplitPane()
+                }
+            } finally {
+                pendingEngineFallbackTabIds.remove(tab.id)
+            }
+        }
+        return true
     }
 
     /** Returns the engine selected for this tab, creating its runtime lazily. */
@@ -1473,6 +1512,9 @@ class MainActivity : ComponentActivity() {
             } catch (failure: Exception) {
                 // ABI/runtime initialization can fail on a device even when the page is Cefrium-compatible.
                 // Reopen only the URL in GeckoView; never copy Cefrium cookies or profile data.
+                fallbackTabToGecko(tab, failure)
+            } catch (failure: LinkageError) {
+                // Missing native symbols/classes can escape Exception handling during runtime setup.
                 fallbackTabToGecko(tab, failure)
             }
             BrowserEngineType.GECKOVIEW -> {

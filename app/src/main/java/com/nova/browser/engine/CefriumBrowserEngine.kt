@@ -62,7 +62,8 @@ class CefriumBrowserEngine(
     private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
-    private val soundAllowedForUrl: (String) -> Boolean = { true }
+    private val soundAllowedForUrl: (String) -> Boolean = { true },
+    private val onEngineRoutingRequired: (String) -> Boolean = { false }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
     override val capabilities = setOf(
@@ -121,8 +122,12 @@ class CefriumBrowserEngine(
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
                 // These settings belong to the tab's top-level origin, not an embedded iframe.
-                if (request.isForMainFrame) applySiteSettingsForUrl(url)
                 val scheme = Uri.parse(url).scheme?.lowercase()
+                if (request.isForMainFrame) {
+                    applySiteSettingsForUrl(url)
+                    if (scheme in setOf("http", "https", "about", "data", "blob", "javascript") &&
+                        this@CefriumBrowserEngine.onEngineRoutingRequired.invoke(url)) return true
+                }
                 return when (scheme) {
                     "http", "https", "about", "data", "blob", "javascript" -> false
                     "file" -> !url.startsWith("file:///android_asset/", ignoreCase = true)
