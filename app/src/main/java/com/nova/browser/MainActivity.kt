@@ -4522,7 +4522,16 @@ class MainActivity : ComponentActivity() {
         if (reload && tab.lastUrl.startsWith("http", true)) tab.browserEngine?.reload()
     }
 
-    private fun toggleJavaScriptForCurrentSite(tab: BrowserTab) {
+    private fun toggleJavaScriptForCurrentSite(
+        tab: BrowserTab,
+        expectedOrigin: String? = null,
+        expectedEngine: BrowserEngineType? = null
+    ) {
+        val currentOrigin = siteOriginForUrl(tab.lastUrl)
+        if (expectedOrigin != null && (currentOrigin != expectedOrigin || tab.engineType != expectedEngine)) {
+            toast("This tab navigated or changed engines. Reopen Site controls.")
+            return
+        }
         val key = javaScriptPreferenceKey(tab.engineType, tab.lastUrl)
         if (key == null) { toast("JavaScript controls are available on HTTP and HTTPS websites"); return }
         val nextEnabled = !isJavaScriptAllowed(tab.engineType, tab.lastUrl)
@@ -4543,7 +4552,18 @@ class MainActivity : ComponentActivity() {
         val globalDefault = prefs.getBoolean("site_default_${engine.name.lowercase()}_$setting", default)
         return prefs.getBoolean(key, globalDefault)
     }
-    private fun toggleSiteSetting(tab: BrowserTab, setting: String, default: Boolean) {
+    private fun toggleSiteSetting(
+        tab: BrowserTab,
+        setting: String,
+        default: Boolean,
+        expectedOrigin: String? = null,
+        expectedEngine: BrowserEngineType? = null
+    ) {
+        val currentOrigin = siteOriginForUrl(tab.lastUrl)
+        if (expectedOrigin != null && (currentOrigin != expectedOrigin || tab.engineType != expectedEngine)) {
+            toast("This tab navigated or changed engines. Reopen Site controls.")
+            return
+        }
         val key = siteSettingKey(tab.engineType, tab.lastUrl, setting) ?: return toast("Open an HTTP or HTTPS site first")
         val enabled = !siteSettingAllowed(tab.engineType, tab.lastUrl, setting, default)
         prefs.edit().putBoolean(key, enabled).apply()
@@ -5090,11 +5110,12 @@ private fun showQuickSettings() {
         val tab = currentTab() ?: return
         val siteUrlAtOpen = tab.lastUrl
         val originAtOpen = siteOriginForUrl(siteUrlAtOpen)
+        val engineAtOpen = tab.engineType
         val host = runCatching { Uri.parse(siteUrlAtOpen).host }.getOrNull()
         if (host.isNullOrBlank() || originAtOpen == null) { toast("Open a website to manage its permissions"); return }
         fun ensureOriginUnchanged(): Boolean {
-            if (siteOriginForUrl(tab.lastUrl) == originAtOpen) return true
-            toast("This tab navigated to another site. Reopen Site controls.")
+            if (siteOriginForUrl(tab.lastUrl) == originAtOpen && tab.engineType == engineAtOpen) return true
+            toast("This tab navigated or changed engines. Reopen Site controls.")
             return false
         }
         val jsLabel = "JavaScript · " + if (isJavaScriptAllowed(tab.engineType, siteUrlAtOpen)) "Allowed" else "Blocked"
@@ -5107,22 +5128,21 @@ private fun showQuickSettings() {
                 .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {
-                        toggleJavaScriptForCurrentSite(tab)
+                        toggleJavaScriptForCurrentSite(tab, originAtOpen, engineAtOpen)
                     } else if (which == 1) {
-                        toggleSiteSetting(tab, "popups", false)
+                        toggleSiteSetting(tab, "popups", false, originAtOpen, engineAtOpen)
                     } else if (which == 2) {
-                        toggleSiteSetting(tab, "autoplay", false)
+                        toggleSiteSetting(tab, "autoplay", false, originAtOpen, engineAtOpen)
                     } else if (which == 3) {
-                        toggleSiteSetting(tab, "ads", true)
+                        toggleSiteSetting(tab, "ads", true, originAtOpen, engineAtOpen)
                     } else if (which == 4) {
-                        toggleSiteSetting(tab, "sound", true)
+                        toggleSiteSetting(tab, "sound", true, originAtOpen, engineAtOpen)
                     } else if (which == 5) {
-                        AlertDialog.Builder(this).setMessage("Clear cookies, cache, local storage and service workers for $host? Other sites are not affected.")
+                        AlertDialog.Builder(this).setMessage("Clear cookies, local storage and service workers for $host? Other sites are not affected.")
                             .setPositiveButton("Clear site data") { _, _ ->
                                 if (!ensureOriginUnchanged()) return@setPositiveButton
                                 runCatching {
                                     CefriumProfile.get(enginePreferences.cefriumProfileName()).clearSiteData(origin) {
-                                        tabs.forEach { tab -> runCatching { tab.browserEngine?.clearCache() } }
                                         toast("Cefrium site data cleared for $host")
                                     }
                                 }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
