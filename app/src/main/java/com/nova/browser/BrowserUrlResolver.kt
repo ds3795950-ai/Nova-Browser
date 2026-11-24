@@ -4,7 +4,6 @@ import java.net.IDN
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
-import java.net.URI
 import java.net.URLEncoder
 import java.util.Locale
 
@@ -54,8 +53,9 @@ object BrowserUrlResolver {
 
     private fun isBareHostname(value: String): Boolean {
         if (value.any(Char::isWhitespace) || '\\' in value) return false
-        val uri = runCatching { URI("https://$value") }.getOrNull() ?: return false
-        val authority = uri.rawAuthority ?: return false
+        // Validate only the authority. Parsing the entire input with URI rejects valid
+        // browser path characters such as '[' and ']' in example.com/a[1].
+        val authority = value.substringBefore('/').substringBefore('?').substringBefore('#')
         if (authority.isBlank() || '@' in authority) return false
 
         if (authority.startsWith("[")) {

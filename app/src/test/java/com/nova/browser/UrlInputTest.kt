@@ -101,6 +101,10 @@ class UrlInputTest {
         assertEquals("https://example.com/a?b=1", BrowserUrlResolver.resolve("example.com/a?b=1"))
     }
 
+    @Test fun domainWithBrowserCompatibleBracketedPath() {
+        assertEquals("https://example.com/a[1]", BrowserUrlResolver.resolve("example.com/a[1]"))
+    }
+
     @Test fun domainWithPort() {
         assertEquals("https://example.com:8080", BrowserUrlResolver.resolve("example.com:8080"))
     }
