@@ -3068,7 +3068,7 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleStopReload() {
         val tab = currentTab() ?: return
-        if (tab.isLoading) tab.browserEngine?.stop() else ensureBrowserEngine(tab).reload()
+        if (tab.isLoading) tab.browserEngine?.stop() else reloadPage()
     }
 
     private fun trimTabThumbnails() {
@@ -3447,11 +3447,15 @@ class MainActivity : ComponentActivity() {
         if (tab.lastUrl == HOME_URL) { toast("Open a page before bookmarking"); return }
         val items = readBookmarks()
         val existing = items.indexOfFirst { it.url == tab.lastUrl }
-        if (existing >= 0) { items.removeAt(existing); saveBookmarks(items); refreshBookmarkButton(); toast("Bookmark removed") }
-        else {
+        if (existing >= 0) {
+            items.removeAt(existing)
+            if (!saveBookmarks(items)) return
+            refreshBookmarkButton(); toast("Bookmark removed")
+        } else {
             val priorDelete = runCatching { JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}").optLong(tab.lastUrl) }.getOrDefault(0L)
             items.add(BookmarkEntry(tab.lastUrl, tab.title, "General", maxOf(System.currentTimeMillis(), priorDelete + 1L)))
-            saveBookmarks(items); refreshBookmarkButton(); toast("Bookmark saved")
+            if (!saveBookmarks(items)) return
+            refreshBookmarkButton(); toast("Bookmark saved")
         }
     }
 
@@ -3571,7 +3575,8 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton(getString(R.string.save)) { _, _ ->
                 val selectedFolder = folderPicker.selectedItem?.toString()?.ifBlank { "General" } ?: "General"
                 val items = readBookmarks().map { if (it.url == entry.url) it.copy(title = title.text.toString().trim().ifBlank { entry.title }, folder = selectedFolder) else it }
-                saveBookmarks(items); onChanged(); toast(getString(R.string.bookmark_updated))
+                if (!saveBookmarks(items)) return@setPositiveButton
+                onChanged(); toast(getString(R.string.bookmark_updated))
             }.setNegativeButton(getString(R.string.cancel), null).show()
     }
 
@@ -6246,7 +6251,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
                             merged[url] = BookmarkEntry(url, item.optString("title", Uri.parse(url).host ?: url), item.optString("folder", "Imported"), item.optLong("addedAt", System.currentTimeMillis()))
                         }
                     }
-                    saveBookmarks(merged.values.toList())
+                    if (!saveBookmarks(merged.values.toList())) return@runCatching
                     toast("Imported ${imported.length()} bookmarks")
                 }
             }.onFailure { toast("Bookmark transfer failed: ${it?.localizedMessage ?: "Unknown error"}") }
