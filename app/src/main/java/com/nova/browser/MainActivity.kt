@@ -24,6 +24,7 @@ import org.mozilla.geckoview.GeckoSession.PromptDelegate.FilePrompt
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse
 import org.mozilla.geckoview.GeckoSession.PromptDelegate.FolderUploadPrompt
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.view.WindowInsets
@@ -1577,13 +1578,6 @@ class MainActivity : ComponentActivity() {
         tab.browserEngine = null
         tab.session = null
     }
-
-    private fun enginePaneLayoutParams(pane: LinearLayout): LinearLayout.LayoutParams =
-        if (pane.orientation == LinearLayout.HORIZONTAL) {
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        } else {
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
 
     private fun showPrimaryEngineView(engineView: View) {
         activePrimaryEngineView?.let { old -> if (old !== engineView && old.parent === browserPane) browserPane.removeView(old) }
@@ -3508,7 +3502,7 @@ class MainActivity : ComponentActivity() {
         saveBookmarks(current + restored)
     }
 
-    private fun showBookmarkActions(entry: BookmarkEntry, onChanged: () -> Unit = {})
+    private fun showBookmarkActions(entry: BookmarkEntry, onChanged: () -> Unit = {}) =
         showBottomSheetMenu(entry.title, listOf(
             getString(R.string.edit_bookmark) to { editBookmark(entry, onChanged) },
             getString(R.string.delete_bookmark) to {
