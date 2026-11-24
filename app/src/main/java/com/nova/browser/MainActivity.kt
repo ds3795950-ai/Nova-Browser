@@ -239,6 +239,7 @@ class MainActivity : ComponentActivity() {
         })
         searchEngine = prefs.getString("search_engine", "Google") ?: "Google"
         runtime = sharedRuntime ?: GeckoRuntime.create(applicationContext).also { sharedRuntime = it }
+        enableGeckoAudioSessionTypeNotifications()
         val webScheme = when (prefs.getString("web_color_scheme", "system")) {
             "dark" -> GeckoRuntimeSettings.COLOR_SCHEME_DARK
             "light" -> GeckoRuntimeSettings.COLOR_SCHEME_LIGHT
@@ -1732,6 +1733,16 @@ class MainActivity : ComponentActivity() {
     }
 
     @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
+    private fun enableGeckoAudioSessionTypeNotifications() {
+        if (!::runtime.isInitialized) return
+        org.mozilla.geckoview.GeckoPreferenceController.setGeckoPref(
+            "media.geckoview.audio_session_type.enabled",
+            true,
+            org.mozilla.geckoview.GeckoPreferenceController.PREF_BRANCH_USER
+        ).accept({}, { _ -> /* Audio muting remains best-effort if this optional Gecko pref is unavailable. */ })
+    }
+
+    @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
     private fun applyGeckoImageBehavior(
         requestedValue: Int = prefs.getInt("site_default_geckoview_images", 1),
         onComplete: ((Boolean) -> Unit)? = null
@@ -2114,12 +2125,14 @@ class MainActivity : ComponentActivity() {
             @OptIn(org.mozilla.geckoview.ExperimentalGeckoViewApi::class)
             @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
             override fun onContentPermissionRequest(session: GeckoSession, perm: GeckoSession.PermissionDelegate.ContentPermission): GeckoResult<Int> {
-                if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
-                if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                // Autoplay is governed by Nova's current default/site rule, not stale Gecko
+                // ALLOW/DENY records that may belong to sites whose tabs are currently closed.
                 if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE || perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE) {
                     val allowed = siteSettingAllowed(BrowserEngineType.GECKOVIEW, perm.uri, "autoplay", false)
                     return GeckoResult.fromValue(if (allowed) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
                 }
+                if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                if (perm.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
                 val token = geckoPermissionToken(perm.permission)
                 val decision = geckoPermissionDecision(perm.uri, token, allowSiteOverride = !perm.privateMode && perm.contextId.isNullOrBlank())
                 if (decision == "ALLOW") return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
@@ -2187,12 +2200,21 @@ class MainActivity : ComponentActivity() {
         }
 
         session.mediaSessionDelegate = object : org.mozilla.geckoview.MediaSession.Delegate {
-            override fun onActivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+            private fun applySoundRule(mediaSession: org.mozilla.geckoview.MediaSession) {
                 tab.mediaSession = mediaSession
                 mediaSession.muteAudio(!siteSettingAllowed(BrowserEngineType.GECKOVIEW, tab.lastUrl, "sound", true))
             }
+            override fun onActivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+                applySoundRule(mediaSession)
+            }
+            override fun onAudioSessionTypeChanged(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession, type: String) {
+                // This callback also exposes the session handle for W3C Audio Session/Web Audio
+                // activity that does not activate the regular media transport controls.
+                applySoundRule(mediaSession)
+            }
             override fun onDeactivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
-                if (tab.mediaSession === mediaSession) tab.mediaSession = null
+                // Keep the handle: muteAudio is supported even while the media session is inactive.
+                if (tab.mediaSession === mediaSession) applySoundRule(mediaSession)
             }
         }
 
@@ -5529,8 +5551,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
             val local = buildSyncSnapshot()
             val localVault = passwordVault.exportSyncBundle()
             val remote = cloudSync.downloadEncrypted()
-            val remoteSnapshot = remote.first
-            val remoteVaultPayload = remote.second
+            val remoteSnapshot = remote.snapshot
+            val remoteVaultPayload = remote.vault
             val merged = if (remoteSnapshot == null) local else mergeSyncSnapshots(local,
                 JSONObject(CloudCrypto.decrypt(remoteSnapshot, passphrase)))
             val remoteVault = remoteVaultPayload?.let { PasswordVault.decodeSyncBundle(CloudCrypto.decrypt(it, passphrase)) } ?: JSONObject()
@@ -5539,7 +5561,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
             // deletions or partial merges to the device's existing vault.
             passwordVault.validateSyncBundle(mergedVault)
             cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
-                CloudCrypto.encrypt(mergedVault.toString(), passphrase))
+                CloudCrypto.encrypt(mergedVault.toString(), passphrase), remote.snapshotVersion)
             // Commit the local merge only after the encrypted cloud write succeeds.
             passwordVault.importSyncBundle(mergedVault)
             if (prefs.getBoolean("cloud_sync_enabled", false)) {

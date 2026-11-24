@@ -151,4 +151,16 @@ class NovaSyncMergeTest {
         assertEquals("GECKOVIEW", gecko.getJSONArray("workspaces").getJSONObject(0).getString("engine"))
         assertEquals("CEFRIUM", cefrium.getJSONArray("workspaces").getJSONObject(0).getString("engine"))
     }
+    @Test fun malformedNewerCloudCredentialDoesNotReplaceValidLocalCredential() {
+        val local = JSONObject().put("credentials", JSONArray().put(JSONObject()
+            .put("origin", "https://example.com").put("username", "alice")
+            .put("password", "valid-local-secret").put("updatedAt", 10)))
+        val remote = JSONObject().put("credentials", JSONArray().put(JSONObject()
+            .put("origin", "https://example.com").put("username", "alice")
+            .put("updatedAt", 20)))
+        val merged = PasswordVault.mergeSyncBundles(local, remote).getJSONArray("credentials")
+        assertEquals(1, merged.length())
+        assertEquals("valid-local-secret", merged.getJSONObject(0).getString("password"))
+    }
+
 }

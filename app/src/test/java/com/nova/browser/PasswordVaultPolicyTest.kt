@@ -17,6 +17,14 @@ class PasswordVaultPolicyTest {
         assertFalse(PasswordVaultPolicy.isAllowedOrigin("https:///missing-host"))
         assertFalse(PasswordVaultPolicy.isAllowedOrigin("https://example.com:0"))
     }
+    @Test fun legacyVaultsCanBeReadButNewWritesStayCapped() {
+        assertTrue(PasswordVaultStoragePolicy.canRead(4 * 1024 * 1024 + 1))
+        assertFalse(PasswordVaultStoragePolicy.canRead(16 * 1024 * 1024 + 1))
+        assertFalse(PasswordVaultStoragePolicy.canWrite(4 * 1024 * 1024 + 1, 0, false))
+        assertTrue(PasswordVaultStoragePolicy.canWrite(3 * 1024 * 1024, 8L * 1024 * 1024, true))
+        assertFalse(PasswordVaultStoragePolicy.canWrite(5 * 1024 * 1024, 8L * 1024 * 1024, true))
+    }
+
     @Test fun optionalFormOriginMayBeEmptyButMustOtherwiseBeValid() {
         assertTrue(PasswordVaultPolicy.isAllowedOptionalOrigin(null)); assertTrue(PasswordVaultPolicy.isAllowedOptionalOrigin(""))
         assertFalse(PasswordVaultPolicy.isAllowedOptionalOrigin("file:///tmp/login"))

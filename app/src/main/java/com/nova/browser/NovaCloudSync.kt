@@ -67,6 +67,12 @@ internal object CloudCrypto {
 /** Supabase Auth + PostgREST client. Only the publishable key is embedded in the APK. */
 class CloudSyncConflictException(message: String) : IllegalStateException(message)
 
+data class NovaCloudDownload(
+    val snapshot: JSONObject?,
+    val vault: JSONObject?,
+    val snapshotVersion: String?
+)
+
 internal object NovaCloudBundle {
     const val FORMAT = "nova-encrypted-sync-bundle-v1"
 
@@ -92,8 +98,6 @@ class NovaCloudSync(context: Context) {
     }
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
-    @Volatile private var snapshotVersion: String? = null
-    @Volatile private var vaultVersion: String? = null
 
     /** Create a Supabase account using email and password. */
     fun signUpWithPassword(email: String, password: String) {
@@ -182,44 +186,41 @@ class NovaCloudSync(context: Context) {
         sessionFile.delete()
     }
 
-    fun downloadEncrypted(): Pair<JSONObject?, JSONObject?> {
+    private data class FetchedRow(val payload: JSONObject?, val version: String?)
+
+    fun downloadEncrypted(): NovaCloudDownload {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
+        val snapshotRow = fetchRow("nova_sync_state", "snapshot", userId, token)
         // New backups contain both encrypted payloads in one revision. Read the old vault
         // table only for legacy two-row backups; never let a stale legacy row override a bundle.
-        val legacyVault = if (snapshot?.optString("format") == NovaCloudBundle.FORMAT) {
-            vaultVersion = null
+        val legacyVault = if (snapshotRow.payload?.optString("format") == NovaCloudBundle.FORMAT) {
             null
         } else {
-            fetchRow("nova_encrypted_vault", "payload", userId, token)
+            fetchRow("nova_encrypted_vault", "payload", userId, token).payload
         }
-        return NovaCloudBundle.unpack(snapshot, legacyVault)
+        val unpacked = NovaCloudBundle.unpack(snapshotRow.payload, legacyVault)
+        return NovaCloudDownload(unpacked.first, unpacked.second, snapshotRow.version)
     }
 
-    fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {
+    fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject, expectedSnapshotVersion: String?) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
-        // Browser and vault ciphertext are one atomic compare-and-swap row. Two separate
-        // REST writes could leave a newer browser backup paired with an older password vault.
+        // The revision belongs to this download operation, not to mutable instance state.
+        // Concurrent manual/periodic syncs therefore cannot borrow one another's CAS token.
         val bundle = NovaCloudBundle.pack(snapshot, vault)
-        upsertRow("nova_sync_state", "snapshot", userId, bundle, token, snapshotVersion)
-        vaultVersion = null // Legacy table is read-only after migration to the atomic bundle.
+        upsertRow("nova_sync_state", "snapshot", userId, bundle, token, expectedSnapshotVersion)
     }
 
-    private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
+    private fun fetchRow(table: String, column: String, userId: String, token: String): FetchedRow {
         val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
         val rows = org.json.JSONArray(result)
-        if (rows.length() == 0) {
-            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
-            return null
-        }
+        if (rows.length() == 0) return FetchedRow(null, null)
         val row = rows.getJSONObject(0)
         val version = row.optString("updated_at").takeIf { it.isNotBlank() }
-        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
-        return row.optJSONObject(column)
+        return FetchedRow(row.optJSONObject(column), version)
     }
 
     /** Compare-and-swap prevents two devices syncing the same old revision from silently overwriting each other. */
@@ -239,7 +240,6 @@ class NovaCloudSync(context: Context) {
         }
         val newVersion = rows.getJSONObject(0).optString("updated_at").takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Cloud sync response did not include its new revision")
-        if (column == "snapshot") snapshotVersion = newVersion else vaultVersion = newVersion
     }
 
     private fun validSession(): JSONObject? {

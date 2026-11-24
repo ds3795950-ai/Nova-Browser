@@ -13,9 +13,10 @@ class NovaScriptAddonStore(context:android.content.Context) {
     private val root=File(context.filesDir,"nova_cefrium_addons").apply { mkdirs() }
     private val index=File(root,"index.json")
     @Synchronized fun list():List<NovaScriptAddon> {
-        if(!index.isFile) return emptyList()
         return runCatching {
-            val rows=JSONArray(index.readText(Charsets.UTF_8))
+            val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader ->
+                JSONArray(reader.readText())
+            }
             buildList<NovaScriptAddon> {
                 for(i in 0 until rows.length()) {
                     val row=rows.optJSONObject(i)?:continue
