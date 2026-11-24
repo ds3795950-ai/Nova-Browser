@@ -53,12 +53,10 @@ jobs:
           emulator-boot-timeout: 900
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
-          script: |
-            set +e
-            gradle :app:connectedDebugAndroidTest --stacktrace
-            TEST_STATUS=$?
-            mkdir -p android16-test-diagnostics
-            adb logcat -d -t 4000 > android16-test-diagnostics/logcat.txt 2>&1 || true
+          script: >-
+            set +e; gradle :app:connectedDebugAndroidTest --stacktrace; TEST_STATUS=$?;
+            mkdir -p android16-test-diagnostics;
+            adb logcat -d -t 4000 > android16-test-diagnostics/logcat.txt 2>&1 || true;
             exit "$TEST_STATUS"
       - name: Upload Android 16 test reports and logcat
         if: always()
