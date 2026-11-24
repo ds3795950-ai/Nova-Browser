@@ -3446,23 +3446,21 @@ class MainActivity : ComponentActivity() {
         dialog.show()
     }
 
-    private fun restoreBookmarksAfterUndo(previous: List<BookmarkEntry>) {
+    private fun restoreBookmarkAfterUndo(deleted: BookmarkEntry) {
+        val current = readBookmarks()
         val tombstones = runCatching {
             JSONObject(prefs.getString("bookmark_tombstones", "{}") ?: "{}")
         }.getOrDefault(JSONObject())
-        val now = System.currentTimeMillis()
-        val restored = previous.map { entry ->
-            val deletedAt = tombstones.optLong(entry.url)
-            if (deletedAt > 0L) {
-                tombstones.remove(entry.url)
-                entry.copy(addedAt = maxOf(now, deletedAt + 1L))
-            } else entry
-        }
+        val deletedAt = tombstones.optLong(deleted.url)
+        tombstones.remove(deleted.url)
         if (!prefs.edit().putString("bookmark_tombstones", tombstones.toString()).commit()) {
             toast("Could not restore this bookmark. Try again.")
             return
         }
-        saveBookmarks(restored)
+        // A re-added bookmark wins; otherwise restore only the deleted item into the latest list.
+        if (current.any { it.url == deleted.url }) return
+        val restored = deleted.copy(addedAt = maxOf(System.currentTimeMillis(), deletedAt + 1L))
+        saveBookmarks(current + restored)
     }
 
     private fun showBookmarkActions(entry: BookmarkEntry, onChanged: () -> Unit = {})
@@ -3476,7 +3474,7 @@ class MainActivity : ComponentActivity() {
                         saveBookmarks(previous.filterNot { it.url == entry.url })
                         onChanged(); refreshBookmarkButton()
                         showUndoSnackbar(getString(R.string.bookmark_deleted), getString(R.string.undo)) {
-                            restoreBookmarksAfterUndo(previous)
+                            restoreBookmarkAfterUndo(entry)
                             onChanged()
                             refreshBookmarkButton()
                         }
