@@ -5504,6 +5504,10 @@ private fun showQuickSettings() {
     }
 
     private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
+        if (pendingGeckoDataClearActive) {
+            onFinished(false, "A GeckoView data deletion is already in progress")
+            return
+        }
         if (splitTabId != null) exitSplitScreen()
         val affectedTabs = tabs.filter { !it.isPrivate && !it.isGuest && it.engineType == BrowserEngineType.GECKOVIEW }
         val affectedIds = affectedTabs.map { it.id }.toSet()
