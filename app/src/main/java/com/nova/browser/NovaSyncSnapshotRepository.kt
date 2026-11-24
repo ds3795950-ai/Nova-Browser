@@ -105,41 +105,39 @@ internal object NovaSyncSnapshotRepository {
 
     /** Validate cloud workspace payloads before upload or local mutation. */
     fun validate(snapshot: JSONObject) {
-        val profiles = snapshot.optJSONObject("profiles") ?: return
-        for (engine in BrowserEngineType.values()) {
-            if (!profiles.has(engine.name)) continue
-            val profile = profiles.optJSONObject(engine.name)
-                ?: throw IllegalArgumentException("Cloud browser profile is malformed")
-            val workspaces = profile.optJSONArray("workspaces") ?: JSONArray()
-            val entries = linkedSetOf<String>()
-            for (i in 0 until workspaces.length()) {
-                val item = workspaces.optJSONObject(i)
-                    ?: throw IllegalArgumentException("Cloud workspace entry is malformed")
-                require(item.optString("engine") == engine.name) { "Cloud workspace belongs to a different browser engine" }
-                entries.add(item.toString())
+        val profiles = snapshot.optJSONObject("profiles")
+        if (profiles != null) {
+            for (engine in BrowserEngineType.values()) {
+                if (!profiles.has(engine.name)) continue
+                val profile = profiles.optJSONObject(engine.name)
+                    ?: throw IllegalArgumentException("Cloud browser profile is malformed")
+                validateWorkspaceCollection(profile, engine.name)
             }
-            NovaWorkspaceStoragePolicy.serialize(entries)
-            val rawTombstones = profile.opt("workspace_tombstones")
-            val tombstones = when (rawTombstones) {
-                null -> JSONObject()
-                is JSONObject -> rawTombstones
-                else -> throw IllegalArgumentException("Cloud workspace deletion history is malformed")
-            }
-            NovaWorkspaceStoragePolicy.validateTombstones(tombstones.toString())
         }
-        snapshot.optJSONObject("global")?.let { global ->
-            val workspaces = global.optJSONArray("workspaces") ?: JSONArray()
-            val entries = linkedSetOf<String>()
-            for (i in 0 until workspaces.length()) {
-                val item = workspaces.optJSONObject(i)
-                    ?: throw IllegalArgumentException("Cloud global workspace entry is malformed")
-                entries.add(item.toString())
+        snapshot.optJSONObject("global")?.let { validateWorkspaceCollection(it, null) }
+    }
+
+    private fun validateWorkspaceCollection(profile: JSONObject, expectedEngine: String?) {
+        val workspaces = profile.optJSONArray("workspaces") ?: JSONArray()
+        val entries = linkedSetOf<String>()
+        for (i in 0 until workspaces.length()) {
+            val item = workspaces.optJSONObject(i)
+                ?: throw IllegalArgumentException("Cloud workspace entry is malformed")
+            if (expectedEngine != null) {
+                require(item.optString("engine") == expectedEngine) {
+                    "Cloud workspace belongs to a different browser engine"
+                }
             }
-            NovaWorkspaceStoragePolicy.serialize(entries)
-            val tombstones = global.opt("workspace_tombstones")
-            require(tombstones == null || tombstones is JSONObject) { "Cloud global workspace deletion history is malformed" }
-            NovaWorkspaceStoragePolicy.validateTombstones((tombstones as? JSONObject ?: JSONObject()).toString())
+            entries.add(item.toString())
         }
+        NovaWorkspaceStoragePolicy.serialize(entries)
+        val rawTombstones = profile.opt("workspace_tombstones")
+        val tombstones = when (rawTombstones) {
+            null -> JSONObject()
+            is JSONObject -> rawTombstones
+            else -> throw IllegalArgumentException("Cloud workspace deletion history is malformed")
+        }
+        NovaWorkspaceStoragePolicy.validateTombstones(tombstones.toString())
     }
 
     fun apply(context: Context, snapshot: JSONObject) {
