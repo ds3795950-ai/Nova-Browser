@@ -151,7 +151,7 @@ class PasswordVault(context: Context) {
 
     /** Commit a downloaded merge only if the local vault still matches the snapshot uploaded. */
     @Synchronized fun importSyncBundleIfUnchanged(expectedLocal: JSONObject, merged: JSONObject): Boolean {
-        if (!exportSyncBundle().similar(expectedLocal)) return false
+        if (!NovaJsonEquality.areEqual(exportSyncBundle(), expectedLocal)) return false
         importSyncBundle(merged)
         return true
     }

@@ -131,7 +131,7 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             val applyLatch = java.util.concurrent.CountDownLatch(1)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 try {
-                    if (!NovaSyncSnapshotRepository.build(applicationContext).similar(localSnapshot)) {
+                    if (!NovaJsonEquality.areEqual(NovaSyncSnapshotRepository.build(applicationContext), localSnapshot)) {
                         applyResult.set(false)
                     } else if (!vault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
                         applyResult.set(false)

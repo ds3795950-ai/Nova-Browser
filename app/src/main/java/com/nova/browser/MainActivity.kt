@@ -6022,7 +6022,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
                     if (operationGeneration != cloudSyncGeneration || isFinishing || isDestroyed) return@synchronized
                     // UI preferences and the vault may have changed while the network upload ran.
                     // Never replace those newer local edits with the earlier merge.
-                    if (!buildSyncSnapshot().similar(local)) {
+                    if (!NovaJsonEquality.areEqual(buildSyncSnapshot(), local)) {
                         toast("Cloud upload finished, but local browser data changed during sync. Local edits were preserved; run Sync now again.")
                         return@synchronized
                     }

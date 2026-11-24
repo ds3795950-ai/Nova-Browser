@@ -164,7 +164,7 @@ class NovaDownloadManager(
         worker?.connection?.disconnect()
         runCatching { worker?.input?.close() }
         if (worker == null) partial(id).delete()
-        synchronized(this) { records.remove(id); persist(); changed(items()) }
+        synchronized(this) { records.remove(id); persist(); changed?.invoke(items()) }
         NovaDownloadService.update(context, running.size)
     }
 
@@ -331,7 +331,7 @@ class NovaDownloadManager(
                     }
                 }
                 if (worker.cancel.get()) {
-                    synchronized(this) { records.remove(id); persist(); changed(items()) }
+                    synchronized(this) { records.remove(id); persist(); changed?.invoke(items()) }
                 } else {
                     val uri = publish(part, item.fileName, item.mimeType)
                     worker.item = worker.item.copy(downloaded = part.length(), state = "COMPLETE", savedUri = uri.toString())
