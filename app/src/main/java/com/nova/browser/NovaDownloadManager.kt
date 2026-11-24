@@ -177,9 +177,10 @@ class NovaDownloadManager(
             // If-Range needs a strong ETag or a Last-Modified date; otherwise a partial file cannot be validated.
             // If an ETag exists but is weak, do not silently fall back to Last-Modified
             // for If-Range; restart rather than risk appending bytes from another entity.
-            val validator = when {
-                worker.item.etag.isNotBlank() -> worker.item.etag.takeIf { !it.startsWith("W/", ignoreCase = true) }
-                else -> worker.item.lastModified.takeIf { it.isNotBlank() }
+            // Resume only when the server supplied a strong entity tag.
+            // Last-Modified is not sufficient to guarantee byte-for-byte identity.
+            val validator = worker.item.etag.takeIf {
+                it.isNotBlank() && !it.startsWith("W/", ignoreCase = true)
             }
             if (offset > 0 && validator == null) { part.delete(); offset = 0 }
             var connection = openConnection(worker, offset, validator)
