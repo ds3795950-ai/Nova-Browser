@@ -73,6 +73,5 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
         const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
         const val KEY_RETIRED_PROFILES = "cefrium_retired_profiles"
-        const val KEY_PROFILE_NAME = "cefrium_profile_name"
     }
 }
