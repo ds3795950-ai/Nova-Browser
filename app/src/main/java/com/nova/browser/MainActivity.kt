@@ -755,6 +755,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showHomeScreen() {
+        if (currentTab()?.isGuest == true && splitTabId != null) exitSplitScreen()
         homeScroll.visibility = View.VISIBLE
         if (splitTabId != null) {
             browserPane.visibility = View.VISIBLE
@@ -978,6 +979,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
+        if (isGuest && splitTabId != null) exitSplitScreen()
         cancelPendingRemoteSuggestions()
         if (currentTab()?.isGuest == true && !isGuest) {
             toast("Normal and Private tabs are unavailable in Guest Mode")
@@ -2699,6 +2701,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreSplitPane() {
+        if (currentTab()?.isGuest == true) {
+            if (splitTabId != null) exitSplitScreen()
+            return
+        }
         val second = tabs.firstOrNull { it.id == splitTabId } ?: run { splitTabId = null; return }
         enforceCefriumCompatibility(second)
         val engine = ensureBrowserEngine(second)
@@ -4081,33 +4087,46 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showCefriumNovaAddons() {
-        val addons=novaScriptAddonStore.list()
-        val rows=addons.map { "${it.name} · ${if(it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Nova Add-ons · ${addons.size}")
-            .setMessage("Nova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView.")
-            .setItems(rows) { _,which ->
-                val addon=addons[which]
-                val actions=if(addon.enabled)arrayOf("Disable","Remove")else arrayOf("Enable","Remove")
-                AlertDialog.Builder(this).setTitle(addon.name)
-                    .setMessage("Allowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}")
-                    .setItems(actions) { _,action ->
-                        when(actions[action]) {
-                            "Enable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,true)}
-                                .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on enabled · reload applied")}
-                                .onFailure{toast("Could not enable add-on: ${it.message}")}
-                            "Disable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,false)}
-                                .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on disabled · reload applied")}
-                                .onFailure{toast("Could not disable add-on: ${it.message}")}
-                            "Remove" -> AlertDialog.Builder(this).setMessage("Remove ${addon.name} and its local script?")
-                                .setPositiveButton("Remove"){_,_->runCatching{novaScriptAddonStore.remove(addon.id)}
-                                    .onSuccess{refreshCefriumNovaAddons();toast("Nova Add-on removed")}
-                                    .onFailure{toast("Could not remove add-on: ${it.message}")}}
-                                .setNegativeButton("Cancel",null).show()
+        val addons = novaScriptAddonStore.list()
+        val rows = addons.map { "\${it.name} · \${if (it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+        val warning = "Nova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView."
+        AlertDialog.Builder(this)
+            .setCustomTitle(TextView(this).apply {
+                text = "Nova Add-ons · \${addons.size}\n\n$warning"
+                textSize = 14f
+                setPadding(dp(24), dp(18), dp(24), dp(8))
+            })
+            .setItems(rows) { _, which ->
+                val addon = addons[which]
+                val actions = if (addon.enabled) arrayOf("Disable", "Remove") else arrayOf("Enable", "Remove")
+                AlertDialog.Builder(this)
+                    .setCustomTitle(TextView(this).apply {
+                        text = "\${addon.name}\n\nAllowed websites:\n\${addon.allowedOriginRules.sorted().joinToString("\n")}"
+                        textSize = 14f
+                        setPadding(dp(24), dp(18), dp(24), dp(8))
+                    })
+                    .setItems(actions) { _, action ->
+                        when (actions[action]) {
+                            "Enable" -> runCatching { novaScriptAddonStore.setEnabled(addon.id, true) }
+                                .onSuccess { refreshCefriumNovaAddons(); toast("Nova Add-on enabled · reload applied") }
+                                .onFailure { toast("Could not enable add-on: \${it.message}") }
+                            "Disable" -> runCatching { novaScriptAddonStore.setEnabled(addon.id, false) }
+                                .onSuccess { refreshCefriumNovaAddons(); toast("Nova Add-on disabled · reload applied") }
+                                .onFailure { toast("Could not disable add-on: \${it.message}") }
+                            "Remove" -> AlertDialog.Builder(this)
+                                .setMessage("Remove \${addon.name} and its local script?")
+                                .setPositiveButton("Remove") { _, _ ->
+                                    runCatching { novaScriptAddonStore.remove(addon.id) }
+                                        .onSuccess { refreshCefriumNovaAddons(); toast("Nova Add-on removed") }
+                                        .onFailure { toast("Could not remove add-on: \${it.message}") }
+                                }
+                                .setNegativeButton("Cancel", null).show()
                         }
-                    }.setNegativeButton("Cancel",null).show()
+                    }
+                    .setNegativeButton("Cancel", null).show()
             }
-            .setPositiveButton("Add script add-on"){_,_->showAddNovaScriptAddon()}
-            .setNegativeButton("Close",null).show()
+            .setPositiveButton("Add script add-on") { _, _ -> showAddNovaScriptAddon() }
+            .setNegativeButton("Close", null).show()
     }
 
     private fun showAddNovaScriptAddon() {
@@ -5271,10 +5290,12 @@ private fun showQuickSettings() {
                     }
                 }
                 if (flags != 0L) {
+                    // Clear Cefrium immediately; do not make it depend on Gecko's asynchronous
+                    // callback, which may never run on a destroyed Activity instance.
+                    finishCefrium()
                     clearGeckoWebsiteData(flags, activeTabId) { succeeded, message ->
                         if (succeeded) toast("Selected GeckoView website data cleared")
                         else toast("GeckoView data clear failed: ${message ?: "Unknown error"}")
-                        finishCefrium()
                     }
                 } else {
                     finishCefrium()

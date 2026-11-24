@@ -15,7 +15,9 @@ class NovaScriptAddonStore(context:android.content.Context) {
     @Synchronized fun list():List<NovaScriptAddon> {
         if(!index.isFile) return emptyList()
         return runCatching {
-            val rows=JSONArray(index.readText(Charsets.UTF_8))
+            // openRead() restores AtomicFile's backup after an interrupted index replacement.
+            val json = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val rows=JSONArray(json)
             buildList<NovaScriptAddon> {
                 for(i in 0 until rows.length()) {
                     val row=rows.optJSONObject(i)?:continue
@@ -76,16 +78,33 @@ class NovaScriptAddonStore(context:android.content.Context) {
             throw IllegalStateException("Could not save add-on index", error)
         }
     }
-    private fun validOrigin(rule:String):Boolean {
-        if(rule=="*"||rule.contains('@')||rule.contains('?')||rule.contains('#'))return false
-        val wild=rule.startsWith("https://*.")||rule.startsWith("http://*.")
-        val parsed=if(wild)rule.replace("://*.","://wildcard-check.")else rule
-        val u=runCatching{Uri.parse(parsed)}.getOrNull()?:return false
-        val scheme=u.scheme?.lowercase(); val host=u.host?.lowercase().orEmpty()
-        if(scheme!="https"&&!(scheme=="http"&&(host=="localhost"||host=="127.0.0.1")))return false
-        if(host.isBlank()||u.userInfo!=null||(u.path?.let{it.isNotEmpty()&&it!="/"}==true)||u.query!=null||u.fragment!=null)return false
-        if(!wild&&rule.contains('*'))return false
+    private fun validOrigin(rule: String): Boolean {
+        val match = ORIGIN_PATTERN.matchEntire(rule) ?: return false
+        val scheme = match.groupValues[1].lowercase()
+        val wildcard = match.groupValues[2].isNotEmpty()
+        val host = match.groupValues[3]
+        val port = match.groupValues[4]
+        val asciiHost = runCatching { java.net.IDN.toASCII(host).lowercase() }.getOrNull() ?: return false
+        if (asciiHost.length > 253) return false
+        val labels = asciiHost.split('.')
+        if (labels.any { label ->
+                label.isBlank() || label.length > 63 ||
+                    !label.first().isLetterOrDigit() || !label.last().isLetterOrDigit() ||
+                    label.any { !it.isLetterOrDigit() && it != '-' }
+            }) return false
+        val looksIpv4 = asciiHost.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
+        if (looksIpv4 && asciiHost.split('.').any { it.toIntOrNull()?.let { n -> n in 0..255 } != true }) return false
+        if (wildcard && (labels.size < 2 || looksIpv4 || asciiHost == "localhost")) return false
+        if (scheme == "http" && asciiHost != "localhost" && asciiHost != "127.0.0.1") return false
+        if (port.isNotEmpty() && port.toIntOrNull()?.let { it in 1..65535 } != true) return false
         return true
     }
-    private companion object{const val MAX_BYTES=256*1024}
+
+    private companion object {
+        const val MAX_BYTES = 256 * 1024
+        val ORIGIN_PATTERN = Regex(
+            """^(https?)://(\*\.)?([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?$""",
+            RegexOption.IGNORE_CASE
+        )
+    }
 }

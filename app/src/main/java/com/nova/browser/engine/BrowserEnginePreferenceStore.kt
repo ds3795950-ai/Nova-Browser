@@ -15,14 +15,18 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
     }
 
     fun cefriumProfileName(): String {
-        val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_999)
+        preferences.getString(KEY_PROFILE_NAME, null)?.takeIf { it.isNotBlank() }?.let { return it }
+        val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceAtLeast(1)
         return if (generation == 1) BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE else "nova-normal-v$generation"
     }
 
+    /** Persist a never-reused identity before callers delete the previous profile. */
     fun rotateCefriumProfile(): String {
-        val next = (preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_998) + 1)
-        preferences.edit().putInt(KEY_PROFILE_GENERATION, next).apply()
-        return cefriumProfileName()
+        val next = "nova-normal-${java.util.UUID.randomUUID()}"
+        check(preferences.edit().putString(KEY_PROFILE_NAME, next).commit()) {
+            "Could not persist the new Cefrium profile identity"
+        }
+        return next
     }
 
     fun siteAffinity(url: String): BrowserEngineType? = affinity.get(url)
@@ -59,5 +63,6 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
         const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
+        const val KEY_PROFILE_NAME = "cefrium_profile_name"
     }
 }
