@@ -2673,6 +2673,7 @@ class MainActivity : ComponentActivity() {
         if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
         AlertDialog.Builder(this).setTitle("Open second pane")
             .setItems(candidates.map { it.title.ifBlank { it.lastUrl } }.toTypedArray()) { _, which ->
+                if (denyGuestAccess("Split screen")) return@setItems
                 val tab = candidates[which]
                 if (splitTabId != null) exitSplitScreen()
                 enforceCefriumCompatibility(tab)
@@ -5341,13 +5342,18 @@ private fun showQuickSettings() {
 
     private fun clearCefriumProfileDataNow(activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
         val oldProfile = enginePreferences.cefriumProfileName()
+        // Persist the new identity before closing any tabs; a failed commit must leave the
+        // existing profile and all its live tabs untouched.
+        val newProfile = runCatching { enginePreferences.rotateCefriumProfile() }.getOrElse { error ->
+            onFinished(false, "Could not persist a new Cefrium profile. Existing profile data was not deleted: ${error.localizedMessage ?: "storage error"}")
+            return
+        }
         val cefriumTabs = tabs.filter { it.engineType == BrowserEngineType.CEFRIUM && !it.isPrivate && !it.isGuest }
         cefriumTabs.forEach { tab ->
             runCatching { closeTabRuntime(tab) }
             tab.needsReload = tab.lastUrl != HOME_URL
             tab.cefriumNavigationState = null
         }
-        val newProfile = enginePreferences.rotateCefriumProfile()
         val deletion = runCatching { CefriumProfile.delete(oldProfile) }
         val index = tabs.indexOfFirst { it.id == activeTabId }
         if (index >= 0 && tabs[index].engineType == BrowserEngineType.CEFRIUM) switchTab(index)
