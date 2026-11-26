@@ -222,6 +222,7 @@ class MainActivity : ComponentActivity() {
     private var downloadsItems: List<NovaDownloadManager.Item> = emptyList()
     private lateinit var searchEngineButton: Button
     private val tabs = mutableListOf<BrowserTab>()
+    private val pendingRendererPaintResetTabIds = mutableSetOf<String>()
     private var aiPageReaderExtension: WebExtension? = null
     private val aiPageText = mutableMapOf<String, String>()
     private val aiPageUrl = mutableMapOf<String, String>()
@@ -1485,7 +1486,9 @@ class MainActivity : ComponentActivity() {
             handleCefriumRendererTermination(tab, rendererTermination)
             return
         }
-        // Progress reaching 100 is not proof of a successful Cefrium paint; keep the recovery budget.
+        if (!state.isLoading && state.progress >= 100 && state.title.isNotBlank()) {
+            resetRendererRecoveryAfterNextPaint(tab)
+        }
         val previousUrl = tab.lastUrl
         val previousTitle = tab.title
         val stateUrl = state.url.orEmpty()
@@ -1524,6 +1527,36 @@ class MainActivity : ComponentActivity() {
             persistTabs()
         }
         if (!state.isLoading && stateUrl.isNotBlank()) captureTabThumbnail(tab)
+    }
+
+    private fun resetRendererRecoveryAfterNextPaint(tab: BrowserTab) {
+        val view = tab.browserEngine?.view ?: return
+        if (!pendingRendererPaintResetTabIds.add(tab.id)) return
+        val observer = view.viewTreeObserver
+        if (!observer.isAlive) {
+            pendingRendererPaintResetTabIds.remove(tab.id)
+            return
+        }
+        val listener = object : android.view.ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                if (observer.isAlive) observer.removeOnDrawListener(this)
+                view.post {
+                    pendingRendererPaintResetTabIds.remove(tab.id)
+                    if (!isFinishing && !isDestroyed && tab.browserEngine?.view === view) {
+                        tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.resetAfterSuccessfulPaint()
+                    }
+                }
+            }
+        }
+        observer.addOnDrawListener(listener)
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = v.removeOnAttachStateChangeListener(this)
+            override fun onViewDetachedFromWindow(v: View) {
+                if (observer.isAlive) observer.removeOnDrawListener(listener)
+                pendingRendererPaintResetTabIds.remove(tab.id)
+                v.removeOnAttachStateChangeListener(this)
+            }
+        })
     }
 
     private fun engineSelectionForTab(tab: BrowserTab, url: String = tab.lastUrl): com.nova.browser.engine.EngineSelection {
@@ -1696,6 +1729,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun closeTabRuntime(tab: BrowserTab) {
+        pendingRendererPaintResetTabIds.remove(tab.id)
         aiPageText.remove(tab.id)
         aiPageUrl.remove(tab.id)
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
