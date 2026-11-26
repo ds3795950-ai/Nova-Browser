@@ -232,6 +232,9 @@ class CefriumBrowserEngine(
                     if (allowed) request.grant() else request.deny()
                 }
             }
+            override fun onPermissionRequestCanceled(browser: CefriumBrowser, request: CefriumPermissionRequest) {
+                this@CefriumBrowserEngine.onPermissionRequestCanceled.invoke()
+            }
         })
     }
 
@@ -254,12 +257,14 @@ class CefriumBrowserEngine(
         browser.setAudioMuted(muted)
     }
 
-    fun setNovaScriptAddons(addons: List<NovaScriptAddon>) {
+    fun setNovaScriptAddons(addons: List<NovaScriptAddon>): List<String> {
         checkOpen()
         novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
         novaAddonScriptHandlers.clear()
+        val failures = mutableListOf<String>()
         addons.filter { it.enabled }.forEach { addon ->
             if (addon.allowedOriginRules.isEmpty()) {
+                failures += addon.id
                 android.util.Log.w("NovaBrowser", "Skipping add-on ${addon.id}: empty origin allowlist")
                 return@forEach
             }
@@ -282,9 +287,11 @@ class CefriumBrowserEngine(
             }.onSuccess { handler ->
                 novaAddonScriptHandlers[addon.id] = handler
             }.onFailure { error ->
+                failures += addon.id
                 android.util.Log.w("NovaBrowser", "Could not register Nova add-on ${addon.id}", error)
             }
         }
+        return failures.distinct()
     }
     /** Persist a per-origin website permission decision in this Cefrium profile. */
     fun setSitePermission(origin: String, permission: String, decision: String) {

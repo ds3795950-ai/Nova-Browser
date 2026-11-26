@@ -6063,7 +6063,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
             }
             val local = buildSyncSnapshot()
             val localVault = passwordVault.exportSyncBundle()
-            val remote = cloudSync.downloadEncrypted()
+            val remote = cloudSync.downloadEncrypted(userId)
             check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
             val remoteSnapshot = remote.snapshot
             val remoteVault = remote.encryptedVaultPayloads.fold(JSONObject()) { mergedRemote, payload ->
@@ -6080,7 +6080,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
             // deletions or partial merges to the device's existing vault.
             passwordVault.validateSyncBundle(mergedVault)
             check(isCloudSyncCurrent(operationGeneration)) { "Cloud sync was cancelled because you signed out" }
-            cloudSync.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase),
+            cloudSync.uploadEncrypted(userId, CloudCrypto.encrypt(merged.toString(), passphrase),
                 CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             // The worker clears its input array in finally. Keep a separate copy for the UI
             // completion, which may execute after the worker has already returned.

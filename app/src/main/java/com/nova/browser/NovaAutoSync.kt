@@ -119,7 +119,7 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             val localSnapshot = NovaSyncSnapshotRepository.build(applicationContext)
             val vault = PasswordVault.shared(applicationContext)
             val localVault = vault.exportSyncBundle()
-            val remote = cloud.downloadEncrypted()
+            val remote = cloud.downloadEncrypted(userId)
             val remoteSnapshot = remote.snapshot
             val remoteVault = remote.encryptedVaultPayloads.fold(JSONObject()) { mergedRemote, payload ->
                 PasswordVault.mergeSyncBundles(
@@ -133,7 +133,7 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             // Validate the exact union before uploading or mutating either local collection.
             NovaSyncSnapshotRepository.validate(merged)
             vault.validateSyncBundle(mergedVault)
-            cloud.uploadEncrypted(CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
+            cloud.uploadEncrypted(userId, CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             val applyResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
             val applyLatch = java.util.concurrent.CountDownLatch(1)
             android.os.Handler(android.os.Looper.getMainLooper()).post {

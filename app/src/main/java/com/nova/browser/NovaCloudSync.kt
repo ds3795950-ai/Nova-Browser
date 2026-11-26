@@ -228,9 +228,10 @@ class NovaCloudSync(context: Context) {
         vaultUpdatedAt = null
     }
 
-    internal fun downloadEncrypted(): NovaCloudDownload {
+    internal fun downloadEncrypted(expectedUserId: String): NovaCloudDownload {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
+        check(userId == expectedUserId) { "Nova Cloud account changed during sync" }
         val token = session.getString("access_token")
         val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
         // Always read the legacy vault row as well. Older clients update it independently,
@@ -248,9 +249,10 @@ class NovaCloudSync(context: Context) {
         return NovaCloudDownload(unpacked.first, payloads)
     }
 
-    fun uploadEncrypted(snapshot: JSONObject, vault: JSONObject) {
+    fun uploadEncrypted(expectedUserId: String, snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
+        check(userId == expectedUserId) { "Nova Cloud account changed during sync" }
         val token = session.getString("access_token")
         // Keep independent CAS revisions until every legacy client is retired. A legacy
         // vault write after download must make the vault PATCH fail rather than be overwritten.

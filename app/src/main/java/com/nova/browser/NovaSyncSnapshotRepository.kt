@@ -168,7 +168,7 @@ internal object NovaSyncSnapshotRepository {
                 val clearedAt = profile.optLong("history_cleared_at", 0L)
                 val history = profile.optJSONArray("history") ?: JSONArray()
                 val safeHistory = (0 until history.length()).mapNotNull { history.optJSONObject(it) }
-                    .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && it.optLong("visitedAt") > clearedAt }
+                    .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && (clearedAt <= 0L || it.optLong("visitedAt") > clearedAt) }
                     .sortedByDescending { it.optLong("visitedAt") }.take(500)
                 val historyArray = JSONArray().also { array -> safeHistory.forEach(array::put) }
                 val workspaceEntries = linkedSetOf<String>()
@@ -208,7 +208,7 @@ internal object NovaSyncSnapshotRepository {
             val clearedAt = global.optLong("history_cleared_at", 0L)
             val history = global.optJSONArray("history") ?: JSONArray()
             val safeHistory = (0 until history.length()).mapNotNull { history.optJSONObject(it) }
-                .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && it.optLong("visitedAt") > clearedAt }
+                .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && (clearedAt <= 0L || it.optLong("visitedAt") > clearedAt) }
                 .sortedByDescending { it.optLong("visitedAt") }.take(500)
             val workspaceEntries = linkedSetOf<String>()
             val workspaces = global.optJSONArray("workspaces") ?: JSONArray()

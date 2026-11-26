@@ -68,11 +68,17 @@ class NovaScriptAddonStore(context:android.content.Context) {
         val rows=JSONArray()
         items.forEach{rows.put(JSONObject().put("id",it.id).put("name",it.name).put("enabled",it.enabled).put("origins",JSONArray(it.allowedOriginRules.toList().sorted())))}
         val atomic = AtomicFile(index)
+        val expected = rows.toString()
         var output: java.io.FileOutputStream? = null
         try {
             output = atomic.startWrite()
-            output.write(rows.toString().toByteArray(Charsets.UTF_8))
+            output.write(expected.toByteArray(Charsets.UTF_8))
             atomic.finishWrite(output)
+            output = null
+            // finishWrite logs rename failures on some Android versions instead of throwing.
+            // Read through AtomicFile so its backup recovery is honored, then verify the commit.
+            val committed = atomic.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+            check(committed == expected) { "Add-on index replacement did not commit" }
         } catch (error: Exception) {
             output?.let(atomic::failWrite)
             throw IllegalStateException("Could not save add-on index", error)
