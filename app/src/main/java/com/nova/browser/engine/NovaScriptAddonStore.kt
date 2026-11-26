@@ -7,13 +7,47 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-data class NovaScriptAddon(val id:String,val name:String,val allowedOriginRules:Set<String>,val script:String,val enabled:Boolean)
+data class NovaScriptAddon(
+    val id: String,
+    val name: String,
+    val allowedOriginRules: Set<String>,
+    val script: String,
+    val enabled: Boolean,
+    val damaged: Boolean = false
+)
 
 /** Local-only script add-ons for Normal Cefrium tabs. No GeckoView or cloud-sync integration. */
 class NovaScriptAddonStore(context:android.content.Context) {
     private val root=File(context.filesDir,"nova_cefrium_addons").apply { mkdirs() }
     private val index=File(root,"index.json")
-    @Synchronized fun list():List<NovaScriptAddon> = runCatching { readIndexStrict() }.getOrDefault(emptyList())
+    @Synchronized fun list(): List<NovaScriptAddon> = runCatching { readIndexLenient() }.getOrDefault(emptyList())
+
+    private fun readIndexLenient(): List<NovaScriptAddon> {
+        if (!index.exists()) return emptyList()
+        val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { JSONArray(it.readText()) }
+        return buildList {
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: continue
+                val id = row.optString("id")
+                if (!id.matches(Regex("[a-f0-9-]{36}"))) continue
+                val file = File(root, "$id.js")
+                val origins = row.optJSONArray("origins")
+                val rules = if (origins == null) emptySet() else
+                    (0 until origins.length()).map { origins.optString(it) }.filter { validOrigin(it) }.toSet()
+                val validScript = file.isFile && file.length() in 1..MAX_BYTES.toLong()
+                val script = if (validScript) runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("") else ""
+                val damaged = !validScript || rules.isEmpty() || script.isBlank()
+                add(NovaScriptAddon(
+                    id,
+                    row.optString("name").take(64).ifBlank { "Nova Script Add-on" },
+                    rules,
+                    script,
+                    row.optBoolean("enabled", false) && !damaged,
+                    damaged
+                ))
+            }
+        }
+    }
 
     /** Mutations must not replace a corrupt index with an incomplete, empty list. */
     private fun readIndexStrict(): List<NovaScriptAddon> {
@@ -34,7 +68,21 @@ class NovaScriptAddonStore(context:android.content.Context) {
             }
         }
     }
-    fun enabled()=list().filter{it.enabled}
+    fun enabled() = list().filter { it.enabled && !it.damaged }
+
+    @Synchronized fun removeDamaged(id: String) {
+        require(id.matches(Regex("[a-f0-9-]{36}"))) { "Invalid add-on ID" }
+        val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { JSONArray(it.readText()) }
+        val remaining = JSONArray()
+        var found = false
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: throw IllegalStateException("Add-on index contains an invalid entry")
+            if (row.optString("id") == id) found = true else remaining.put(row)
+        }
+        check(found) { "Add-on not found" }
+        writeIndexRows(remaining)
+        File(root, "$id.js").delete()
+    }
     @Synchronized fun add(name:String, originsText:String, script:String):NovaScriptAddon {
         val clean=name.trim().take(64)
         require(clean.isNotBlank()){"Enter an add-on name"}
@@ -65,9 +113,16 @@ class NovaScriptAddonStore(context:android.content.Context) {
         writeIndex(items.filterNot{it.id==id})
         File(root,"$id.js").delete()
     }
-    private fun writeIndex(items:List<NovaScriptAddon>) {
-        val rows=JSONArray()
-        items.forEach{rows.put(JSONObject().put("id",it.id).put("name",it.name).put("enabled",it.enabled).put("origins",JSONArray(it.allowedOriginRules.toList().sorted())))}
+    private fun writeIndex(items: List<NovaScriptAddon>) {
+        val rows = JSONArray()
+        items.forEach {
+            rows.put(JSONObject().put("id", it.id).put("name", it.name).put("enabled", it.enabled)
+                .put("origins", JSONArray(it.allowedOriginRules.toList().sorted())))
+        }
+        writeIndexRows(rows)
+    }
+
+    private fun writeIndexRows(rows: JSONArray) {
         val atomic = AtomicFile(index)
         val expected = rows.toString()
         var output: java.io.FileOutputStream? = null

@@ -201,9 +201,9 @@ class UrlInputTest {
         assertEquals("https://www.google.com/search?q=example.0x10", BrowserUrlResolver.resolve("example.0x10"))
     }
 
-    @Test fun octalAndBinaryIpv4CandidatesFallBackToSearch() {
-        assertEquals("https://www.google.com/search?q=example.0o10", BrowserUrlResolver.resolve("example.0o10"))
-        assertEquals("https://www.google.com/search?q=example.0b10", BrowserUrlResolver.resolve("example.0b10"))
+    @Test fun octalAndBinaryLookingDnsLabelsAreNavigated() {
+        assertEquals("https://example.0o10", BrowserUrlResolver.resolve("example.0o10"))
+        assertEquals("https://example.0b10", BrowserUrlResolver.resolve("example.0b10"))
     }
 
     @Test fun scopedIpv6LiteralFallsBackToSearch() {

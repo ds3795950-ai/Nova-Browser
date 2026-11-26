@@ -339,16 +339,14 @@ class CefriumBrowserEngine(
 
     override fun goBack() {
         checkOpen()
-        if (currentState.canGoBack) {
-            applyHistoryDestinationSettings(-1)
+        if (currentState.canGoBack && !applyHistoryDestinationSettings(-1)) {
             browser.goBack()
         }
     }
 
     override fun goForward() {
         checkOpen()
-        if (currentState.canGoForward) {
-            applyHistoryDestinationSettings(1)
+        if (currentState.canGoForward && !applyHistoryDestinationSettings(1)) {
             browser.goForward()
         }
     }
@@ -465,13 +463,26 @@ class CefriumBrowserEngine(
         browser.close()
     }
 
-    private fun applyHistoryDestinationSettings(offset: Int) {
+    private fun applyHistoryDestinationSettings(offset: Int): Boolean {
         val entries = runCatching { browser.getNavigationEntries() }.getOrNull().orEmpty()
         val currentIndex = entries.indexOfFirst { it.current }
-        if (currentIndex < 0) return
-        val destinationUrl = entries.getOrNull(currentIndex + offset)?.url ?: return
+        if (currentIndex < 0) return false
+        val destination = entries.getOrNull(currentIndex + offset) ?: return false
+        val destinationUrl = destination.url ?: return false
+        // Only hand history entries to another engine when their method is explicitly GET.
+        // Unknown methods and POST entries stay in Cefrium so submitted data is never replayed as GET.
+        val method = navigationEntryMethod(destination)
+        if (method == "GET" && onEngineRoutingRequired(destinationUrl, method)) return true
         applySiteSettingsForUrl(destinationUrl)
+        return false
     }
+
+    private fun navigationEntryMethod(entry: Any): String? = runCatching {
+        val getter = entry.javaClass.methods.firstOrNull {
+            it.parameterCount == 0 && it.name in setOf("getMethod", "getHttpMethod", "getRequestMethod")
+        }
+        (getter?.invoke(entry) as? String)?.uppercase()
+    }.getOrNull()
 
     private fun applySiteSettingsForUrl(url: String) {
         if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return
@@ -512,14 +523,21 @@ class CefriumBrowserEngine(
             (() => {
               if (window.top !== window || /Android|Mobile|iPhone|iPad/i.test(navigator.userAgent)) return;
               const apply = () => {
-                document.querySelectorAll('meta[name="viewport"]').forEach(node => node.remove());
-                if (document.head && !document.querySelector('meta[name="viewport"][data-nova-desktop]')) {
-                  const meta = document.createElement('meta');
-                  meta.name = 'viewport';
-                  meta.content = 'width=1280';
-                  meta.setAttribute('data-nova-desktop', 'true');
-                  document.head.appendChild(meta);
+                const head = document.head;
+                if (!head) return;
+                const desired = document.querySelector('meta[name="viewport"][data-nova-desktop]');
+                const viewports = Array.from(document.querySelectorAll('meta[name="viewport"]'));
+                if (desired && desired.content === 'width=1280' && viewports.length === 1) return;
+                viewports.forEach(node => { if (node !== desired) node.remove(); });
+                if (desired) {
+                  desired.content = 'width=1280';
+                  return;
                 }
+                const meta = document.createElement('meta');
+                meta.name = 'viewport';
+                meta.content = 'width=1280';
+                meta.setAttribute('data-nova-desktop', 'true');
+                head.appendChild(meta);
               };
               new MutationObserver(apply).observe(document, { childList: true, subtree: true });
               apply();

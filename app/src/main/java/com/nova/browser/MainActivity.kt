@@ -118,10 +118,17 @@ class MainActivity : ComponentActivity() {
         super.attachBaseContext(NovaThemeManager.wrapBaseContext(newBase))
     }
 
+    private data class PendingCefriumAndroidPermission(
+        val tabId: String,
+        val permissions: Array<String>,
+        val complete: (Boolean) -> Unit,
+        var cancelled: Boolean = false
+    )
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var cefriumPermissionLauncher: ActivityResultLauncher<Array<String>>
-    private var pendingCefriumPermissionDecision: ((Boolean) -> Unit)? = null
-    private var pendingCefriumPermissionDialog: AlertDialog? = null
+    private val pendingCefriumAndroidPermissions = java.util.ArrayDeque<PendingCefriumAndroidPermission>()
+    private var activeCefriumAndroidPermission: PendingCefriumAndroidPermission? = null
+    private val cefriumPermissionCancelActions = mutableMapOf<String, MutableSet<() -> Unit>>()
     private lateinit var enginePreferences: BrowserEnginePreferenceStore
     private var activePrimaryEngineView: View? = null
     private var activeSecondaryEngineView: View? = null
@@ -272,14 +279,19 @@ class MainActivity : ComponentActivity() {
             if (!granted) toast("Downloads still work, but Android may hide their notifications until permission is enabled")
         }
         cefriumPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-            val decision = pendingCefriumPermissionDecision
-            pendingCefriumPermissionDecision = null
-            val coarse = Manifest.permission.ACCESS_COARSE_LOCATION
-            val fine = Manifest.permission.ACCESS_FINE_LOCATION
-            val locationRequested = results.containsKey(coarse) || results.containsKey(fine)
-            val locationGranted = !locationRequested || results[coarse] == true || results[fine] == true
-            val unrelatedPermissionsGranted = results.filterKeys { it != coarse && it != fine }.values.all { it }
-            decision?.invoke(results.isNotEmpty() && locationGranted && unrelatedPermissionsGranted)
+            val request = activeCefriumAndroidPermission
+            activeCefriumAndroidPermission = null
+            if (request != null) {
+                val coarse = Manifest.permission.ACCESS_COARSE_LOCATION
+                val fine = Manifest.permission.ACCESS_FINE_LOCATION
+                val locationRequested = results.containsKey(coarse) || results.containsKey(fine)
+                val locationGranted = !locationRequested || results[coarse] == true || results[fine] == true ||
+                    checkSelfPermission(coarse) == PackageManager.PERMISSION_GRANTED ||
+                    checkSelfPermission(fine) == PackageManager.PERMISSION_GRANTED
+                val unrelatedPermissionsGranted = results.filterKeys { it != coarse && it != fine }.values.all { it }
+                request.complete(!request.cancelled && results.isNotEmpty() && locationGranted && unrelatedPermissionsGranted)
+            }
+            launchNextCefriumAndroidPermission()
         }
         enginePreferences = BrowserEnginePreferenceStore(prefs)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -358,6 +370,7 @@ class MainActivity : ComponentActivity() {
         } else {
             val previousGuestContext = prefs.getString("guest_context_id", null)
             if (prefs.getBoolean("guest_context_used", false)) queueGuestContextCleanup(previousGuestContext)
+            else queueGuestContextCleanup(null) // Retry cleanup IDs retained from earlier launches.
             guestContextId = "nova-guest-${UUID.randomUUID()}"
             prefs.edit().putString("guest_context_id", guestContextId).putBoolean("guest_context_used", false).commit()
         }
@@ -457,7 +470,7 @@ class MainActivity : ComponentActivity() {
         browserPane.orientation = if (sideBySide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
         if (secondaryPane.visibility == View.VISIBLE && fold?.isSeparating == true &&
             (browserPane.width <= 0 || browserPane.height <= 0)) {
-            browserPane.post { if (!isFinishing && !isDestroyed) applyFoldAwareLayout(fold) }
+            browserPane.post { if (!isFinishing && !isDestroyed) applyFoldAwareLayout(separatingFold) }
             return
         }
         val geometry = foldPaneGeometry()
@@ -502,9 +515,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enginePaneLayoutParams(pane: LinearLayout): LinearLayout.LayoutParams {
-        if (::secondaryPane.isInitialized && pane === secondaryPane) {
-            return LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        }
         if (pane === browserPane) {
             if (!::secondaryPane.isInitialized || secondaryPane.visibility != View.VISIBLE) {
                 return LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -707,7 +717,7 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         applyFoldAwareLayout(separatingFold)
         root.applySystemBarPadding()
-        window.useLightSystemBarIcons()
+        if (NovaThemeManager.isDark(this)) window.useLightSystemBarIcons() else window.useDarkSystemBarIcons()
         root.requestFocus()
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED)
     }
@@ -1118,8 +1128,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
-        if (!isPrivate && !isGuest && pendingGeckoDataClearActive) {
-            toast("Wait for browsing-data deletion to finish before opening a Normal tab")
+        if (pendingGeckoDataClearActive) {
+            toast("Wait for GeckoView data deletion to finish before opening another tab")
             return
         }
         if (isGuest && splitTabId != null) exitSplitScreen()
@@ -1157,7 +1167,12 @@ class MainActivity : ComponentActivity() {
                     if (!isChangingConfigurations) TorGuestRoutingController.stop()
                     return@start
                 }
-                prefs.edit().putBoolean("guest_context_used", true).commit()
+                if (!prefs.edit().putBoolean("guest_context_used", true).commit()) {
+                    TorGuestRoutingController.stop()
+                    pageStatus.text = "Guest Mode unavailable · could not save cleanup state"
+                    toast("Guest Mode could not start safely because its cleanup marker could not be saved")
+                    return@start
+                }
                 runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
                     .onSuccess { toast("Guest Mode started · Tor routing active") }
                     .onFailure {
@@ -1187,7 +1202,7 @@ class MainActivity : ComponentActivity() {
     private fun tabKey(session: GeckoSession): String = tabs.firstOrNull { it.session === session }?.id ?: ""
 
     private fun ensureSession(tab: BrowserTab): GeckoSession {
-        check(tab.isPrivate || tab.isGuest || (!pendingGeckoDataClearActive && tab.id !in pendingGeckoDataClearTabIds)) {
+        check(!pendingGeckoDataClearActive && tab.id !in pendingGeckoDataClearTabIds) {
             "Browsing-data deletion is still running for this tab"
         }
         tab.session?.let { existing ->
@@ -1253,7 +1268,7 @@ class MainActivity : ComponentActivity() {
             onHttpAuthRequest = { host, realm, isProxy, respond -> showCefriumHttpAuthPrompt(host, realm, isProxy, respond) },
             onContextMenu = { menu -> showCefriumContextMenu(tab, menu) },
             onBeforeUnloadDialog = { message, isReload, answer -> showCefriumBeforeUnloadPrompt(message, isReload, answer) },
-            onPermissionRequestCanceled = { cancelCefriumPermissionPrompt() },
+            onPermissionRequestCanceled = { runOnUiThread { cancelCefriumPermissionPrompt(tab.id) } },
             desktopMode = tab.desktopSite,
             existingBrowser = existingBrowser,
             javaScriptEnabledForUrl = { url -> isJavaScriptAllowed(BrowserEngineType.CEFRIUM, url) },
@@ -1262,7 +1277,7 @@ class MainActivity : ComponentActivity() {
             soundAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "sound", true) },
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread {
-                    if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(origin, permissions.toSet(), respond)
+                    if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(tab.id, origin, permissions.toSet(), respond)
                     else respond(false)
                 }
             }
@@ -1369,11 +1384,40 @@ class MainActivity : ComponentActivity() {
         registerPromptDialog(dialog) { finish(false) }
     }
 
-    private fun cancelCefriumPermissionPrompt() {
-        pendingCefriumPermissionDialog?.dismiss()
-        pendingCefriumPermissionDialog = null
-        pendingCefriumPermissionDecision?.invoke(false)
-        pendingCefriumPermissionDecision = null
+    private fun cancelCefriumPermissionPrompt(tabId: String) {
+        cefriumPermissionCancelActions.remove(tabId)?.toList()?.forEach { cancel -> cancel() }
+        val queued = pendingCefriumAndroidPermissions.iterator()
+        while (queued.hasNext()) {
+            val request = queued.next()
+            if (request.tabId == tabId) {
+                queued.remove()
+                request.cancelled = true
+                request.complete(false)
+            }
+        }
+        activeCefriumAndroidPermission?.takeIf { it.tabId == tabId }?.let { request ->
+            request.cancelled = true
+            request.complete(false)
+            // Keep the active slot until Android returns its result so it cannot be
+            // consumed by a different site's request.
+        }
+    }
+
+    private fun launchNextCefriumAndroidPermission() {
+        if (activeCefriumAndroidPermission != null || !::cefriumPermissionLauncher.isInitialized) return
+        while (pendingCefriumAndroidPermissions.isNotEmpty()) {
+            val request = pendingCefriumAndroidPermissions.removeFirst()
+            if (request.cancelled) continue
+            activeCefriumAndroidPermission = request
+            try {
+                cefriumPermissionLauncher.launch(request.permissions)
+            } catch (_: Exception) {
+                activeCefriumAndroidPermission = null
+                request.complete(false)
+                continue
+            }
+            return
+        }
     }
 
     private fun showCefriumHttpAuthPrompt(
@@ -1434,14 +1478,14 @@ class MainActivity : ComponentActivity() {
 
     private fun applyCefriumState(tab: BrowserTab, state: BrowserEngineState) {
         if (isDestroyed || tabs.none { it.id == tab.id }) return
-        val rendererTermination = state.error?.takeIf { it.startsWith("Cefrium renderer terminated:") }
+        val rendererTermination = state.error?.takeIf {
+            it.startsWith("Cefrium renderer stopped (") || it.startsWith("Cefrium renderer terminated:")
+        }
         if (rendererTermination != null) {
             handleCefriumRendererTermination(tab, rendererTermination)
             return
         }
-        if (!state.isLoading && state.progress >= 100) {
-            tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.resetAfterSuccessfulPaint()
-        }
+        // Progress reaching 100 is not proof of a successful Cefrium paint; keep the recovery budget.
         val previousUrl = tab.lastUrl
         val previousTitle = tab.title
         val stateUrl = state.url.orEmpty()
@@ -1550,6 +1594,10 @@ class MainActivity : ComponentActivity() {
     private fun routeCefriumNavigation(tab: BrowserTab, destination: String, method: String = "GET"): Boolean {
         val selection = engineSelectionForTab(tab, destination)
         if (selection.engine == BrowserEngineType.CEFRIUM) return false
+        if (pendingGeckoDataClearActive && !tab.isPrivate && !tab.isGuest) {
+            toast("Wait for GeckoView data deletion to finish before opening this destination")
+            return true
+        }
         if (!method.equals("GET", ignoreCase = true)) {
             toast("This form cannot be transferred to the other browser engine without losing its submitted data. It was blocked.")
             return true
@@ -1680,8 +1728,12 @@ class MainActivity : ComponentActivity() {
         secondaryBrowserView.visibility = if (engineView === secondaryBrowserView) View.VISIBLE else View.GONE
     }
 
-    private fun selectEngineForNavigation(tab: BrowserTab, url: String) {
+    private fun selectEngineForNavigation(tab: BrowserTab, url: String): Boolean {
         val desired = resolveEngineForTab(tab, url)
+        if (pendingGeckoDataClearActive && desired == BrowserEngineType.GECKOVIEW && !tab.isPrivate && !tab.isGuest) {
+            toast("Wait for GeckoView data deletion to finish before navigating this tab")
+            return false
+        }
         if (desired != tab.engineType) {
             closeTabRuntime(tab)
             if (desired == BrowserEngineType.CEFRIUM && tab.engineType != BrowserEngineType.CEFRIUM) tab.cefriumNavigationState = null
@@ -1689,6 +1741,7 @@ class MainActivity : ComponentActivity() {
             tab.needsReload = false
             if (currentTab() === tab) refreshDownloadsList(if (tab.isPrivate || tab.isGuest) emptyList() else downloadsFor(tab).items())
         }
+        return true
     }
 
     private fun loadTabUrl(tab: BrowserTab, url: String) {
@@ -1700,7 +1753,7 @@ class MainActivity : ComponentActivity() {
             if (currentTab() === tab) showHomeScreen()
             return
         }
-        selectEngineForNavigation(tab, url)
+        if (!selectEngineForNavigation(tab, url)) return
         val engine = ensureBrowserEngine(tab)
         applyJavaScriptSetting(tab, url, reload = false)
         if (currentTab() === tab) {
@@ -2030,10 +2083,24 @@ class MainActivity : ComponentActivity() {
             }.setNegativeButton(getString(R.string.close), null).show()
     }
 
-    private fun showCefriumPermissionPrompt(origin: String, permissions: Set<String>, respond: (Boolean) -> Unit) {
+    private fun showCefriumPermissionPrompt(tabId: String, origin: String, permissions: Set<String>, respond: (Boolean) -> Unit) {
         val normalized = CefriumSitePermissionPolicy.normalize(origin, permissions)
         if (normalized == null) { respond(false); return }
-        cancelCefriumPermissionPrompt()
+        var completed = false
+        var handedToAndroid = false
+        lateinit var cancelAction: () -> Unit
+        fun finish(granted: Boolean) {
+            if (!completed) {
+                completed = true
+                cefriumPermissionCancelActions[tabId]?.let { actions ->
+                    actions.remove(cancelAction)
+                    if (actions.isEmpty()) cefriumPermissionCancelActions.remove(tabId)
+                }
+                respond(granted)
+            }
+        }
+        cancelAction = { finish(false) }
+        cefriumPermissionCancelActions.getOrPut(tabId) { linkedSetOf() }.add(cancelAction)
         val labels = normalized.map { it.lowercase().replace('_', ' ') }
         val runtimePermissions = buildList {
             if ("CAMERA" in normalized) add(Manifest.permission.CAMERA)
@@ -2045,19 +2112,16 @@ class MainActivity : ComponentActivity() {
             if ("NOTIFICATIONS" in normalized && Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }
         val decisions = normalized.map { cefriumPermissionDecision(origin, it) }
-        if (decisions.any { it == "BLOCK" }) { respond(false); return }
+        if (decisions.any { it == "BLOCK" }) { finish(false); return }
         val mustAskInNova = decisions.any { it == "ASK" }
-        var completed = false
-        var handedToAndroid = false
-        fun finish(granted: Boolean) {
-            if (!completed) { completed = true; respond(granted) }
-        }
         fun requestAndroidPermissions() {
             val missing = runtimePermissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
             if (missing.isEmpty()) finish(true) else {
                 handedToAndroid = true
-                pendingCefriumPermissionDecision = { granted -> finish(granted) }
-                cefriumPermissionLauncher.launch(missing.toTypedArray())
+                pendingCefriumAndroidPermissions.addLast(
+                    PendingCefriumAndroidPermission(tabId, missing.toTypedArray()) { granted -> finish(granted) }
+                )
+                launchNextCefriumAndroidPermission()
             }
         }
         if (!mustAskInNova) {
@@ -3096,7 +3160,7 @@ class MainActivity : ComponentActivity() {
 
 
     private fun loadSecondaryTabUrl(tab: BrowserTab, url: String) {
-        selectEngineForNavigation(tab, url)
+        if (!selectEngineForNavigation(tab, url)) return
         val engine = ensureBrowserEngine(tab)
         if (engine.type == BrowserEngineType.GECKOVIEW) engine.attachTo(secondaryBrowserView)
         showSecondaryEngineView(engine.view)
@@ -3269,16 +3333,14 @@ class MainActivity : ComponentActivity() {
     private fun captureTabThumbnail(tab: BrowserTab) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val engineView = tab.browserEngine?.view ?: return
-        val sourcePane = when {
-            currentTab()?.id == tab.id && engineView.parent === browserPane -> browserPane
-            splitTabId == tab.id && engineView.parent === secondaryPane -> secondaryPane
-            else -> return // Never attach the visible tab's pixels to a background tab card.
-        }
-        val width = sourcePane.width
-        val height = sourcePane.height
+        val isPrimaryView = currentTab()?.id == tab.id && engineView.parent === browserPane
+        val isSecondaryView = splitTabId == tab.id && engineView.parent === secondaryPane
+        if (!isPrimaryView && !isSecondaryView) return // Never attach the visible tab's pixels to a background tab card.
+        val width = engineView.width
+        val height = engineView.height
         if (width <= 0 || height <= 0) return
         val location = IntArray(2)
-        sourcePane.getLocationInWindow(location)
+        engineView.getLocationInWindow(location)
         val sourceRect = android.graphics.Rect(location[0], location[1], location[0] + width, location[1] + height)
         val scale = minOf(1f, 360f / width, 640f / height)
         val previewWidth = (width * scale).toInt().coerceAtLeast(1)
@@ -3352,9 +3414,22 @@ class MainActivity : ComponentActivity() {
                     val urlText = TextView(this).apply { text = tab.lastUrl; textSize = 10f; setTextColor(getColor(R.color.nova_text_secondary)); maxLines = 2; setPadding(0, dp(5), 0, dp(5)) }
                     card.addView(preview, LinearLayout.LayoutParams(-1, dp(76)))
                     card.addView(headingText); card.addView(urlText)
-                    card.addView(actionButton("Open") { tabDialog?.dismiss(); switchTab(index) })
-                    card.addView(actionButton("Group / rename") { tabDialog?.dismiss(); editTabGroup(index) })
-                    card.addView(actionButton("Close") { tabDialog?.dismiss(); closeTabAt(index) })
+                    val tabId = tab.id
+                    card.addView(actionButton("Open") {
+                        val currentIndex = tabs.indexOfFirst { it.id == tabId }
+                        tabDialog?.dismiss()
+                        if (currentIndex >= 0) switchTab(currentIndex) else showTabs()
+                    })
+                    card.addView(actionButton("Group / rename") {
+                        val currentIndex = tabs.indexOfFirst { it.id == tabId }
+                        tabDialog?.dismiss()
+                        if (currentIndex >= 0) editTabGroup(currentIndex) else showTabs()
+                    })
+                    card.addView(actionButton("Close") {
+                        val currentIndex = tabs.indexOfFirst { it.id == tabId }
+                        tabDialog?.dismiss()
+                        if (currentIndex >= 0) closeTabAt(currentIndex) else showTabs()
+                    })
                     grid.addView(card, GridLayout.LayoutParams().apply { width = 0; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); setMargins(dp(5), dp(5), dp(5), dp(5)) })
                 }
             }
@@ -4564,13 +4639,25 @@ class MainActivity : ComponentActivity() {
 
     private fun showCefriumNovaAddons() {
         val addons=novaScriptAddonStore.list()
-        val rows=addons.map { "${it.name} · ${if(it.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
+        val rows = addons.map {
+            "${it.name} · ${when { it.damaged -> "Needs repair"; it.enabled -> "Enabled"; else -> "Disabled" }}"
+        }.toTypedArray()
         AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
             text = "Nova Add-ons · ${addons.size}\n\nNova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView."
             setPadding(dp(24), dp(16), dp(24), dp(8))
             textSize = 14f
         }).setItems(rows) { _,which ->
-                val addon=addons[which]
+                val addon = addons[which]
+                if (addon.damaged) {
+                    AlertDialog.Builder(this).setTitle("Damaged Nova Add-on")
+                        .setMessage("Its script file or allowed-origin rules are missing or invalid. Remove this broken entry, then reinstall the script.")
+                        .setPositiveButton("Remove entry") { _, _ ->
+                            runCatching { novaScriptAddonStore.removeDamaged(addon.id) }
+                                .onSuccess { showCefriumNovaAddons(); toast("Damaged add-on entry removed") }
+                                .onFailure { toast("Could not remove damaged entry: ${it.message}") }
+                        }.setNegativeButton("Cancel", null).show()
+                    return@setItems
+                }
                 val actions=if(addon.enabled)arrayOf("Disable","Remove")else arrayOf("Enable","Remove")
                 AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
                     text = "${addon.name}\n\nAllowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}"
@@ -4622,6 +4709,7 @@ class MainActivity : ComponentActivity() {
             val engine = tab.browserEngine as? CefriumBrowserEngine ?: return@forEach
             val registrationFailures = runCatching { engine.setNovaScriptAddons(active) }
                 .getOrElse { error ->
+                    failed.add("tab:${tab.id}")
                     failed.addAll(active.map { it.id })
                     android.util.Log.w("NovaBrowser", "Could not refresh Nova add-ons for tab ${tab.id}", error)
                     return@forEach
@@ -4814,9 +4902,14 @@ class MainActivity : ComponentActivity() {
         return "javascript_enabled_${engine.name.lowercase()}_${Uri.encode(origin)}"
     }
 
+    private fun defaultJavaScriptPreferenceKey(engine: BrowserEngineType): String =
+        "site_default_${engine.name.lowercase()}_javascript"
+
     private fun isJavaScriptAllowed(engine: BrowserEngineType, url: String): Boolean {
         val key = javaScriptPreferenceKey(engine, url) ?: return true
-        return prefs.getBoolean(key, prefs.getBoolean("site_default_javascript_${engine.name.lowercase()}", true))
+        val canonicalDefault = defaultJavaScriptPreferenceKey(engine)
+        val legacyDefault = "site_default_javascript_${engine.name.lowercase()}"
+        return prefs.getBoolean(key, prefs.getBoolean(canonicalDefault, prefs.getBoolean(legacyDefault, true)))
     }
 
     private fun applyJavaScriptSetting(tab: BrowserTab, url: String, reload: Boolean) {
@@ -5147,7 +5240,8 @@ private fun showQuickSettings() {
                     return@setItems
                 }
                 val (key, name, fallback) = definitions[which]
-                val prefKey = "site_default_${engine.name.lowercase()}_$key"
+                val prefKey = if (key == "javascript") defaultJavaScriptPreferenceKey(engine)
+                    else "site_default_${engine.name.lowercase()}_$key"
                 val next = !prefs.getBoolean(prefKey, fallback)
                 prefs.edit().putBoolean(prefKey, next).apply()
                 tabs.filter { it.engineType == engine && !it.isPrivate && !it.isGuest }.forEach { active ->
@@ -5276,6 +5370,18 @@ private fun showQuickSettings() {
         }
     }
 
+    private fun siteRuleKeys(entry: SiteRuleEntry): Set<String> {
+        val engine = entry.engine.name.lowercase()
+        val encoded = Uri.encode(entry.origin)
+        return buildSet {
+            add("javascript_enabled_${engine}_$encoded")
+            add("site_popups_${engine}_$encoded")
+            add("site_autoplay_${engine}_$encoded")
+            add("site_sound_${engine}_$encoded")
+            if (entry.engine == BrowserEngineType.CEFRIUM) add("site_ads_${engine}_$encoded")
+        }
+    }
+
     private fun showSiteRuleDetails(entry: SiteRuleEntry) {
         val host = Uri.parse(entry.origin).host ?: entry.origin
         val engineLabel = if (entry.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
@@ -5347,13 +5453,8 @@ private fun showQuickSettings() {
                         showCefriumSitePermissionSettings(entry.origin)
                     }
                     which == resetIndex -> {
-                        val encoded = Uri.encode(entry.origin)
-                        val engineToken = entry.engine.name.lowercase() + "_"
                         val editor = prefs.edit()
-                        prefs.all.keys.filter { key ->
-                            (key.startsWith("javascript_enabled_$engineToken") && key.endsWith(encoded)) ||
-                                (key.startsWith("site_") && key.contains("_$engineToken") && key.endsWith(encoded))
-                        }.forEach(editor::remove)
+                        siteRuleKeys(entry).forEach(editor::remove)
                         editor.apply()
                         toast("Site settings reset for $host")
                         showAllSiteSettings()
@@ -5369,13 +5470,8 @@ private fun showQuickSettings() {
             .setMessage("Delete cookies and site storage for $host in ${entry.engine.name}. The other engine's profile is not affected.")
             .setNegativeButton(getString(R.string.cancel), null)
             .setPositiveButton("Clear data") { _, _ ->
-                val encoded = Uri.encode(entry.origin)
-                val engineToken = entry.engine.name.lowercase() + "_"
                 val editor = prefs.edit()
-                prefs.all.keys.filter { key ->
-                    (key.startsWith("javascript_enabled_$engineToken") && key.endsWith(encoded)) ||
-                        (key.startsWith("site_") && key.contains("_$engineToken") && key.endsWith(encoded))
-                }.forEach(editor::remove)
+                siteRuleKeys(entry).forEach(editor::remove)
                 editor.apply()
                 if (entry.engine == BrowserEngineType.CEFRIUM) {
                     runCatching {
@@ -5865,7 +5961,8 @@ private fun showQuickSettings() {
         }
         if (splitTabId != null) exitSplitScreen()
         val affectedTabs = tabs.filter {
-            !it.isPrivate && !it.isGuest && engineSelectionForTab(it).engine == BrowserEngineType.GECKOVIEW
+            !it.isPrivate && !it.isGuest &&
+                (it.session != null || engineSelectionForTab(it).engine == BrowserEngineType.GECKOVIEW)
         }
         val affectedIds = affectedTabs.map { it.id }.toSet()
         pendingGeckoDataClearActive = true
@@ -6558,10 +6655,13 @@ private fun showForgotPassword(prefillEmail: String = "") {
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()
         pendingAndroidPermissionCallback = null
-        pendingCefriumPermissionDialog?.dismiss()
-        pendingCefriumPermissionDialog = null
-        pendingCefriumPermissionDecision?.invoke(false)
-        pendingCefriumPermissionDecision = null
+        cefriumPermissionCancelActions.keys.toList().forEach(::cancelCefriumPermissionPrompt)
+        pendingCefriumAndroidPermissions.clear()
+        activeCefriumAndroidPermission?.let { request ->
+            request.cancelled = true
+            request.complete(false)
+        }
+        activeCefriumAndroidPermission = null
         activeBottomSheetDialogs.toList().forEach { runCatching { it.dismiss() } }
         activeBottomSheetDialogs.clear()
         activeUndoPopups.toList().forEach { runCatching { it.dismiss() } }
