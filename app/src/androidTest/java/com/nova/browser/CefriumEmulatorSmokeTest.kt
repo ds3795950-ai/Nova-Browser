@@ -46,6 +46,7 @@ class CefriumEmulatorSmokeTest {
         val pageLoaded = CountDownLatch(1)
         val titleLoaded = CountDownLatch(1)
         var engine: CefriumBrowserEngine? = null
+        var sawSmokePageLoadStart = false
         val smokeUrlPrefix = "data:text/html;base64,"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
@@ -54,7 +55,11 @@ class CefriumEmulatorSmokeTest {
                     activity = activity,
                     profile = profile,
                     listener = BrowserEngineListener { state ->
-                        if (!state.isLoading && state.url.startsWith(smokeUrlPrefix)) {
+                        val isSmokePage = state.url?.startsWith(smokeUrlPrefix) == true
+                        if (state.isLoading && isSmokePage) {
+                            sawSmokePageLoadStart = true
+                        }
+                        if (sawSmokePageLoadStart && !state.isLoading && isSmokePage) {
                             pageLoaded.countDown()
                         }
                         if (state.title == "Nova Reader Smoke") {
