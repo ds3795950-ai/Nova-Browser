@@ -2153,7 +2153,11 @@ class MainActivity : ComponentActivity() {
             if (missing.isEmpty()) finish(true) else {
                 handedToAndroid = true
                 pendingCefriumAndroidPermissions.addLast(
-                    PendingCefriumAndroidPermission(tabId, missing.toTypedArray()) { granted -> finish(granted) }
+                    PendingCefriumAndroidPermission(
+                        tabId = tabId,
+                        permissions = missing.toTypedArray(),
+                        complete = { granted -> finish(granted) }
+                    )
                 )
                 launchNextCefriumAndroidPermission()
             }
