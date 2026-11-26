@@ -55,9 +55,9 @@ class CefriumEmulatorSmokeTest {
                         if (!state.isLoading && state.url == smokeUrl && state.title == "Nova Reader Smoke") {
                             loaded.countDown()
                         }
-                    }
+                    },
+                    desktopMode = true
                 )
-                engine!!.setDesktopMode(true)
                 val contentRoot = activity.findViewById<FrameLayout>(android.R.id.content)
                 contentRoot.addView(
                     engine!!.view,
