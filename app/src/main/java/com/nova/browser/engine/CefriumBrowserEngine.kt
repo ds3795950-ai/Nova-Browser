@@ -146,6 +146,9 @@ class CefriumBrowserEngine(
                 publish(currentState.copy(progress = percent.coerceIn(0, 100)))
             }
             override fun onLoadingStateChanged(browser: CefriumBrowser, loading: Boolean, canGoBack: Boolean, canGoForward: Boolean) {
+                // Cefrium may deliver a final load-state callback after close(). Do not
+                // call JNI-backed browser methods once the tab runtime has been disposed.
+                if (closed) return
                 publish(currentState.copy(
                     isLoading = loading,
                     progress = browser.getProgress().coerceIn(0, 100),
@@ -455,10 +458,12 @@ class CefriumBrowserEngine(
 
     override fun close() {
         if (closed) return
+        // Mark closed before detaching/removing handlers: Cefrium can still dispatch
+        // queued callbacks while teardown is in progress.
+        closed = true
         detach()
         novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
         novaAddonScriptHandlers.clear()
-        closed = true
         browser.close()
     }
 
@@ -491,6 +496,7 @@ class CefriumBrowserEngine(
     }.getOrDefault(false)
 
     private fun publish(next: BrowserEngineState) {
+        if (closed) return
         currentState = next
         listener?.onStateChanged(next)
     }
