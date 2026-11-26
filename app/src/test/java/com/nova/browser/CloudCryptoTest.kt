@@ -37,7 +37,10 @@ class CloudCryptoTest {
     @Test fun encryptedBackupSizeIsBoundedByUtf8BytesBeforeEncryption() {
         assertEquals(true, CloudCrypto.isPlaintextWithinLimit("€".repeat(100)))
         assertEquals(false, CloudCrypto.isPlaintextWithinLimit("€".repeat(5_592_406)))
-        assertEquals(false, CloudCrypto.isCiphertextWithinLimit(24 * 1024 * 1024))
+        assertEquals(true, CloudCrypto.isPlaintextWithinLimit("a".repeat(16 * 1024 * 1024)))
+        assertEquals(false, CloudCrypto.isPlaintextWithinLimit("a".repeat(16 * 1024 * 1024 + 1)))
+        assertEquals(true, CloudCrypto.isCiphertextWithinLimit(44_739_264))
+        assertEquals(false, CloudCrypto.isCiphertextWithinLimit(44_739_265))
     }
 
     @Test fun eachBackupUsesFreshSaltAndIv() {
