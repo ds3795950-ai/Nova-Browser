@@ -89,7 +89,7 @@ class CefriumBrowserEngine(
         title = browser.getTitle(),
         progress = browser.getProgress()
     )
-    private var closed = false
+    @Volatile private var closed = false
     private val novaAddonScriptHandlers = mutableMapOf<String, CefriumBrowser.ScriptHandler>()
     var didRestoreInitialNavigationState: Boolean = false
         private set
@@ -146,9 +146,9 @@ class CefriumBrowserEngine(
                 publish(currentState.copy(progress = percent.coerceIn(0, 100)))
             }
             override fun onLoadingStateChanged(browser: CefriumBrowser, loading: Boolean, canGoBack: Boolean, canGoForward: Boolean) {
-                // Cefrium may deliver a final load-state callback after close(). Do not
-                // call JNI-backed browser methods once the tab runtime has been disposed.
-                if (closed) return
+                // Cefrium may deliver a queued load-state callback after close() has
+                // released the native browser. Never call JNI getters on that handle.
+                if (closed || browser.isClosed()) return
                 publish(currentState.copy(
                     isLoading = loading,
                     progress = browser.getProgress().coerceIn(0, 100),
@@ -458,12 +458,10 @@ class CefriumBrowserEngine(
 
     override fun close() {
         if (closed) return
-        // Mark closed before detaching/removing handlers: Cefrium can still dispatch
-        // queued callbacks while teardown is in progress.
-        closed = true
         detach()
         novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
         novaAddonScriptHandlers.clear()
+        closed = true
         browser.close()
     }
 
@@ -496,6 +494,7 @@ class CefriumBrowserEngine(
     }.getOrDefault(false)
 
     private fun publish(next: BrowserEngineState) {
+        // Drop late native callbacks after teardown; observers may already own a new engine.
         if (closed) return
         currentState = next
         listener?.onStateChanged(next)
