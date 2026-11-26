@@ -14,6 +14,37 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
         preferences.edit().putString(KEY_NORMAL_MODE, mode.name).apply()
     }
 
+    fun cefriumProfileName(): String {
+        preferences.getString(KEY_PROFILE_NAME, null)?.takeIf { it.isNotBlank() }?.let { return it }
+        val generation = preferences.getInt(KEY_PROFILE_GENERATION, 1).coerceIn(1, 999_999)
+        return if (generation == 1) BrowserEngineProfilePolicy.NORMAL_CEFRIUM_PROFILE else "nova-normal-v$generation"
+    }
+
+    fun rotateCefriumProfile(): String? {
+        val previous = cefriumProfileName()
+        val next = "nova-normal-${java.util.UUID.randomUUID()}"
+        if (!preferences.edit().putString(KEY_PROFILE_NAME, next).commit()) {
+            // SharedPreferences updates memory before reporting a disk-write failure. Restore the
+            // old active identity immediately so retrying Clear cannot orphan the real profile.
+            if (!preferences.edit().putString(KEY_PROFILE_NAME, previous).commit()) {
+                android.util.Log.e("NovaBrowser", "Could not durably restore the previous Cefrium profile identity")
+            }
+            return null
+        }
+        return next
+    }
+
+    fun retiredCefriumProfiles(): Set<String> =
+        preferences.getStringSet(KEY_RETIRED_PROFILES, emptySet())?.toSet() ?: emptySet()
+
+    fun recordRetiredCefriumProfile(profile: String): Boolean {
+        if (profile.isBlank()) return false
+        return preferences.edit().putStringSet(KEY_RETIRED_PROFILES, retiredCefriumProfiles() + profile).commit()
+    }
+
+    fun forgetRetiredCefriumProfile(profile: String): Boolean =
+        preferences.edit().putStringSet(KEY_RETIRED_PROFILES, retiredCefriumProfiles() - profile).commit()
+
     fun siteAffinity(url: String): BrowserEngineType? = affinity.get(url)
 
     fun setSiteAffinity(url: String, engine: BrowserEngineType): Boolean = affinity.set(url, engine)
@@ -47,5 +78,8 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
 
     private companion object {
         const val KEY_NORMAL_MODE = "browser_engine_mode"
+        const val KEY_PROFILE_GENERATION = "cefrium_profile_generation"
+        const val KEY_PROFILE_NAME = "cefrium_profile_name"
+        const val KEY_RETIRED_PROFILES = "cefrium_retired_profiles"
     }
 }

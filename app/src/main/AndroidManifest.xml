@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <package android:name="org.torproject.android" />
@@ -17,17 +19,18 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
     <application
         android:name=".NovaApplication"
         tools:remove="android:zygotePreloadName"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:icon="@drawable/ic_nova_launcher"
-        android:roundIcon="@drawable/ic_nova_launcher"
-        android:label="Nova Browser"
+        android:icon="@mipmap/ic_nova_launcher"
+        android:roundIcon="@mipmap/ic_nova_launcher"
+        android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/NovaTheme">
         <activity android:name="com.sentinel.ui.SentinelActivity" android:exported="false" />
         <activity android:name=".NovaVpnFirewallActivity" android:exported="false" />
         <service
@@ -36,7 +39,9 @@
             android:foregroundServiceType="dataSync" />
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|fontScale|locale|layoutDirection|density|smallestScreenSize|screenLayout"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="stateUnchanged|adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|locale|layoutDirection|smallestScreenSize|screenLayout|keyboard|navigation"
             android:launchMode="singleTask"
             android:exported="true">
             <intent-filter>

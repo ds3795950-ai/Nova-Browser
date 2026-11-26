@@ -6,7 +6,7 @@ import java.util.zip.ZipInputStream
 
 plugins {
     id("com.android.application")
-    id("com.cefrium")
+    id("com.cefrium") version "0.21.0"
 }
 
 val releaseStorePath = System.getenv("NOVA_RELEASE_KEYSTORE_PATH")
@@ -70,6 +70,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+    packaging { jniLibs { useLegacyPackaging = true } }
     buildFeatures { buildConfig = true }
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
@@ -86,22 +87,24 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("androidx.activity:activity:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+    implementation("androidx.window:window:1.4.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
-    // GeckoView remains the compatibility/security fallback; Cefrium serves compatible Normal tabs.
+    // GeckoView remains the Private/Guest engine and the privacy-preserving fallback.
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
     // Embedded Tor daemon; Guest Mode uses its loopback SOCKS5 listener only.
     implementation("info.guardianproject:tor-android:0.4.9.17")
+    // Cefrium 0.21.0 supplies Chromium for eligible Normal tabs.
     implementation("com.cefrium:cefrium-sdk:0.21.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.mediarouter:mediarouter:1.7.0")
     implementation("androidx.core:core:1.16.0")
     implementation("androidx.browser:browser:1.8.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:core:1.6.1")
-    testImplementation("org.json:json:20250517")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
 }
 
 

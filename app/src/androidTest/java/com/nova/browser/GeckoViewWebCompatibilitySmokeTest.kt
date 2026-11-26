@@ -5,7 +5,6 @@ import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nova.browser.engine.BrowserEngineListener
-import com.nova.browser.engine.GeckoSessionDelegateInstaller
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -16,16 +15,28 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import java.util.concurrent.CountDownLatch
+import java.net.URL
+import javax.net.ssl.HttpsURLConnection
 import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class GeckoViewWebCompatibilitySmokeTest {
-    // GeckoView has no public JavaScript-evaluation API, so the shared DOM fixture cannot run here
-    // (it needs a WebExtension bridge). This smoke test covers page load and title reporting instead.
-    @Test fun geckoViewLoadsAnHttpsPageAndReportsItsTitle() {
+    private fun hasNetworkAccess(): Boolean = runCatching {
+        val connection = URL("https://example.com/").openConnection() as HttpsURLConnection
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        connection.requestMethod = "GET"
+        val code = connection.responseCode
+        if (code in 200..399) connection.inputStream.use { it.read() }
+        connection.disconnect()
+        code in 200..399
+    }.getOrDefault(false)
+
+    @Test fun geckoViewLoadsStableHttpsOrigin() {
+        assumeTrue("Network unavailable; GeckoView HTTPS smoke test skipped", hasNetworkAccess())
+        val pageStarted = CountDownLatch(1)
         val pageLoaded = CountDownLatch(1)
-        val titleSeen = CountDownLatch(1)
-        var pageTitle: String? = null
+        var pageLoadSucceeded = false
         var engine: GeckoViewBrowserEngine? = null
 
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -43,32 +54,34 @@ class GeckoViewWebCompatibilitySmokeTest {
 
                     val session = GeckoSession(GeckoSessionSettings.Builder().build())
                     engine = GeckoViewBrowserEngine(session, view, BrowserEngineListener { })
-                    engine!!.installDelegates(GeckoSessionDelegateInstaller { configuredSession ->
-                        configuredSession.contentDelegate = object : GeckoSession.ContentDelegate {
-                            override fun onTitleChange(session: GeckoSession, title: String?) {
-                                if (!title.isNullOrBlank()) {
-                                    pageTitle = title
-                                    titleSeen.countDown()
+                    engine!!.installDelegates { configuredSession ->
+                        configuredSession.progressDelegate = object : GeckoSession.ProgressDelegate {
+                            override fun onPageStart(session: GeckoSession, url: String) {
+                                if (url != "about:blank") pageStarted.countDown()
+                            }
+                            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                                if (pageStarted.count == 0L) {
+                                    pageLoadSucceeded = success
+                                    pageLoaded.countDown()
                                 }
                             }
                         }
-                        configuredSession.progressDelegate = object : GeckoSession.ProgressDelegate {
-                            override fun onPageStop(session: GeckoSession, success: Boolean) {
-                                if (success) pageLoaded.countDown() else pageLoaded.countDown()
-                            }
-                        }
-                    })
+                    }
                     session.open(runtime)
                     engine!!.attachTo(view)
                     engine!!.setActive(true, true)
                     engine!!.loadUrl("https://example.com/")
                 }
 
-                val loaded = pageLoaded.await(45, TimeUnit.SECONDS)
-                assumeTrue("Network unavailable; GeckoView origin-backed compatibility test skipped", loaded)
-
-                assertTrue("GeckoView did not report a page title", titleSeen.await(20, TimeUnit.SECONDS))
-                assertTrue("Unexpected page title: $pageTitle", pageTitle?.contains("Example", ignoreCase = true) == true)
+                val began = pageStarted.await(20, TimeUnit.SECONDS)
+                val loaded = began && pageLoaded.await(45, TimeUnit.SECONDS)
+                assertTrue("GeckoView did not start the HTTPS navigation", began)
+                assertTrue("GeckoView did not finish loading the HTTPS origin", loaded)
+                assertTrue("GeckoView reported a failed HTTPS page load", pageLoadSucceeded)
+                val observedUrl = engine?.state?.url.orEmpty()
+                val observedHost = runCatching { java.net.URI(observedUrl).host?.lowercase() }.getOrNull()
+                assertTrue("GeckoView did not finish on the expected example.com origin: $observedUrl",
+                    observedUrl.startsWith("https://") && observedHost in setOf("example.com", "www.example.com"))
             } finally {
                 scenario.onActivity { engine?.close() }
             }

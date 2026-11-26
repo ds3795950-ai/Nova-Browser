@@ -32,6 +32,15 @@ enum class BrowserEngineCapability {
     TRANSLATION,
     PASSWORD_AUTOFILL,
     NOVA_SHIELD,
+    FIND_IN_PAGE,
+    FULLSCREEN,
+    POPUP_TABS,
+    JS_DIALOGS,
+    FILE_CHOOSER,
+    CONTEXT_MENU,
+    HTTP_AUTH,
+    EXTERNAL_NAVIGATION,
+    SITE_DATA,
     EXTENSIONS
 }
 
@@ -52,13 +61,16 @@ interface BrowserEngine : AutoCloseable {
     val capabilities: Set<BrowserEngineCapability>
         get() = emptySet()
 
-    /** Centralized feature check; callers must still enforce Nova's profile and user policies. */
-    fun supports(capability: BrowserEngineCapability): Boolean = capability in capabilities
-
     fun loadUrl(url: String)
     fun goBack()
     fun goForward()
     fun reload()
+    fun stop() {}
+    fun findInPage(query: String, forward: Boolean, findNext: Boolean) {}
+    fun stopFinding() {}
+    fun clearCache() {}
+    fun exitFullscreen() {}
+    fun setDesktopMode(enabled: Boolean) {}
     /** Attach an engine-owned view to a host pane. Engines with fixed views may ignore it. */
     fun attachTo(view: View) {}
 

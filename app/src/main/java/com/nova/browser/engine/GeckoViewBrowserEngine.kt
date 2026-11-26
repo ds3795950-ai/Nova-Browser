@@ -1,10 +1,8 @@
 package com.nova.browser.engine
 
 import android.view.View
-import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.TranslationsController
 
 /**
  * GeckoView adapter for one tab session. It owns the Gecko session lifecycle and exposes a
@@ -18,7 +16,26 @@ class GeckoViewBrowserEngine(
 ) : BrowserEngine {
     override val type = BrowserEngineType.GECKOVIEW
     // Gecko's SDK path is wired by Nova for downloads and site-permission prompts.
-    override val capabilities = BrowserEngineCapabilitySets.GECKOVIEW
+    override val capabilities = setOf(
+        BrowserEngineCapability.DOWNLOADS,
+        BrowserEngineCapability.SITE_PERMISSIONS,
+        BrowserEngineCapability.READER_MODE,
+        BrowserEngineCapability.DESKTOP_MODE,
+        BrowserEngineCapability.FIND_IN_PAGE,
+        BrowserEngineCapability.FULLSCREEN,
+        BrowserEngineCapability.POPUP_TABS,
+        BrowserEngineCapability.JS_DIALOGS,
+        BrowserEngineCapability.FILE_CHOOSER,
+        BrowserEngineCapability.CONTEXT_MENU,
+        BrowserEngineCapability.HTTP_AUTH,
+        BrowserEngineCapability.EXTERNAL_NAVIGATION,
+        BrowserEngineCapability.SITE_DATA,
+        BrowserEngineCapability.VPN_PROXY,
+        BrowserEngineCapability.TRANSLATION,
+        BrowserEngineCapability.PASSWORD_AUTOFILL,
+        BrowserEngineCapability.NOVA_SHIELD,
+        BrowserEngineCapability.EXTENSIONS
+    )
     private var attachedView: GeckoView = initialView
     private var isAttached = false
     private var currentState = BrowserEngineState()
@@ -42,10 +59,10 @@ class GeckoViewBrowserEngine(
      * Installs the host-provided Gecko delegates exactly once before the session is used.
      * The adapter owns the registration boundary and guards against duplicate installation.
      */
-    fun installDelegates(installer: GeckoSessionDelegateInstaller) {
+    fun installDelegates(installer: (GeckoSession) -> Unit) {
         checkOpen()
         check(!delegatesInstalled) { "Gecko delegates have already been installed" }
-        installer.install(session)
+        installer(session)
         delegatesInstalled = true
     }
 
@@ -77,6 +94,13 @@ class GeckoViewBrowserEngine(
     override fun goBack() { checkOpen(); session.goBack() }
     override fun goForward() { checkOpen(); session.goForward() }
     override fun reload() { checkOpen(); session.reload() }
+    override fun stop() { if (!closed) session.stop() }
+    override fun findInPage(query: String, forward: Boolean, findNext: Boolean) {
+        if (closed) return
+        session.getFinder().find(query, if (forward) GeckoSession.FINDER_FIND_FORWARD else GeckoSession.FINDER_FIND_BACKWARDS)
+    }
+    override fun stopFinding() { if (!closed) session.getFinder().clear() }
+    override fun setDesktopMode(enabled: Boolean) = Unit // Gecko desktop mode is configured through GeckoSessionSettings.
 
     override fun setActive(active: Boolean, focused: Boolean) {
         checkOpen()
@@ -97,32 +121,6 @@ class GeckoViewBrowserEngine(
         applyVisibility()
     }
 
-    /** Runs GeckoView native translation without exposing its session to browser chrome. */
-    fun translate(sourceLanguage: String, targetLanguage: String, onResult: (Boolean, String?) -> Unit) {
-        val translation = session.sessionTranslation
-        if (translation == null) { onResult(false, "GeckoView translation is unavailable for this session"); return }
-        translation.translate(sourceLanguage, targetLanguage,
-            TranslationsController.SessionTranslation.TranslationOptions.Builder().downloadModel(true).build()
-        ).accept({ onResult(true, null) }, { error -> onResult(false, error?.localizedMessage ?: "language model not supported") })
-    }
-
-    /** Applies a per-site tracker permission through the Gecko adapter boundary. */
-    fun setTrackingProtectionAllowed(runtime: GeckoRuntime, allowed: Boolean): Boolean {
-        val permission = trackingPermission ?: return false
-        runtime.storageController.setPermission(permission, if (allowed)
-            GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
-        else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
-        return true
-    }
-
-    /** Returns a compact Shield log result without leaking GeckoSession into browser chrome. */
-    fun getContentBlockingLog(runtime: GeckoRuntime, onResult: (Int?, String?) -> Unit) {
-        runtime.getContentBlockingController().getLog(session).accept(
-            { entries -> onResult(entries?.size ?: 0, null) },
-            { error -> onResult(null, error?.localizedMessage ?: "Unknown error") }
-        )
-    }
-
     /** Allows the existing Gecko delegates to keep the shared state snapshot current. */
     fun updateState(state: BrowserEngineState) {
         if (!closed) publish(state)
@@ -137,16 +135,8 @@ class GeckoViewBrowserEngine(
         }
     }
 
-    /** GeckoSession has already closed itself before onCrash/onKill reaches the host. */
     fun markRendererTerminated() {
-        if (closed) return
-        // Do not call setActive/setFocused/close on the already-closed session. The next
-        // adapter will attach a fresh session to the same GeckoView host.
-        isAttached = false
-        active = false
-        focused = false
-        hostPaused = false
-        closed = true
+        if (!closed) publish(currentState.copy(isLoading = false, error = "GeckoView renderer terminated"))
     }
 
     override fun close() {

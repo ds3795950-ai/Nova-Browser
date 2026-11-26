@@ -18,8 +18,16 @@ internal object NovaSyncMerge {
                     profiles.put(engine.name, mergeProfile(localProfile ?: JSONObject(), remoteProfile ?: JSONObject()))
                 }
             }
-            return JSONObject().put("schema", 4).put("profiles", profiles)
+            val localGlobal = local.optJSONObject("global")
+            val remoteGlobal = remote.optJSONObject("global")
+                ?: if (remoteProfiles == null && remote.has("bookmarks")) remote else null
+            val global = if (localGlobal != null || remoteGlobal != null) {
+                mergeProfile(localGlobal ?: JSONObject(), remoteGlobal ?: JSONObject())
+            } else null
+            val result = JSONObject().put("schema", 5).put("profiles", profiles)
                 .put("settings", local.optJSONObject("settings") ?: remote.optJSONObject("settings") ?: JSONObject())
+            if (global != null) result.put("global", global)
+            return result
         }
         return mergeLegacy(local, remote)
     }
@@ -55,9 +63,14 @@ internal object NovaSyncMerge {
             val merged = linkedMapOf<String, JSONObject>()
             val old = remote.optJSONArray(key) ?: JSONArray()
             val current = local.optJSONArray(key) ?: JSONArray()
-            for (i in 0 until old.length()) { val item = old.getJSONObject(i); merged[item.optString(idField)] = item }
+            for (i in 0 until old.length()) {
+                val item = old.optJSONObject(i) ?: continue
+                val id = item.optString(idField).takeIf { it.isNotBlank() } ?: continue
+                merged[id] = item
+            }
             for (i in 0 until current.length()) {
-                val item = current.getJSONObject(i); val id = item.optString(idField)
+                val item = current.optJSONObject(i) ?: continue
+                val id = item.optString(idField).takeIf { it.isNotBlank() } ?: continue
                 val prior = merged[id]
                 if (prior == null || maxField == null || item.optLong(maxField) >= prior.optLong(maxField)) merged[id] = item
             }
@@ -71,7 +84,8 @@ internal object NovaSyncMerge {
         val mergedBookmarks = result.optJSONArray("bookmarks") ?: JSONArray()
         for (i in 0 until mergedBookmarks.length()) {
             val item = mergedBookmarks.getJSONObject(i)
-            if (item.optLong("addedAt") > tombstones.optLong(item.optString("url"))) keptBookmarks.put(item)
+            val url = item.optString("url")
+            if (!tombstones.has(url) || item.optLong("addedAt") > tombstones.optLong(url)) keptBookmarks.put(item)
         }
         result.put("bookmarks", keptBookmarks).put("bookmark_tombstones", tombstones)
         val workspaceTombstones = mergeTombstones(local.optJSONObject("workspace_tombstones"), remote.optJSONObject("workspace_tombstones"))
@@ -88,7 +102,7 @@ internal object NovaSyncMerge {
         val mergedHistory = result.optJSONArray("history") ?: JSONArray()
         for (i in 0 until mergedHistory.length()) {
             val item = mergedHistory.getJSONObject(i)
-            if (item.optLong("visitedAt") > clearedAt) keptHistory.put(item)
+            if (clearedAt <= 0L || item.optLong("visitedAt") > clearedAt) keptHistory.put(item)
         }
         result.put("history", keptHistory).put("history_cleared_at", clearedAt)
         result.put("settings", local.optJSONObject("settings") ?: remote.optJSONObject("settings") ?: JSONObject())

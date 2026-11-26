@@ -34,6 +34,15 @@ class CloudCryptoTest {
         } catch (_: javax.crypto.AEADBadTagException) { }
     }
 
+    @Test fun encryptedBackupSizeIsBoundedByUtf8BytesBeforeEncryption() {
+        assertEquals(true, CloudCrypto.isPlaintextWithinLimit("€".repeat(100)))
+        assertEquals(false, CloudCrypto.isPlaintextWithinLimit("€".repeat(5_592_406)))
+        assertEquals(true, CloudCrypto.isPlaintextWithinLimit("a".repeat(16 * 1024 * 1024)))
+        assertEquals(false, CloudCrypto.isPlaintextWithinLimit("a".repeat(16 * 1024 * 1024 + 1)))
+        assertEquals(true, CloudCrypto.isCiphertextWithinLimit(44_739_264))
+        assertEquals(false, CloudCrypto.isCiphertextWithinLimit(44_739_265))
+    }
+
     @Test fun eachBackupUsesFreshSaltAndIv() {
         val passphrase = "correct-horse-battery".toCharArray()
         val first = CloudCrypto.encrypt("same backup", passphrase)
@@ -53,7 +62,8 @@ class CloudCryptoTest {
         val browser = JSONObject().put("ciphertext", "browser-ciphertext")
         val vault = JSONObject().put("ciphertext", "vault-ciphertext")
         val bundle = NovaCloudBundle.pack(browser, vault)
-        val unpacked = NovaCloudBundle.unpack(bundle, null)
+        val staleLegacyVault = JSONObject().put("ciphertext", "stale-legacy-vault")
+        val unpacked = NovaCloudBundle.unpack(bundle, staleLegacyVault)
         assertEquals(browser.toString(), unpacked.first?.toString())
         assertEquals(vault.toString(), unpacked.second?.toString())
         assertEquals(NovaCloudBundle.FORMAT, bundle.getString("format"))

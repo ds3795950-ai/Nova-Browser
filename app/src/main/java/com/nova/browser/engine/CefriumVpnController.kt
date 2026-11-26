@@ -21,95 +21,88 @@ object CefriumVpnController {
     private val profiles = WeakHashMap<CefriumProfile, WeakReference<CefriumProfile>>()
     private var statusListener: ((String) -> Unit)? = null
 
-    fun setStatusListener(listener: ((String) -> Unit)?) {
-        statusListener = listener
-        listener?.invoke(status)
-    }
+    private data class ProfileApplyResult(val proxyReady: Boolean = false, val trafficBlocked: Boolean = false,
+        val webRtcProtected: Boolean = false, val disabledCleanly: Boolean = false)
+    private data class ApplySummary(val profileCount: Int, val allProxyReady: Boolean, val allTrafficBlocked: Boolean,
+        val allWebRtcProtected: Boolean, val allDisabledCleanly: Boolean)
+
+    fun setStatusListener(listener: ((String) -> Unit)?) { statusListener = listener; listener?.invoke(status) }
     fun statusText(): String = status
     fun isEnabled(): Boolean = enabled
 
     fun setEnabled(value: Boolean) {
         enabled = value
-        if (!value) {
-            credentials = null
-            applyAllProfiles()
-            publish("VPN off")
-        } else {
-            applyAllProfiles()
-            publish(if (credentials == null) "Connecting to 1VPN…" else "Applying 1VPN proxy…")
-        }
+        if (!value) credentials = null
+        val summary = applyAllProfiles()
+        publish(if (value) enabledStatus(summary) else CefriumVpnStatusPolicy.disabledStatus(summary.allDisabledCleanly))
     }
 
     fun updateCredentials(config: CefriumVpnCredentials?) {
-        if (!enabled) {
-            credentials = null
-            return
-        }
-        credentials = config?.takeIf {
-            it.host.isNotBlank() && it.port in 1..65535 &&
-                it.username.isNotBlank() && it.password.isNotBlank()
-        }
-        applyAllProfiles()
-        publish(if (credentials == null) "1VPN credentials unavailable; Cefrium is assigned a fail-closed proxy target (tunnel not verified)"
-            else "1VPN proxy configured · " + credentials!!.location.uppercase())
+        if (!enabled) { credentials = null; return }
+        credentials = config?.takeIf { it.host.isNotBlank() && it.port in 1..65535 && it.username.isNotBlank() && it.password.isNotBlank() }
+        publish(enabledStatus(applyAllProfiles()))
     }
 
     fun registerProfile(profile: CefriumProfile) {
         profiles[profile] = WeakReference(profile)
-        apply(profile)
+        val summary = applyAllProfiles()
+        if (enabled) publish(enabledStatus(summary))
+        else publish(CefriumVpnStatusPolicy.disabledStatus(summary.allDisabledCleanly))
     }
-    fun refreshProfiles() = applyAllProfiles()
 
-    fun provideProxyCredentials(
-        host: String, port: Int, isProxy: Boolean,
-        callback: (String, String) -> Unit, cancel: () -> Unit
-    ) {
+    fun refreshProfiles() {
+        val summary = applyAllProfiles()
+        if (enabled) publish(enabledStatus(summary))
+        else publish(CefriumVpnStatusPolicy.disabledStatus(summary.allDisabledCleanly))
+    }
+
+    fun provideProxyCredentials(host: String, port: Int, isProxy: Boolean, callback: (String, String) -> Unit, cancel: () -> Unit) {
         val config = credentials
-        if (!enabled || !isProxy || config == null ||
-            !config.host.equals(host, ignoreCase = true) || config.port != port
-        ) {
-            cancel()
-            return
+        if (!enabled || !isProxy || config == null || !config.host.equals(host, ignoreCase = true) || config.port != port) {
+            cancel(); return
         }
         callback(config.username, config.password)
     }
 
-    private fun applyAllProfiles() {
+    private fun applyAllProfiles(): ApplySummary {
+        val results = mutableListOf<ProfileApplyResult>()
         val iterator = profiles.entries.iterator()
         while (iterator.hasNext()) {
             val profile = iterator.next().value.get()
-            if (profile == null) iterator.remove() else apply(profile)
+            if (profile == null) iterator.remove() else results += apply(profile)
         }
+        return ApplySummary(results.size, results.all { it.proxyReady }, results.all { it.trafficBlocked },
+            results.all { it.webRtcProtected }, results.all { it.disabledCleanly })
     }
 
-    private fun apply(profile: CefriumProfile) {
+    private fun apply(profile: CefriumProfile): ProfileApplyResult {
         if (!enabled) {
             val proxyCleared = runCatching { profile.clearProxy() }.getOrDefault(false)
-            val rtcRestored = runCatching {
-                profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DEFAULT)
-            }.getOrDefault(false)
-            if (!proxyCleared || !rtcRestored) publish("Could not disable Cefrium 1VPN cleanly")
-            return
+            val rtcRestored = runCatching { profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DEFAULT) }.getOrDefault(false)
+            return ProfileApplyResult(disabledCleanly = proxyCleared && rtcRestored)
         }
         val config = credentials
-        val proxyServer = if (config == null) FAIL_CLOSED_PROXY
-            else "https://" + config.host + ":" + config.port
-        val proxyApplied = runCatching { profile.setProxy(proxyServer) }.getOrDefault(false)
-        val rtcProtected = runCatching {
-            profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DISABLE_NON_PROXIED_UDP)
-        }.getOrDefault(false)
+        val requestedProxy = if (config == null) FAIL_CLOSED_PROXY else "https://" + config.host + ":" + config.port
+        val requestedProxyApplied = runCatching { profile.setProxy(requestedProxy) }.getOrDefault(false)
+        val failClosedApplied = if (config == null) requestedProxyApplied else if (!requestedProxyApplied)
+            runCatching { profile.setProxy(FAIL_CLOSED_PROXY) }.getOrDefault(false) else false
+        val rtcProtected = runCatching { profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DISABLE_NON_PROXIED_UDP) }.getOrDefault(false)
         runCatching {
             profile.setProxyErrorListener { _, _, error, mainFrame ->
-                if (mainFrame) publish("1VPN proxy unavailable (error " + error + "); direct fallback is disabled")
+                if (enabled && mainFrame) publish("1VPN proxy unavailable (error " + error + "); direct fallback is disabled")
             }
         }
-        if (!proxyApplied || !rtcProtected) {
-            publish("Cefrium rejected 1VPN proxy or WebRTC protection; routing is not verified and may be unprotected")
-        }
+        return ProfileApplyResult(config != null && requestedProxyApplied, requestedProxyApplied || failClosedApplied, rtcProtected)
     }
 
-    private fun publish(message: String) {
-        status = message
-        statusListener?.invoke(message)
-    }
+    private fun enabledStatus(summary: ApplySummary): String = CefriumVpnStatusPolicy.enabledStatus(
+        hasCredentials = credentials != null,
+        location = credentials?.location.orEmpty(),
+        profileCount = summary.profileCount,
+        allProxyReady = summary.allProxyReady,
+        allTrafficBlocked = summary.allTrafficBlocked,
+        allWebRtcProtected = summary.allWebRtcProtected
+    )
+
+    private fun publish(message: String) { status = message; statusListener?.invoke(message) }
 }

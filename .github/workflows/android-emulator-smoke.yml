@@ -53,4 +53,16 @@ jobs:
           emulator-boot-timeout: 900
           # Keep animations enabled: post-boot animation toggles can lose ADB here.
           disable-animations: false
-          script: gradle :app:connectedDebugAndroidTest --stacktrace
+          script: >-
+            set +e; if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then gradle :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.nova.browser.CefriumEmulatorSmokeTest --stacktrace; else gradle :app:connectedDebugAndroidTest --stacktrace; fi; TEST_STATUS=$?; mkdir -p android16-test-diagnostics; adb devices -l > android16-test-diagnostics/adb-devices.txt 2>&1 || true; adb logcat -d -t 5000 > android16-test-diagnostics/logcat.txt 2>&1 || true; exit "$TEST_STATUS"
+      - name: Upload Android 16 test reports and logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-android16-test-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/androidTests/connected/debug/**
+            app/build/outputs/androidTest-results/connected/debug/**
+            android16-test-diagnostics/**
+          if-no-files-found: warn
+          retention-days: 7

@@ -75,6 +75,20 @@ class NovaSyncMergeTest {
         assertEquals("new-secret", merged.getJSONArray("credentials").getJSONObject(0).getString("password"))
     }
 
+    @Test fun zeroTimestampBookmarkAndHistorySurviveMergeWithoutTombstones() {
+        val local = JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://legacy.example").put("addedAt", 0)))
+            .put("history", JSONArray().put(JSONObject().put("url", "https://legacy.example/h").put("visitedAt", 0)))
+        val merged = NovaSyncMerge.merge(local, JSONObject())
+        assertEquals(1, merged.getJSONArray("bookmarks").length())
+        assertEquals(1, merged.getJSONArray("history").length())
+    }
+
+    @Test fun malformedRemoteArrayElementDoesNotBreakMerge() {
+        val remote = JSONObject().put("bookmarks", JSONArray().put("not-an-object").put(JSONObject().put("url", "https://ok.example").put("addedAt", 5)))
+        val merged = NovaSyncMerge.merge(JSONObject(), remote)
+        assertEquals(1, merged.getJSONArray("bookmarks").length())
+    }
+
     @Test fun legacyPasswordArrayCanBeReadAsBundle() {
         val legacy = JSONArray().put(JSONObject().put("origin", "https://example.com").put("username", "alice").put("password", "secret"))
         assertEquals(1, PasswordVault.decodeSyncBundle(legacy.toString()).getJSONArray("credentials").length())
@@ -137,4 +151,16 @@ class NovaSyncMergeTest {
         assertEquals("GECKOVIEW", gecko.getJSONArray("workspaces").getJSONObject(0).getString("engine"))
         assertEquals("CEFRIUM", cefrium.getJSONArray("workspaces").getJSONObject(0).getString("engine"))
     }
+    @Test fun malformedNewerCloudCredentialDoesNotReplaceValidLocalCredential() {
+        val local = JSONObject().put("credentials", JSONArray().put(JSONObject()
+            .put("origin", "https://example.com").put("username", "alice")
+            .put("password", "valid-local-secret").put("updatedAt", 10)))
+        val remote = JSONObject().put("credentials", JSONArray().put(JSONObject()
+            .put("origin", "https://example.com").put("username", "alice")
+            .put("updatedAt", 20)))
+        val merged = PasswordVault.mergeSyncBundles(local, remote).getJSONArray("credentials")
+        assertEquals(1, merged.length())
+        assertEquals("valid-local-secret", merged.getJSONObject(0).getString("password"))
+    }
+
 }

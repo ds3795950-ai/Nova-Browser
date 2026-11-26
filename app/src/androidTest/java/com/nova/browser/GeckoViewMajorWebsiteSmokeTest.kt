@@ -18,10 +18,24 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.net.URL
+import javax.net.ssl.HttpsURLConnection
 
 @RunWith(AndroidJUnit4::class)
 class GeckoViewMajorWebsiteSmokeTest {
+    private fun hasNetworkAccess(): Boolean = runCatching {
+        val connection = URL("https://example.com/").openConnection() as HttpsURLConnection
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        connection.requestMethod = "GET"
+        val code = connection.responseCode
+        if (code in 200..399) connection.inputStream.use { it.read() }
+        connection.disconnect()
+        code in 200..399
+    }.getOrDefault(false)
+
     @Test fun majorWebsiteEntryPointsLoadInGeckoViewWhenNetworkIsAvailable() {
+        assumeTrue("Network unavailable in this emulator", hasNetworkAccess())
         val started = AtomicReference(CountDownLatch(1))
         val finished = AtomicReference(CountDownLatch(1))
         val success = AtomicBoolean(false)
@@ -46,16 +60,18 @@ class GeckoViewMajorWebsiteSmokeTest {
                             permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
                             hasUserGesture: Boolean
                         ) {
-                            if (!url.isNullOrBlank()) engine?.updateState(engine!!.state.copy(url = url))
+                            if (!url.isNullOrBlank() && url != "about:blank") engine?.updateState(engine!!.state.copy(url = url))
                         }
                     }
                     geckoSession.progressDelegate = object : GeckoSession.ProgressDelegate {
                         override fun onPageStart(session: GeckoSession, url: String) {
+                            if (url == "about:blank") return
                             started.get().countDown()
                             engine?.updateState(engine!!.state.copy(url = url, isLoading = true, progress = 0, error = null))
                         }
 
                         override fun onPageStop(session: GeckoSession, pageSuccess: Boolean) {
+                            if (started.get().count != 0L) return
                             success.set(pageSuccess)
                             engine?.updateState(engine!!.state.copy(isLoading = false, progress = 100,
                                 error = if (pageSuccess) null else "GeckoView page load failed"))
@@ -68,21 +84,20 @@ class GeckoViewMajorWebsiteSmokeTest {
                 engine!!.setActive(true, true)
             }
 
-            fun loadAndCheck(url: String, optionalNetworkProbe: Boolean = false) {
+            fun loadAndCheck(url: String) {
                 success.set(false)
                 started.set(CountDownLatch(1))
                 finished.set(CountDownLatch(1))
                 scenario.onActivity { engine!!.loadUrl(url) }
                 val began = started.get().await(20, TimeUnit.SECONDS)
                 val completed = began && finished.get().await(30, TimeUnit.SECONDS)
-                if (optionalNetworkProbe) assumeTrue("Network unavailable in this emulator", completed && success.get())
                 assertTrue("GeckoView did not finish loading $url", completed)
                 assertTrue("GeckoView reported a failed page load for $url", success.get())
                 assertTrue("GeckoView did not keep HTTPS for $url", engine?.state?.url?.startsWith("https://") == true)
             }
 
             try {
-                loadAndCheck("https://example.com/", optionalNetworkProbe = true)
+                loadAndCheck("https://example.com/")
                 listOf(
                     "https://www.google.com/",
                     "https://www.youtube.com/",
