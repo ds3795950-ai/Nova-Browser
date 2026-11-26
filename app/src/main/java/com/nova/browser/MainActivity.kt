@@ -718,7 +718,7 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         applyFoldAwareLayout(separatingFold)
         root.applySystemBarPadding()
-        if (NovaThemeManager.isDark(this)) window.useLightSystemBarIcons() else window.useDarkSystemBarIcons()
+        window.useLightSystemBarIcons()
         root.requestFocus()
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED)
     }
@@ -1169,6 +1169,7 @@ class MainActivity : ComponentActivity() {
                     return@start
                 }
                 if (!prefs.edit().putBoolean("guest_context_used", true).commit()) {
+                    if (tabs.any { it.isGuest }) closeGuestTabs()
                     TorGuestRoutingController.stop()
                     pageStatus.text = "Guest Mode unavailable · could not save cleanup state"
                     toast("Guest Mode could not start safely because its cleanup marker could not be saved")
@@ -1537,12 +1538,19 @@ class MainActivity : ComponentActivity() {
             pendingRendererPaintResetTabIds.remove(tab.id)
             return
         }
+        var drawHandled = false
+        var listenerRemoved = false
         val listener = object : android.view.ViewTreeObserver.OnDrawListener {
             override fun onDraw() {
-                if (observer.isAlive) observer.removeOnDrawListener(this)
+                if (drawHandled) return
+                drawHandled = true
                 view.post {
+                    if (!listenerRemoved) {
+                        listenerRemoved = true
+                        if (observer.isAlive) observer.removeOnDrawListener(this)
+                    }
                     pendingRendererPaintResetTabIds.remove(tab.id)
-                    if (!isFinishing && !isDestroyed && tab.browserEngine?.view === view) {
+                    if (!isFinishing && !isDestroyed && view.isAttachedToWindow && tab.browserEngine?.view === view) {
                         tab.rendererRecoveryAttempts = BrowserRendererRecoveryPolicy.resetAfterSuccessfulPaint()
                     }
                 }
@@ -1550,9 +1558,12 @@ class MainActivity : ComponentActivity() {
         }
         observer.addOnDrawListener(listener)
         view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(v: View) = v.removeOnAttachStateChangeListener(this)
+            override fun onViewAttachedToWindow(v: View) = Unit
             override fun onViewDetachedFromWindow(v: View) {
-                if (observer.isAlive) observer.removeOnDrawListener(listener)
+                if (!listenerRemoved) {
+                    listenerRemoved = true
+                    if (observer.isAlive) observer.removeOnDrawListener(listener)
+                }
                 pendingRendererPaintResetTabIds.remove(tab.id)
                 v.removeOnAttachStateChangeListener(this)
             }
@@ -2122,6 +2133,7 @@ class MainActivity : ComponentActivity() {
         if (normalized == null) { respond(false); return }
         var completed = false
         var handedToAndroid = false
+        var promptDialog: AlertDialog? = null
         lateinit var cancelAction: () -> Unit
         fun finish(granted: Boolean) {
             if (!completed) {
@@ -2133,7 +2145,10 @@ class MainActivity : ComponentActivity() {
                 respond(granted)
             }
         }
-        cancelAction = { finish(false) }
+        cancelAction = {
+            if (!handedToAndroid) promptDialog?.dismiss()
+            finish(false)
+        }
         cefriumPermissionCancelActions.getOrPut(tabId) { linkedSetOf() }.add(cancelAction)
         val labels = normalized.map { it.lowercase().replace('_', ' ') }
         val runtimePermissions = buildList {
@@ -2149,6 +2164,7 @@ class MainActivity : ComponentActivity() {
         if (decisions.any { it == "BLOCK" }) { finish(false); return }
         val mustAskInNova = decisions.any { it == "ASK" }
         fun requestAndroidPermissions() {
+            if (completed) return
             val missing = runtimePermissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
             if (missing.isEmpty()) finish(true) else {
                 handedToAndroid = true
@@ -2172,6 +2188,7 @@ class MainActivity : ComponentActivity() {
             .setNegativeButton(getString(R.string.block)) { _, _ -> finish(false) }
             .setPositiveButton(getString(R.string.allow)) { _, _ -> requestAndroidPermissions() }
             .create()
+        promptDialog = dialog
         registerPromptDialog(dialog) { if (!handedToAndroid) finish(false) }
     }
 
@@ -3190,6 +3207,7 @@ class MainActivity : ComponentActivity() {
     private fun navigateSecondary(input: String) {
         val tab = tabs.firstOrNull { it.id == splitTabId } ?: return
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        if (target != HOME_URL && !selectEngineForNavigation(tab, target)) return
         prepareDesktopModeForNavigation(tab, target)
         loadSecondaryTabUrl(tab, target)
         if (!secondaryAddressBar.hasFocus()) secondaryAddressBar.setText(target)
@@ -3320,7 +3338,7 @@ class MainActivity : ComponentActivity() {
     private fun navigate(input: String) {
         val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
         val tab = currentTab() ?: return
-        if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) { toast("Wait for browsing-data deletion to finish before navigating this tab"); return }
+        if (target != HOME_URL && !selectEngineForNavigation(tab, target)) return
         prepareDesktopModeForNavigation(tab, target)
         tab.lastUrl = target
         if (!tab.isPrivate && !tab.isGuest) persistTabs()
@@ -5416,7 +5434,14 @@ private fun showQuickSettings() {
             add("site_popups_${engine}_$encoded")
             add("site_autoplay_${engine}_$encoded")
             add("site_sound_${engine}_$encoded")
-            if (entry.engine == BrowserEngineType.CEFRIUM) add("site_ads_${engine}_$encoded")
+            if (entry.engine == BrowserEngineType.CEFRIUM) {
+                add("site_ads_${engine}_$encoded")
+                add(cefriumSitePermissionsKey(entry.origin))
+            } else if (entry.engine == BrowserEngineType.GECKOVIEW) {
+                prefs.all.keys.filter {
+                    it.startsWith("site_permission_geckoview_") && it.endsWith("_$encoded")
+                }.forEach { add(it) }
+            }
         }
     }
 

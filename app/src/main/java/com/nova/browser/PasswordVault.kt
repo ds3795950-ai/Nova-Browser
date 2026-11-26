@@ -180,9 +180,9 @@ class PasswordVault(context: Context) {
         check(prefs.edit().remove(KEY_BLOB).remove(META_KEY).remove(TOMBSTONES_KEY).commit()) {
             "Could not clear password vault metadata"
         }
+        check(!vaultFile.exists() || vaultFile.delete()) { "Could not remove encrypted password vault file" }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (store.containsAlias(alias)) store.deleteEntry(alias)
-        check(!vaultFile.exists() || vaultFile.delete()) { "Could not remove encrypted password vault file" }
     }
 
     private fun serializeEntries(entries: List<Autocomplete.LoginEntry>): String = JSONArray().also { json ->

@@ -339,14 +339,16 @@ class CefriumBrowserEngine(
 
     override fun goBack() {
         checkOpen()
-        if (currentState.canGoBack && !applyHistoryDestinationSettings(-1)) {
+        if (currentState.canGoBack) {
+            applyHistoryDestinationSettings(-1)
             browser.goBack()
         }
     }
 
     override fun goForward() {
         checkOpen()
-        if (currentState.canGoForward && !applyHistoryDestinationSettings(1)) {
+        if (currentState.canGoForward) {
+            applyHistoryDestinationSettings(1)
             browser.goForward()
         }
     }
@@ -463,26 +465,15 @@ class CefriumBrowserEngine(
         browser.close()
     }
 
-    private fun applyHistoryDestinationSettings(offset: Int): Boolean {
+    private fun applyHistoryDestinationSettings(offset: Int) {
         val entries = runCatching { browser.getNavigationEntries() }.getOrNull().orEmpty()
         val currentIndex = entries.indexOfFirst { it.current }
-        if (currentIndex < 0) return false
-        val destination = entries.getOrNull(currentIndex + offset) ?: return false
-        val destinationUrl = destination.url ?: return false
-        // Only hand history entries to another engine when their method is explicitly GET.
-        // Unknown methods and POST entries stay in Cefrium so submitted data is never replayed as GET.
-        val method = navigationEntryMethod(destination)
-        if (method == "GET" && onEngineRoutingRequired(destinationUrl, method)) return true
+        if (currentIndex < 0) return
+        val destinationUrl = entries.getOrNull(currentIndex + offset)?.url ?: return
+        // cefrium-sdk 0.21.0 exposes URL/title/current for history entries, but no request method.
+        // Keep Back/Forward native rather than guessing GET and replaying a POST as a different request.
         applySiteSettingsForUrl(destinationUrl)
-        return false
     }
-
-    private fun navigationEntryMethod(entry: Any): String? = runCatching {
-        val getter = entry.javaClass.methods.firstOrNull {
-            it.parameterCount == 0 && it.name in setOf("getMethod", "getHttpMethod", "getRequestMethod")
-        }
-        (getter?.invoke(entry) as? String)?.uppercase()
-    }.getOrNull()
 
     private fun applySiteSettingsForUrl(url: String) {
         if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return

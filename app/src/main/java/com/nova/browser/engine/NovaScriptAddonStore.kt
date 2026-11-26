@@ -76,7 +76,11 @@ class NovaScriptAddonStore(context:android.content.Context) {
         val remaining = JSONArray()
         var found = false
         for (i in 0 until rows.length()) {
-            val row = rows.optJSONObject(i) ?: throw IllegalStateException("Add-on index contains an invalid entry")
+            val row = rows.optJSONObject(i)
+            if (row == null) {
+                remaining.put(rows.opt(i) ?: JSONObject.NULL)
+                continue
+            }
             if (row.optString("id") == id) found = true else remaining.put(row)
         }
         check(found) { "Add-on not found" }
