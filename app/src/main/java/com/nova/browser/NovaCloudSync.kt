@@ -228,7 +228,7 @@ class NovaCloudSync(context: Context) {
         vaultUpdatedAt = null
     }
 
-    fun downloadEncrypted(): NovaCloudDownload {
+    internal fun downloadEncrypted(): NovaCloudDownload {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
         val token = session.getString("access_token")
