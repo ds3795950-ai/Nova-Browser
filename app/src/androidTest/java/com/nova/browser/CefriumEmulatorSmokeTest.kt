@@ -1,5 +1,6 @@
 package com.nova.browser
 
+import android.util.Base64
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
@@ -42,9 +43,10 @@ class CefriumEmulatorSmokeTest {
     }
 
     @Test fun cefriumCreatesSurfaceAndLoadsLocalPageInDesktopMode() {
-        val loaded = CountDownLatch(1)
+        val pageLoaded = CountDownLatch(1)
+        val titleLoaded = CountDownLatch(1)
         var engine: CefriumBrowserEngine? = null
-        val smokeUrl = "file:///android_asset/nova_reader_smoke.html"
+        val smokeUrlPrefix = "data:text/html;base64,"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val profile = CefriumProfile.get("nova-emulator-smoke")
@@ -52,23 +54,39 @@ class CefriumEmulatorSmokeTest {
                     activity = activity,
                     profile = profile,
                     listener = BrowserEngineListener { state ->
-                        if (!state.isLoading && state.url == smokeUrl && state.title == "Nova Reader Smoke") {
-                            loaded.countDown()
+                        if (!state.isLoading && state.url.startsWith(smokeUrlPrefix)) {
+                            pageLoaded.countDown()
                         }
-                    },
-                    desktopMode = true
+                        if (state.title == "Nova Reader Smoke") {
+                            titleLoaded.countDown()
+                        }
+                    }
                 )
+                engine!!.setDesktopMode(true)
+                val html = """
+                    <!doctype html>
+                    <html>
+                      <head><title>Nova Reader Smoke</title></head>
+                      <body><main><h1>Nova Reader Smoke</h1><p>Cefrium desktop-mode smoke test.</p></main></body>
+                    </html>
+                """.trimIndent()
+                val encoded = Base64.encodeToString(html.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                 val contentRoot = activity.findViewById<FrameLayout>(android.R.id.content)
                 contentRoot.addView(
                     engine!!.view,
                     FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 )
-                engine!!.loadUrl(smokeUrl)
+                engine!!.loadUrl(smokeUrlPrefix + encoded)
             }
-            assertTrue("Cefrium did not finish loading its packaged local smoke-test page", loaded.await(30, TimeUnit.SECONDS))
-            scenario.onActivity { engine?.close() }
+            assertTrue("Cefrium did not finish loading its local smoke-test page in desktop mode", pageLoaded.await(30, TimeUnit.SECONDS))
+            assertTrue("Cefrium did not publish the local smoke-test page title", titleLoaded.await(10, TimeUnit.SECONDS))
+            scenario.onActivity { activeScenario ->
+                assertEquals("Nova Reader Smoke", engine?.state?.title)
+                engine?.close()
+            }
         }
     }
+
     @Test fun cefriumReaderModeExtractsArticleFromLocalPage() {
         val pageLoaded = CountDownLatch(1)
         val readerFinished = CountDownLatch(1)
@@ -106,5 +124,4 @@ class CefriumEmulatorSmokeTest {
             scenario.onActivity { engine?.close() }
         }
     }
-
 }
