@@ -118,19 +118,9 @@ object BrowserUrlResolver {
     private fun isNumericIpv4Candidate(label: String): Boolean {
         val value = label.lowercase(Locale.ROOT)
         if (value.all(Char::isDigit)) return true
-        val prefix = when {
-            value.startsWith("0x") -> "0x"
-            value.startsWith("0o") -> "0o"
-            value.startsWith("0b") -> "0b"
-            else -> return false
-        }
-        val digits = value.removePrefix(prefix)
-        if (digits.isEmpty()) return true
-        return when (prefix) {
-            "0x" -> digits.all { it in '0'..'9' || it in 'a'..'f' }
-            "0o" -> digits.all { it in '0'..'7' }
-            else -> digits.all { it == '0' || it == '1' }
-        }
+        if (!value.startsWith("0x")) return false
+        val digits = value.removePrefix("0x")
+        return digits.isEmpty() || digits.all { it in '0'..'9' || it in 'a'..'f' }
     }
 
     private fun validDnsLabel(label: String): Boolean =

@@ -43,7 +43,8 @@ internal data class NovaAiMessage(
     val role: String,
     val text: String,
     val time: Long = System.currentTimeMillis(),
-    val pageContextFingerprints: Set<String> = emptySet()
+    val pageContextFingerprints: Set<String> = emptySet(),
+    val hasPageContextProvenance: Boolean = true
 )
 
 /** Curated premium-tier model IDs are shown even when a provider omits them from
@@ -107,7 +108,7 @@ internal class NovaAiSecureStore(context:Context) {
                 val fingerprints = o.optJSONArray("pageContextFingerprints")?.let { values ->
                     (0 until values.length()).map { values.optString(it) }.filter { it.matches(Regex("[a-f0-9]{64}")) }.toSet()
                 }.orEmpty()
-                NovaAiMessage(role, text, o.optLong("time"), fingerprints)
+                NovaAiMessage(role, text, o.optLong("time"), fingerprints, o.has("pageContextFingerprints"))
             }.getOrNull()
         }.toMutableList()
     private fun serializeSessions(all:List<List<NovaAiMessage>>):String {
@@ -130,9 +131,13 @@ internal class NovaAiSecureStore(context:Context) {
             }
             recent.map { message ->
                 if (NOVA_AI_PAGE_CONTEXT_MARKER in message.text) pageContextSeen = true
-                val fingerprints = if (pageContextSeen && message.pageContextFingerprints.isEmpty())
+                val fingerprints = if (pageContextSeen && !message.hasPageContextProvenance && message.pageContextFingerprints.isEmpty())
                     setOf(LEGACY_PAGE_CONTEXT_FINGERPRINT) else message.pageContextFingerprints
-                message.copy(text = message.text.take(MAX_HISTORY_MESSAGE_CHARS), pageContextFingerprints = fingerprints)
+                message.copy(
+                    text = message.text.take(MAX_HISTORY_MESSAGE_CHARS),
+                    pageContextFingerprints = fingerprints,
+                    hasPageContextProvenance = true
+                )
             }.toMutableList()
         }.toMutableList()
         while(bounded.isNotEmpty() && serializeSessions(bounded).toByteArray(Charsets.UTF_8).size>MAX_HISTORY_BYTES) {
@@ -888,10 +893,12 @@ internal class NovaAiAssistantUi(
         if (requestMessages.size > maxLiveMessages) requestMessages.removeAt(0)
         render(user)
         if (persistHistory && !store.append(user)) notify("This turn is available in the current conversation, but Nova could not save it to encrypted history.")
+        val requestProvider = provider
+        val requestModel = model
         busy = true
-        status.text = "Thinking · " + provider.label + " · " + model
+        status.text = "Thinking · " + requestProvider.label + " · " + requestModel
         val requestGeneration = conversationGeneration
-        NovaAiApi.send(provider, key, model, requestHistory) { result ->
+        NovaAiApi.send(requestProvider, key, requestModel, requestHistory) { result ->
             if (requestGeneration != conversationGeneration) return@send
             if (dialog?.isShowing != true) return@send
             busy = false
@@ -905,11 +912,11 @@ internal class NovaAiAssistantUi(
                 if (requestMessages.size > maxLiveMessages) requestMessages.removeAt(0)
                 render(reply)
                 if (persistHistory && !store.append(reply)) notify("The reply is visible now, but Nova could not save it to encrypted history.")
-                status.text = provider.label + " · " + model
+                status.text = requestProvider.label + " · " + requestModel
             }.onFailure { failure ->
                 if (failure is NovaAiUsageLimitException) {
-                    status.text = "Usage limit reached · " + provider.label
-                    usageWarning.text = "⚠ " + model + " is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
+                    status.text = "Usage limit reached · " + requestProvider.label
+                    usageWarning.text = "⚠ " + requestModel + " is temporarily unavailable — usage limit reached. Try another model or wait for the limit to reset."
                     usageWarning.visibility = View.VISIBLE
                 } else {
                     status.text = "Request failed"

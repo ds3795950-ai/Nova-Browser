@@ -11,6 +11,14 @@ internal object NovaSyncSnapshotRepository {
     private fun prefs(context: Context) = context.getSharedPreferences("nova_local", Context.MODE_PRIVATE)
     private fun key(base: String, engine: BrowserEngineType) = EngineProfileStoragePolicy.key(base, engine)
 
+    private fun sanitizeHistory(source: JSONArray): JSONArray = JSONArray().also { out ->
+        for (i in 0 until source.length()) {
+            val item = source.optJSONObject(i) ?: continue
+            val safeUrl = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: continue
+            out.put(JSONObject(item.toString()).put("url", safeUrl))
+        }
+    }
+
     fun build(context: Context, searchEngine: String? = null): JSONObject {
         val p = prefs(context)
         val profiles = JSONObject()
@@ -28,15 +36,10 @@ internal object NovaSyncSnapshotRepository {
                 }
             }
             val historySource = readArray(p.getString(key("history_v2", engine), null))
-            val history = if (historySource != null) JSONArray().also { out ->
-                for (i in 0 until historySource.length()) {
-                    val item = historySource.optJSONObject(i) ?: continue
-                    val url = item.optString("url")
-                    if (url.startsWith("http://") || url.startsWith("https://")) out.put(item)
-                }
-            } else JSONArray().also { out ->
+            val history = if (historySource != null) sanitizeHistory(historySource) else JSONArray().also { out ->
                 (p.getStringSet(key("history", engine), emptySet()) ?: emptySet()).forEach { url ->
-                    if (url.startsWith("http://") || url.startsWith("https://")) out.put(JSONObject().put("url", url).put("title", Uri.parse(url).host ?: url).put("visitedAt", 0L))
+                    val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return@forEach
+                    out.put(JSONObject().put("url", safeUrl).put("title", Uri.parse(safeUrl).host ?: safeUrl).put("visitedAt", 0L))
                 }
             }
             val validatedWorkspaceEntries = linkedSetOf<String>()
@@ -70,10 +73,10 @@ internal object NovaSyncSnapshotRepository {
                     .put("url", url).put("title", Uri.parse(url).host ?: url).put("folder", "General").put("addedAt", 0L))
             }
         }
-        val globalHistory = readArray(p.getString("history_v2", null)) ?: JSONArray().also { out ->
+        val globalHistory = readArray(p.getString("history_v2", null))?.let(::sanitizeHistory) ?: JSONArray().also { out ->
             (p.getStringSet("history", emptySet()) ?: emptySet()).forEach { url ->
-                if (url.startsWith("http://") || url.startsWith("https://")) out.put(JSONObject()
-                    .put("url", url).put("title", Uri.parse(url).host ?: url).put("visitedAt", 0L))
+                val safeUrl = HistoryPolicy.sanitizeForStorage(url) ?: return@forEach
+                out.put(JSONObject().put("url", safeUrl).put("title", Uri.parse(safeUrl).host ?: safeUrl).put("visitedAt", 0L))
             }
         }
         val globalWorkspaces = linkedSetOf<String>()

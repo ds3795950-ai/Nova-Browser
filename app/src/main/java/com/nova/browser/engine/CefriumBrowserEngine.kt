@@ -470,6 +470,8 @@ class CefriumBrowserEngine(
         val currentIndex = entries.indexOfFirst { it.current }
         if (currentIndex < 0) return
         val destinationUrl = entries.getOrNull(currentIndex + offset)?.url ?: return
+        // cefrium-sdk 0.21.0 exposes URL/title/current for history entries, but no request method.
+        // Keep Back/Forward native rather than guessing GET and replaying a POST as a different request.
         applySiteSettingsForUrl(destinationUrl)
     }
 
@@ -512,14 +514,21 @@ class CefriumBrowserEngine(
             (() => {
               if (window.top !== window || /Android|Mobile|iPhone|iPad/i.test(navigator.userAgent)) return;
               const apply = () => {
-                document.querySelectorAll('meta[name="viewport"]').forEach(node => node.remove());
-                if (document.head && !document.querySelector('meta[name="viewport"][data-nova-desktop]')) {
-                  const meta = document.createElement('meta');
-                  meta.name = 'viewport';
-                  meta.content = 'width=1280';
-                  meta.setAttribute('data-nova-desktop', 'true');
-                  document.head.appendChild(meta);
+                const head = document.head;
+                if (!head) return;
+                const desired = document.querySelector('meta[name="viewport"][data-nova-desktop]');
+                const viewports = Array.from(document.querySelectorAll('meta[name="viewport"]'));
+                if (desired && desired.content === 'width=1280' && viewports.length === 1) return;
+                viewports.forEach(node => { if (node !== desired) node.remove(); });
+                if (desired) {
+                  desired.content = 'width=1280';
+                  return;
                 }
+                const meta = document.createElement('meta');
+                meta.name = 'viewport';
+                meta.content = 'width=1280';
+                meta.setAttribute('data-nova-desktop', 'true');
+                head.appendChild(meta);
               };
               new MutationObserver(apply).observe(document, { childList: true, subtree: true });
               apply();

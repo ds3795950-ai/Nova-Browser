@@ -36,3 +36,18 @@ internal fun Window.useLightSystemBarIcons() {
         decorView.systemUiVisibility = flags
     }
 }
+
+
+/** Dark icons for status/navigation bars drawn over a light background. */
+@Suppress("DEPRECATION")
+internal fun Window.useDarkSystemBarIcons() {
+    if (Build.VERSION.SDK_INT >= 30) {
+        val appearance = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        insetsController?.setSystemBarsAppearance(appearance, appearance)
+    } else {
+        var flags = decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        if (Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        decorView.systemUiVisibility = flags
+    }
+}
