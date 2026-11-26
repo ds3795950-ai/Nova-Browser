@@ -1,6 +1,5 @@
 package com.nova.browser
 
-import android.util.Base64
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
@@ -45,6 +44,7 @@ class CefriumEmulatorSmokeTest {
     @Test fun cefriumCreatesSurfaceAndLoadsLocalPageInDesktopMode() {
         val loaded = CountDownLatch(1)
         var engine: CefriumBrowserEngine? = null
+        val smokeUrl = "file:///android_asset/nova_reader_smoke.html"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val profile = CefriumProfile.get("nova-emulator-smoke")
@@ -52,20 +52,18 @@ class CefriumEmulatorSmokeTest {
                     activity = activity,
                     profile = profile,
                     listener = BrowserEngineListener { state ->
-                        if (!state.isLoading && state.url?.startsWith("data:text/html") == true) loaded.countDown()
+                        if (!state.isLoading && state.url == smokeUrl) loaded.countDown()
                     }
                 )
                 engine!!.setDesktopMode(true)
-                val html = "<!doctype html><html><body><article><h1>Nova smoke test</h1><p>Cefrium is rendering.</p></article></body></html>"
-                val encoded = Base64.encodeToString(html.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                 val contentRoot = activity.findViewById<FrameLayout>(android.R.id.content)
                 contentRoot.addView(
                     engine!!.view,
                     FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 )
-                engine!!.loadUrl("data:text/html;base64," + encoded)
+                engine!!.loadUrl(smokeUrl)
             }
-            assertTrue("Cefrium did not finish loading its local smoke-test page", loaded.await(30, TimeUnit.SECONDS))
+            assertTrue("Cefrium did not finish loading its packaged local smoke-test page", loaded.await(30, TimeUnit.SECONDS))
             scenario.onActivity { engine?.close() }
         }
     }
