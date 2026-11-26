@@ -1486,7 +1486,7 @@ class MainActivity : ComponentActivity() {
             handleCefriumRendererTermination(tab, rendererTermination)
             return
         }
-        if (!state.isLoading && state.progress >= 100 && state.title.isNotBlank()) {
+        if (!state.isLoading && state.progress >= 100 && !state.title.isNullOrBlank()) {
             resetRendererRecoveryAfterNextPaint(tab)
         }
         val previousUrl = tab.lastUrl
