@@ -116,8 +116,9 @@ val prepare1VpnAssets by tasks.registering {
         val outputDir = generated1VpnDir.get().asFile
         delete(outputDir)
         outputDir.mkdirs()
-        val archive = File(temporaryDir, "1vpn-4.2.2.xpi")
-        val xpiConnection = URL("https://addons.mozilla.org/firefox/downloads/latest/1vpn/latest.xpi").openConnection().apply {
+        // Mozilla Add-ons 1VPN 4.2.3 (file 5312319), verified against the upstream XPI.
+        val archive = File(temporaryDir, "1vpn-4.2.3.xpi")
+        val xpiConnection = URL("https://addons.mozilla.org/firefox/downloads/file/5312319/1vpn-4.2.3.xpi").openConnection().apply {
             connectTimeout = 20_000
             readTimeout = 60_000
         }
@@ -127,8 +128,9 @@ val prepare1VpnAssets by tasks.registering {
         val sha256 = MessageDigest.getInstance("SHA-256")
             .digest(archive.readBytes())
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        check(sha256 == "112c58e7b7f283e01d0efaee1fb03cee673839588b2b6399a4dc075794c1f302") {
-            "The 1VPN add-on package changed. Review the upstream release and update the pinned SHA-256."
+        val expectedSha256 = "3c62a3ed119e2be1a965d51fd59aca3afd68684cfa80bc2bef229a15e3ba8ead"
+        check(sha256 == expectedSha256) {
+            "The pinned 1VPN 4.2.3 package changed. Verify the upstream AMO release and update the version and SHA-256."
         }
         ZipInputStream(archive.inputStream()).use { zip ->
             while (true) {
