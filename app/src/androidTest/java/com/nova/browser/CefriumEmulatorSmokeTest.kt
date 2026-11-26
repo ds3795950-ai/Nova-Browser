@@ -52,7 +52,9 @@ class CefriumEmulatorSmokeTest {
                     activity = activity,
                     profile = profile,
                     listener = BrowserEngineListener { state ->
-                        if (!state.isLoading && state.url == smokeUrl) loaded.countDown()
+                        if (!state.isLoading && state.url == smokeUrl && state.title == "Nova Reader Smoke") {
+                            loaded.countDown()
+                        }
                     }
                 )
                 engine!!.setDesktopMode(true)
