@@ -41,8 +41,7 @@ internal object NovaSyncSnapshotRepository {
             }
             val validatedWorkspaceEntries = linkedSetOf<String>()
             (p.getStringSet(key("saved_workspaces", engine), emptySet()) ?: emptySet()).sorted().forEach { raw ->
-                val candidate = runCatching { JSONObject(raw).toString() }.getOrNull()
-                    ?: return@forEach
+                val candidate = NovaWorkspaceStoragePolicy.normalize(raw) ?: return@forEach
                 val next = validatedWorkspaceEntries + candidate
                 if (runCatching { NovaWorkspaceStoragePolicy.serialize(next) }.isSuccess) {
                     validatedWorkspaceEntries.add(candidate)
@@ -79,7 +78,7 @@ internal object NovaSyncSnapshotRepository {
         }
         val globalWorkspaces = linkedSetOf<String>()
         (p.getStringSet("saved_workspaces", emptySet()) ?: emptySet()).sorted().forEach { raw ->
-            val candidate = runCatching { JSONObject(raw).toString() }.getOrNull() ?: return@forEach
+            val candidate = NovaWorkspaceStoragePolicy.normalize(raw) ?: return@forEach
             val next = globalWorkspaces + candidate
             if (runCatching { NovaWorkspaceStoragePolicy.serialize(next) }.isSuccess) globalWorkspaces.add(candidate)
         }
@@ -136,7 +135,8 @@ internal object NovaSyncSnapshotRepository {
                     "Cloud workspace belongs to a different browser engine"
                 }
             }
-            entries.add(item.toString())
+            // The engine envelope is provenance, not part of the bounded workspace payload.
+            entries.add(JSONObject(item.toString()).apply { remove("engine") }.toString())
         }
         NovaWorkspaceStoragePolicy.serialize(entries)
         val rawTombstones = profile.opt("workspace_tombstones")
@@ -168,20 +168,24 @@ internal object NovaSyncSnapshotRepository {
                 val clearedAt = profile.optLong("history_cleared_at", 0L)
                 val history = profile.optJSONArray("history") ?: JSONArray()
                 val safeHistory = (0 until history.length()).mapNotNull { history.optJSONObject(it) }
-                    .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && (clearedAt <= 0L || it.optLong("visitedAt") > clearedAt) }
+                    .mapNotNull { item ->
+                        val safeUrl = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: return@mapNotNull null
+                        JSONObject(item.toString()).put("url", safeUrl)
+                    }
+                    .filter { clearedAt <= 0L || it.optLong("visitedAt") > clearedAt }
                     .sortedByDescending { it.optLong("visitedAt") }.take(500)
                 val historyArray = JSONArray().also { array -> safeHistory.forEach(array::put) }
                 val workspaceEntries = linkedSetOf<String>()
                 val workspaceArray = profile.optJSONArray("workspaces") ?: JSONArray()
                 for (i in 0 until workspaceArray.length()) {
                     val item = workspaceArray.getJSONObject(i)
-                    if (item.optString("engine") == engine.name) {
+                    if (!item.has("engine") || item.optString("engine") == engine.name) {
                         workspaceEntries.add(JSONObject(item.toString()).apply { remove("engine") }.toString())
                     }
                 }
-                val workspaces = NovaWorkspaceStoragePolicy.parse(
-                    NovaWorkspaceStoragePolicy.serialize(workspaceEntries)
-                ).toMutableSet()
+                val localWorkspaces = p.getStringSet(key("saved_workspaces", engine), emptySet()) ?: emptySet()
+                val workspaceTombstones = profile.optJSONObject("workspace_tombstones") ?: JSONObject()
+                val workspaces = NovaWorkspaceStoragePolicy.merge(localWorkspaces, workspaceEntries, workspaceTombstones)
                 val folders = profile.optJSONArray("bookmark_folders").toStringSet()
                 editor.putString(key("bookmarks_v2", engine), safeBookmarks.toString())
                     .putStringSet(key("bookmarks", engine), urls)
@@ -208,11 +212,18 @@ internal object NovaSyncSnapshotRepository {
             val clearedAt = global.optLong("history_cleared_at", 0L)
             val history = global.optJSONArray("history") ?: JSONArray()
             val safeHistory = (0 until history.length()).mapNotNull { history.optJSONObject(it) }
-                .filter { (it.optString("url").startsWith("http://") || it.optString("url").startsWith("https://")) && (clearedAt <= 0L || it.optLong("visitedAt") > clearedAt) }
+                .mapNotNull { item ->
+                    val safeUrl = HistoryPolicy.sanitizeForStorage(item.optString("url")) ?: return@mapNotNull null
+                    JSONObject(item.toString()).put("url", safeUrl)
+                }
+                .filter { clearedAt <= 0L || it.optLong("visitedAt") > clearedAt }
                 .sortedByDescending { it.optLong("visitedAt") }.take(500)
             val workspaceEntries = linkedSetOf<String>()
-            val workspaces = global.optJSONArray("workspaces") ?: JSONArray()
-            for (i in 0 until workspaces.length()) workspaces.optJSONObject(i)?.let { workspaceEntries.add(it.toString()) }
+            val incomingWorkspaces = global.optJSONArray("workspaces") ?: JSONArray()
+            for (i in 0 until incomingWorkspaces.length()) incomingWorkspaces.optJSONObject(i)?.let { workspaceEntries.add(it.toString()) }
+            val localWorkspaces = p.getStringSet("saved_workspaces", emptySet()) ?: emptySet()
+            val workspaceTombstones = global.optJSONObject("workspace_tombstones") ?: JSONObject()
+            val mergedWorkspaces = NovaWorkspaceStoragePolicy.merge(localWorkspaces, workspaceEntries, workspaceTombstones)
             val folders = global.optJSONArray("bookmark_folders").toStringSet()
             editor.putString("bookmarks_v2", safeBookmarks.toString())
                 .putStringSet("bookmarks", bookmarkUrls)
@@ -221,7 +232,7 @@ internal object NovaSyncSnapshotRepository {
                 .putLong("history_cleared_at", clearedAt)
                 .putString("history_v2", JSONArray().also { array -> safeHistory.forEach(array::put) }.toString())
                 .putStringSet("history", safeHistory.map { it.optString("url") }.toSet())
-                .putStringSet("saved_workspaces", NovaWorkspaceStoragePolicy.parse(NovaWorkspaceStoragePolicy.serialize(workspaceEntries)))
+                .putStringSet("saved_workspaces", mergedWorkspaces)
                 .putStringSet("bookmark_folders", folders)
         }
         val settings = snapshot.optJSONObject("settings") ?: JSONObject()

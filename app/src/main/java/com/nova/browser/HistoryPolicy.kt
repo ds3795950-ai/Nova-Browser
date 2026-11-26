@@ -49,7 +49,7 @@ internal object HistoryPolicy {
         now: Long,
         dedupeWindowMs: Long = 2_000L
     ): Boolean {
-        if (lastUrl != nextUrl) return true
+        if (lastUrl != nextUrl || now < lastVisitedAt) return true
         return now - lastVisitedAt >= dedupeWindowMs.coerceAtLeast(0L)
     }
 

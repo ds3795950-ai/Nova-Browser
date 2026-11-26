@@ -80,4 +80,21 @@ class NovaWorkspaceStoragePolicyTest {
         entry.getJSONArray("tabs").getJSONObject(0).put("url", "https://example.com/callback?state=" + "x".repeat(4096))
         assertEquals(1, NovaWorkspaceStoragePolicy.parse(NovaWorkspaceStoragePolicy.serialize(setOf(entry.toString()))).size)
     }
+
+    @Test fun normalizesLongWorkspaceTitlesAndPreservesLocalEntries() {
+        val longTitle = JSONObject(workspace("Local"))
+        longTitle.getJSONArray("tabs").getJSONObject(0).put("title", "x".repeat(NovaWorkspaceStoragePolicy.MAX_TITLE_LENGTH + 100))
+        val normalized = NovaWorkspaceStoragePolicy.normalize(longTitle.toString())!!
+        assertEquals(NovaWorkspaceStoragePolicy.MAX_TITLE_LENGTH,
+            JSONObject(normalized).getJSONArray("tabs").getJSONObject(0).getString("title").length)
+        val merged = NovaWorkspaceStoragePolicy.merge(setOf(longTitle.toString()), emptySet(), JSONObject())
+        assertEquals(1, merged.size)
+        assertEquals("Local", JSONObject(merged.first()).getString("name"))
+    }
+
+    @Test fun workspaceTombstoneStillWinsOverLocalPreservation() {
+        val local = workspace("Deleted")
+        val tombstones = JSONObject().put("Deleted", 11L)
+        assertEquals(emptySet<String>(), NovaWorkspaceStoragePolicy.merge(setOf(local), emptySet(), tombstones))
+    }
 }

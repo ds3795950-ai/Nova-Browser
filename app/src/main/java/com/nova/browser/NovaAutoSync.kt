@@ -105,6 +105,7 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
     override fun doWork(): Result {
         val prefs = applicationContext.getSharedPreferences("nova_local", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("cloud_sync_enabled", false)) return Result.success()
+        val syncGeneration = prefs.getLong("cloud_sync_generation", 0L)
         val passphrase = try { AutoSyncPassphraseStore.load(applicationContext) } catch (error: Exception) {
             prefs.edit().putString("cloud_sync_last_error", "Saved sync key unavailable; run Sync now again").apply()
             return Result.failure()
@@ -132,27 +133,45 @@ class NovaAutoSyncWorker(context: Context, params: WorkerParameters) : Worker(co
             val mergedVault = PasswordVault.mergeSyncBundles(localVault, remoteVault)
             // Validate the exact union before uploading or mutating either local collection.
             NovaSyncSnapshotRepository.validate(merged)
-            vault.validateSyncBundle(mergedVault)
+            vault.validateSyncBundle(mergedVault, allowLegacyImport = true)
             cloud.uploadEncrypted(userId, CloudCrypto.encrypt(merged.toString(), passphrase), CloudCrypto.encrypt(mergedVault.toString(), passphrase))
             val applyResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
             val applyLatch = java.util.concurrent.CountDownLatch(1)
+            val applyGate = Any()
+            var applyCancelled = false
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                try {
-                    if (!NovaJsonEquality.areEqual(NovaSyncSnapshotRepository.build(applicationContext), localSnapshot)) {
-                        applyResult.set(false)
-                    } else if (!vault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
-                        applyResult.set(false)
+                synchronized(applyGate) {
+                    if (applyCancelled) {
+                        applyLatch.countDown()
                     } else {
-                        NovaSyncSnapshotRepository.apply(applicationContext, merged)
-                        applyResult.set(true)
+                        try {
+                            if (!prefs.getBoolean("cloud_sync_enabled", false) ||
+                                prefs.getString("cloud_sync_user_id", null) != userId ||
+                                prefs.getLong("cloud_sync_generation", 0L) != syncGeneration ||
+                                cloud.signedInUserId() != userId) {
+                                applyResult.set(false)
+                            } else if (!NovaJsonEquality.areEqual(NovaSyncSnapshotRepository.build(applicationContext), localSnapshot)) {
+                                applyResult.set(false)
+                            } else if (!vault.importSyncBundleIfUnchanged(localVault, mergedVault)) {
+                                applyResult.set(false)
+                            } else {
+                                NovaSyncSnapshotRepository.apply(applicationContext, merged)
+                                applyResult.set(true)
+                            }
+                        } catch (_: Exception) {
+                            applyResult.set(false)
+                        } finally {
+                            applyLatch.countDown()
+                        }
                     }
-                } catch (_: Exception) {
-                    applyResult.set(false)
-                } finally {
-                    applyLatch.countDown()
                 }
             }
-            if (!applyLatch.await(30, TimeUnit.SECONDS) || applyResult.get() != true) {
+            val applyCompleted = applyLatch.await(30, TimeUnit.SECONDS)
+            if (!applyCompleted) synchronized(applyGate) { applyCancelled = true }
+            if (applyResult.get() != true) {
+                if (!prefs.getBoolean("cloud_sync_enabled", false) ||
+                    prefs.getString("cloud_sync_user_id", null) != userId ||
+                    prefs.getLong("cloud_sync_generation", 0L) != syncGeneration) return Result.success()
                 prefs.edit().putString("cloud_sync_last_error", "Local browser data or passwords changed during sync; local edits were preserved. Sync again.").apply()
                 return Result.retry()
             }

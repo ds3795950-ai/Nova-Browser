@@ -89,7 +89,7 @@ object CefriumVpnController {
         val rtcProtected = runCatching { profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DISABLE_NON_PROXIED_UDP) }.getOrDefault(false)
         runCatching {
             profile.setProxyErrorListener { _, _, error, mainFrame ->
-                if (mainFrame) publish("1VPN proxy unavailable (error " + error + "); direct fallback is disabled")
+                if (enabled && mainFrame) publish("1VPN proxy unavailable (error " + error + "); direct fallback is disabled")
             }
         }
         return ProfileApplyResult(config != null && requestedProxyApplied, requestedProxyApplied || failClosedApplied, rtcProtected)

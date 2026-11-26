@@ -22,9 +22,11 @@ import javax.crypto.spec.PBEKeySpec
 internal object CloudCrypto {
     private const val ITERATIONS = 310_000
     private const val KEY_BITS = 256
-    private const val MAX_PLAINTEXT_BYTES = 16 * 1024 * 1024
-    private const val MAX_CIPHERTEXT_BYTES = MAX_PLAINTEXT_BYTES + 16
-    private const val MAX_CIPHERTEXT_B64_CHARS = ((MAX_CIPHERTEXT_BYTES + 2) / 3) * 4
+    // New uploads stay at 16 MiB; older releases could create backups up to 32 MiB.
+    private const val MAX_WRITE_PLAINTEXT_BYTES = 16 * 1024 * 1024
+    private const val MAX_READ_PLAINTEXT_BYTES = 32 * 1024 * 1024
+    private const val MAX_READ_CIPHERTEXT_BYTES = MAX_READ_PLAINTEXT_BYTES + 16
+    private const val MAX_CIPHERTEXT_B64_CHARS = ((MAX_READ_CIPHERTEXT_BYTES + 2) / 3) * 4
     private fun utf8ByteCount(value: String, stopAfter: Int): Int {
         var total = 0
         var index = 0
@@ -45,7 +47,9 @@ internal object CloudCrypto {
         return total
     }
     internal fun isPlaintextWithinLimit(value: String): Boolean =
-        utf8ByteCount(value, MAX_PLAINTEXT_BYTES) <= MAX_PLAINTEXT_BYTES
+        utf8ByteCount(value, MAX_WRITE_PLAINTEXT_BYTES) <= MAX_WRITE_PLAINTEXT_BYTES
+    private fun isLegacyPlaintextWithinLimit(value: String): Boolean =
+        utf8ByteCount(value, MAX_READ_PLAINTEXT_BYTES) <= MAX_READ_PLAINTEXT_BYTES
     internal fun isCiphertextWithinLimit(encodedLength: Int): Boolean =
         encodedLength in 1..MAX_CIPHERTEXT_B64_CHARS
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
@@ -53,7 +57,7 @@ internal object CloudCrypto {
 
     fun encrypt(plainText: String, passphrase: CharArray): JSONObject {
         require(passphrase.size >= 10) { "Choose a sync passphrase with at least 10 characters" }
-        require(isPlaintextWithinLimit(plainText)) { "Encrypted backup exceeds the 16 MiB limit" }
+        require(isPlaintextWithinLimit(plainText)) { "New encrypted backups are limited to 16 MiB" }
         val plaintextBytes = plainText.toByteArray(Charsets.UTF_8)
         val random = SecureRandom()
         val salt = ByteArray(16).also(random::nextBytes)
@@ -81,18 +85,20 @@ internal object CloudCrypto {
         val ivText = envelope.getString("iv")
         val ciphertextText = envelope.getString("ciphertext")
         require(saltText.length <= 24 && ivText.length <= 16) { "Invalid encrypted backup" }
-        require(isCiphertextWithinLimit(ciphertextText.length)) { "Encrypted backup exceeds the 16 MiB limit" }
+        require(isCiphertextWithinLimit(ciphertextText.length)) { "Encrypted backup exceeds the 32 MiB legacy read limit" }
         val salt = unb64(saltText)
         val iv = unb64(ivText)
         val ciphertext = unb64(ciphertextText)
-        require(salt.size == 16 && iv.size == 12 && ciphertext.size in 16..MAX_CIPHERTEXT_BYTES) { "Invalid encrypted backup" }
+        require(salt.size == 16 && iv.size == 12 && ciphertext.size in 16..MAX_READ_CIPHERTEXT_BYTES) { "Invalid encrypted backup" }
         val spec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
         val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
         spec.clearPassword()
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            val plaintext = String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            require(isLegacyPlaintextWithinLimit(plaintext)) { "Decrypted backup exceeds the 32 MiB legacy read limit" }
+            plaintext
         } finally { keyBytes.fill(0) }
     }
 }
@@ -172,14 +178,19 @@ class NovaCloudSync(context: Context) {
     }
 
     /** Ask Supabase to send a password-recovery link without revealing whether the email exists. */
-    fun requestPasswordReset(email: String) {
+    fun requestPasswordReset(email: String): Boolean {
         val clean = email.trim().lowercase()
         require(clean.length <= 254 && android.util.Patterns.EMAIL_ADDRESS.matcher(clean).matches()) {
             "Enter a valid email address"
         }
-        // Always present the same user-facing outcome to avoid account enumeration.
-        runCatching { request("POST", "/auth/v1/recover", JSONObject().put("email", clean).toString()) }
-            .onFailure { android.util.Log.w("NovaCloudSync", "Password recovery request failed", it) }
+        // The result reports transport acceptance only; it never reveals whether the account exists.
+        return runCatching {
+            request("POST", "/auth/v1/recover", JSONObject().put("email", clean).toString())
+            true
+        }.getOrElse {
+            android.util.Log.w("NovaCloudSync", "Password recovery request failed", it)
+            false
+        }
     }
 
     private fun persistSessionFromAuthResponse(raw: String) {

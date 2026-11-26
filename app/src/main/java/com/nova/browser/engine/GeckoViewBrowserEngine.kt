@@ -135,6 +135,10 @@ class GeckoViewBrowserEngine(
         }
     }
 
+    fun markRendererTerminated() {
+        if (!closed) publish(currentState.copy(isLoading = false, error = "GeckoView renderer terminated"))
+    }
+
     override fun close() {
         if (closed) return
         detach()

@@ -26,7 +26,9 @@ class BrowserEnginePreferenceStore(private val preferences: SharedPreferences) {
         if (!preferences.edit().putString(KEY_PROFILE_NAME, next).commit()) {
             // SharedPreferences updates memory before reporting a disk-write failure. Restore the
             // old active identity immediately so retrying Clear cannot orphan the real profile.
-            preferences.edit().putString(KEY_PROFILE_NAME, previous).apply()
+            if (!preferences.edit().putString(KEY_PROFILE_NAME, previous).commit()) {
+                android.util.Log.e("NovaBrowser", "Could not durably restore the previous Cefrium profile identity")
+            }
             return null
         }
         return next

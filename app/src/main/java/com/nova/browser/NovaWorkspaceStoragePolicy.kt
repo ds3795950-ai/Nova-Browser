@@ -49,6 +49,45 @@ internal object NovaWorkspaceStoragePolicy {
         return result
     }
 
+    fun normalize(raw: String): String? = runCatching {
+        val workspace = JSONObject(raw)
+        workspace.remove("engine")
+        val name = workspace.optString("name").trim().take(MAX_NAME_LENGTH)
+        require(name.isNotBlank())
+        workspace.put("name", name)
+        val tabs = workspace.optJSONArray("tabs") ?: JSONArray()
+        for (i in 0 until tabs.length()) {
+            val tab = tabs.optJSONObject(i) ?: continue
+            (tab.opt("title") as? String)?.let { tab.put("title", it.take(MAX_TITLE_LENGTH)) }
+            (tab.opt("renamedTitle") as? String)?.let { tab.put("renamedTitle", it.take(MAX_TITLE_LENGTH)) }
+            (tab.opt("group") as? String)?.let { tab.put("group", it.take(MAX_NAME_LENGTH)) }
+        }
+        workspace.put("tabs", tabs)
+        workspace.toString().also { validateWorkspace(it) }
+    }.getOrNull()
+
+    /** Merge local and remote workspaces without allowing tombstoned or oversized entries to erase valid local data. */
+    fun merge(local: Set<String>, remote: Set<String>, tombstones: JSONObject): Set<String> {
+        val byName = linkedMapOf<String, JSONObject>()
+        (local + remote).forEach { raw ->
+            val normalized = normalize(raw) ?: return@forEach
+            val item = JSONObject(normalized)
+            val name = item.optString("name")
+            val createdAt = item.optLong("createdAt", 0L)
+            if (tombstones.optLong(name) >= createdAt && tombstones.optLong(name) > 0L) return@forEach
+            val previous = byName[name]
+            if (previous == null || createdAt >= previous.optLong("createdAt", 0L)) byName[name] = item
+        }
+        val result = linkedSetOf<String>()
+        byName.values.sortedByDescending { it.optLong("createdAt", 0L) }.forEach { item ->
+            if (result.size >= MAX_WORKSPACES) return@forEach
+            val raw = item.toString()
+            val candidate = result + raw
+            if (runCatching { serialize(candidate) }.isSuccess) result.add(raw)
+        }
+        return result
+    }
+
     fun validateTombstones(serialized: String): String {
         val tombstones = try {
             JSONObject(serialized)

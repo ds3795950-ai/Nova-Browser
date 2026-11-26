@@ -134,17 +134,19 @@ class PasswordVault(context: Context) {
         return Triple(entries, metadata, merged.optJSONObject("deleted") ?: JSONObject())
     }
 
-    @Synchronized fun validateSyncBundle(bundle: JSONObject) {
+    @Synchronized fun validateSyncBundle(bundle: JSONObject, allowLegacyImport: Boolean = false) {
         val entries = validatedSyncBundle(bundle).first
         val plaintextBytes = serializeEntries(entries).toByteArray(Charsets.UTF_8).size
-        require(plaintextBytes + PasswordVaultStoragePolicy.MIN_BLOB_BYTES <= PasswordVaultStoragePolicy.MAX_VAULT_BYTES) {
-            "Password vault data is too large to sync"
+        val maximum = if (allowLegacyImport) PasswordVaultStoragePolicy.MAX_LEGACY_VAULT_BYTES
+            else PasswordVaultStoragePolicy.MAX_VAULT_BYTES
+        require(plaintextBytes + PasswordVaultStoragePolicy.MIN_BLOB_BYTES <= maximum) {
+            "Password vault data exceeds the ${maximum / (1024 * 1024)} MiB sync limit"
         }
     }
 
-    @Synchronized fun importSyncBundle(bundle: JSONObject) {
+    @Synchronized fun importSyncBundle(bundle: JSONObject, allowLegacyImport: Boolean = false) {
         val (entries, metadata, tombstones) = validatedSyncBundle(bundle)
-        persist(entries)
+        persist(entries, allowLegacyImport = allowLegacyImport)
         prefs.edit().putString(META_KEY, metadata.toString())
             .putString(TOMBSTONES_KEY, tombstones.toString()).apply()
     }
@@ -152,7 +154,7 @@ class PasswordVault(context: Context) {
     /** Commit a downloaded merge only if the local vault still matches the snapshot uploaded. */
     @Synchronized fun importSyncBundleIfUnchanged(expectedLocal: JSONObject, merged: JSONObject): Boolean {
         if (!NovaJsonEquality.areEqual(exportSyncBundle(), expectedLocal)) return false
-        importSyncBundle(merged)
+        importSyncBundle(merged, allowLegacyImport = true)
         return true
     }
 
@@ -192,7 +194,8 @@ class PasswordVault(context: Context) {
     private fun persist(
         entries: List<Autocomplete.LoginEntry>,
         allowOverLimitReduction: Boolean = false,
-        allowOversizedReduction: Boolean = false
+        allowOversizedReduction: Boolean = false,
+        allowLegacyImport: Boolean = false
     ) {
         require(entries.size <= MAX_ENTRIES || allowOverLimitReduction) { "Password vault entry limit reached" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -200,7 +203,7 @@ class PasswordVault(context: Context) {
         val encrypted = cipher.doFinal(serializeEntries(entries).toByteArray(Charsets.UTF_8))
         val packed = cipher.iv + encrypted
         val existingSize = if (vaultFile.isFile) vaultFile.length() else 0L
-        require(PasswordVaultStoragePolicy.canWrite(packed.size, existingSize, allowOversizedReduction)) {
+        require(PasswordVaultStoragePolicy.canWrite(packed.size, existingSize, allowOversizedReduction, allowLegacyImport)) {
             "Password vault data is too large"
         }
         val temporary = File(vaultFile.parentFile, vaultFile.name + ".tmp")

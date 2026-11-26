@@ -28,4 +28,10 @@ class CefriumVpnStatusPolicyTest {
     @Test fun disablingReportsCleanupFailure() {
         assertTrue(CefriumVpnStatusPolicy.disabledStatus(false).contains("could not clear its proxy"))
     }
+    @Test fun mixedProfilesReportPartialFallback() {
+        val status = CefriumVpnStatusPolicy.enabledStatus(true, "India", 2, false, false, true)
+        assertTrue(status.contains("Proxy fallback is partial"))
+        assertTrue(status.contains("directly"))
+        assertFalse(status.contains("blocked by the fail-closed proxy"))
+    }
 }

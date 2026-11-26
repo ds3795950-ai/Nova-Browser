@@ -78,7 +78,10 @@ class GeckoViewWebCompatibilitySmokeTest {
                 assertTrue("GeckoView did not start the HTTPS navigation", began)
                 assertTrue("GeckoView did not finish loading the HTTPS origin", loaded)
                 assertTrue("GeckoView reported a failed HTTPS page load", pageLoadSucceeded)
-                assertTrue("GeckoView did not preserve the HTTPS URL", engine?.state?.url?.startsWith("https://") == true)
+                val observedUrl = engine?.state?.url.orEmpty()
+                val observedHost = runCatching { java.net.URI(observedUrl).host?.lowercase() }.getOrNull()
+                assertTrue("GeckoView did not finish on the expected example.com origin: $observedUrl",
+                    observedUrl.startsWith("https://") && observedHost in setOf("example.com", "www.example.com"))
             } finally {
                 scenario.onActivity { engine?.close() }
             }

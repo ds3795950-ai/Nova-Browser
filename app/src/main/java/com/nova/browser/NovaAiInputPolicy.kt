@@ -22,6 +22,8 @@ internal object NovaAiInputPolicy {
         reserveBytes: Int = 64 * 1024
     ): List<NovaAiMessage> {
         val recent = history.takeLast(20).map { it.copy(text = it.text.take(32_000)) }.toMutableList()
+        // The count cap can begin on an assistant answer whose user prompt was dropped.
+        while (recent.firstOrNull()?.role != "user" && recent.isNotEmpty()) recent.removeAt(0)
         val budget = (maxRequestBytes - reserveBytes).coerceAtLeast(1024)
         while (recent.size > 1 && serializedHistoryBytes(recent) > budget) {
             val nextUser = (1 until recent.size).firstOrNull { recent[it].role == "user" }

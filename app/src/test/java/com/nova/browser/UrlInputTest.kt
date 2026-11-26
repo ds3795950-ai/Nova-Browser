@@ -192,4 +192,21 @@ class UrlInputTest {
             BrowserUrlResolver.resolve("[::1]:+8080")
         )
     }
+
+    @Test fun unicodeIdnDotSeparatorStillRecognizesLocalHosts() {
+        assertEquals("http://printer。local", BrowserUrlResolver.resolve("printer。local"))
+    }
+
+    @Test fun hexadecimalIpv4CandidateFallsBackToSearch() {
+        assertEquals("https://www.google.com/search?q=example.0x10", BrowserUrlResolver.resolve("example.0x10"))
+    }
+
+    @Test fun octalAndBinaryIpv4CandidatesFallBackToSearch() {
+        assertEquals("https://www.google.com/search?q=example.0o10", BrowserUrlResolver.resolve("example.0o10"))
+        assertEquals("https://www.google.com/search?q=example.0b10", BrowserUrlResolver.resolve("example.0b10"))
+    }
+
+    @Test fun scopedIpv6LiteralFallsBackToSearch() {
+        assertEquals("https://www.google.com/search?q=%5Bfe80%3A%3A1%25wlan0%5D", BrowserUrlResolver.resolve("[fe80::1%wlan0]"))
+    }
 }

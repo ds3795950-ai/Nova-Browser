@@ -29,4 +29,20 @@ class NovaAiInputPolicyTest {
         assertTrue(NovaAiInputPolicy.serializedHistoryBytes(bounded) <= 284_000)
         assertEquals("latest prompt", bounded.last().text)
     }
+
+    @Test fun countLimitNeverLeavesAnAssistantAnswerWithoutItsUserTurn() {
+        val history = buildList {
+            repeat(10) { index ->
+                add(NovaAiMessage("user", "question $index"))
+                add(NovaAiMessage("assistant", "answer $index"))
+            }
+            add(NovaAiMessage("user", "question 10"))
+        }
+        val bounded = NovaAiInputPolicy.boundedHistory(history)
+        assertEquals("user", bounded.first().role)
+        assertEquals("question 1", bounded.first().text)
+        assertEquals("user", bounded.last().role)
+        assertEquals("question 10", bounded.last().text)
+        assertEquals(19, bounded.size)
+    }
 }

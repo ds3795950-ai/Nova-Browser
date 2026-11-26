@@ -34,7 +34,9 @@ object BrowserUrlResolver {
             } else {
                 authority
             }
-            val normalizedHost = host.removeSuffix(".").lowercase(Locale.ROOT)
+            val normalizedHost = runCatching {
+                IDN.toASCII(host.removeSuffix("."), IDN.USE_STD3_ASCII_RULES).lowercase(Locale.ROOT)
+            }.getOrDefault(host.removeSuffix(".").lowercase(Locale.ROOT))
             val local = normalizedHost == "localhost" ||
                 normalizedHost.endsWith(".local") ||
                 isPrivateIpv4(normalizedHost) ||
@@ -70,6 +72,7 @@ object BrowserUrlResolver {
                 if (port !in 1..65535) return false
             }
             val address = authority.substring(1, closingBracket)
+            if ('%' in address) return false
             return address.contains(':') &&
                 runCatching {
                     val parsed = InetAddress.getByName(address)
@@ -107,9 +110,27 @@ object BrowserUrlResolver {
         if (labels.any { !validDnsLabel(it) }) return false
         // WHATWG URL parsing treats a numeric final label as an IPv4 candidate.
         // If the full host did not pass strict IPv4 validation, search instead.
-        if (labels.last().all(Char::isDigit)) return false
+        if (isNumericIpv4Candidate(labels.last())) return false
         if (ascii.endsWith(".local")) return true
         return labels.size >= 2 && labels.last().length >= 2
+    }
+
+    private fun isNumericIpv4Candidate(label: String): Boolean {
+        val value = label.lowercase(Locale.ROOT)
+        if (value.all(Char::isDigit)) return true
+        val prefix = when {
+            value.startsWith("0x") -> "0x"
+            value.startsWith("0o") -> "0o"
+            value.startsWith("0b") -> "0b"
+            else -> return false
+        }
+        val digits = value.removePrefix(prefix)
+        if (digits.isEmpty()) return true
+        return when (prefix) {
+            "0x" -> digits.all { it in '0'..'9' || it in 'a'..'f' }
+            "0o" -> digits.all { it in '0'..'7' }
+            else -> digits.all { it == '0' || it == '1' }
+        }
     }
 
     private fun validDnsLabel(label: String): Boolean =
@@ -133,8 +154,10 @@ object BrowserUrlResolver {
 
     private fun isLocalIpLiteral(host: String): Boolean {
         if (!host.startsWith("[") || !host.endsWith("]")) return false
+        val literal = host.substring(1, host.length - 1)
+        if ('%' in literal) return false
         val address = runCatching {
-            InetAddress.getByName(host.substring(1, host.length - 1))
+            InetAddress.getByName(literal)
         }.getOrNull() ?: return false
         if (address is Inet4Address) return isPrivateIpv4(address.hostAddress)
         if (address !is Inet6Address) return false

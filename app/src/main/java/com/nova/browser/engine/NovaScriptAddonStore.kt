@@ -13,25 +13,26 @@ data class NovaScriptAddon(val id:String,val name:String,val allowedOriginRules:
 class NovaScriptAddonStore(context:android.content.Context) {
     private val root=File(context.filesDir,"nova_cefrium_addons").apply { mkdirs() }
     private val index=File(root,"index.json")
-    @Synchronized fun list():List<NovaScriptAddon> {
-        return runCatching {
-            val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader ->
-                JSONArray(reader.readText())
+    @Synchronized fun list():List<NovaScriptAddon> = runCatching { readIndexStrict() }.getOrDefault(emptyList())
+
+    /** Mutations must not replace a corrupt index with an incomplete, empty list. */
+    private fun readIndexStrict(): List<NovaScriptAddon> {
+        if (!index.exists()) return emptyList()
+        val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader -> JSONArray(reader.readText()) }
+        return buildList {
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: throw IllegalStateException("Add-on index contains an invalid entry")
+                val id = row.optString("id")
+                require(id.matches(Regex("[a-f0-9-]{36}"))) { "Add-on index contains an invalid ID" }
+                val file = File(root, "$id.js")
+                require(file.isFile && file.length() in 1..MAX_BYTES.toLong()) { "Add-on script is missing or invalid: $id" }
+                val origins = row.optJSONArray("origins") ?: throw IllegalStateException("Add-on origins are missing: $id")
+                val rules = (0 until origins.length()).map { origins.optString(it) }.filter { validOrigin(it) }.toSet()
+                require(rules.isNotEmpty()) { "Add-on has no valid allowed origins: $id" }
+                add(NovaScriptAddon(id, row.optString("name").take(64).ifBlank { "Nova Script Add-on" }, rules,
+                    file.readText(Charsets.UTF_8), row.optBoolean("enabled", false)))
             }
-            buildList<NovaScriptAddon> {
-                for(i in 0 until rows.length()) {
-                    val row=rows.optJSONObject(i)?:continue
-                    val id=row.optString("id")
-                    if(!id.matches(Regex("[a-f0-9-]{36}"))) continue
-                    val file=File(root,"$id.js")
-                    if(!file.isFile || file.length() !in 1..MAX_BYTES.toLong()) continue
-                    val a=row.optJSONArray("origins")?:continue
-                    val rules=(0 until a.length()).map{a.optString(it)}.filter{validOrigin(it)}.toSet()
-                    if(rules.isEmpty()) continue
-                    add(NovaScriptAddon(id,row.optString("name").take(64).ifBlank{"Nova Script Add-on"},rules,file.readText(Charsets.UTF_8),row.optBoolean("enabled",false)))
-                }
-            }
-        }.getOrDefault(emptyList())
+        }
     }
     fun enabled()=list().filter{it.enabled}
     @Synchronized fun add(name:String, originsText:String, script:String):NovaScriptAddon {
@@ -48,7 +49,7 @@ class NovaScriptAddonStore(context:android.content.Context) {
         scriptFile.writeText(script,Charsets.UTF_8)
         val item=NovaScriptAddon(id,clean,rules.toSet(),script,true)
         try {
-            writeIndex(list()+item)
+            writeIndex(readIndexStrict()+item)
         } catch (error: Exception) {
             scriptFile.delete()
             throw error
@@ -56,11 +57,11 @@ class NovaScriptAddonStore(context:android.content.Context) {
         return item
     }
     @Synchronized fun setEnabled(id:String,enabled:Boolean) {
-        val items=list(); require(items.any{it.id==id}){"Add-on not found"}
+        val items=readIndexStrict(); require(items.any{it.id==id}){"Add-on not found"}
         writeIndex(items.map{if(it.id==id)it.copy(enabled=enabled) else it})
     }
     @Synchronized fun remove(id:String) {
-        val items=list(); require(items.any{it.id==id}){"Add-on not found"}
+        val items=readIndexStrict(); require(items.any{it.id==id}){"Add-on not found"}
         writeIndex(items.filterNot{it.id==id})
         File(root,"$id.js").delete()
     }

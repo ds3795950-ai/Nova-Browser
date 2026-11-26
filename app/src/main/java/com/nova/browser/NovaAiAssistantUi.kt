@@ -36,7 +36,15 @@ internal enum class NovaAiProvider(val label: String, val defaultModel: String) 
     GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-3.8-flash"),
     KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat")
 }
-internal data class NovaAiMessage(val role:String,val text:String,val time:Long=System.currentTimeMillis())
+private const val NOVA_AI_PAGE_CONTEXT_MARKER = "--- Current webpage context (user attached) ---"
+private const val LEGACY_PAGE_CONTEXT_FINGERPRINT = "0000000000000000000000000000000000000000000000000000000000000000"
+
+internal data class NovaAiMessage(
+    val role: String,
+    val text: String,
+    val time: Long = System.currentTimeMillis(),
+    val pageContextFingerprints: Set<String> = emptySet()
+)
 
 /** Curated premium-tier model IDs are shown even when a provider omits them from
  * the account's model list. API model-list visibility is used as an availability
@@ -96,22 +104,36 @@ internal class NovaAiSecureStore(context:Context) {
                 if (role != "user" && role != "assistant") return@runCatching null
                 val text=o.getString("text")
                 if (text.length > MAX_HISTORY_MESSAGE_CHARS) return@runCatching null
-                NovaAiMessage(role,text,o.optLong("time"))
+                val fingerprints = o.optJSONArray("pageContextFingerprints")?.let { values ->
+                    (0 until values.length()).map { values.optString(it) }.filter { it.matches(Regex("[a-f0-9]{64}")) }.toSet()
+                }.orEmpty()
+                NovaAiMessage(role, text, o.optLong("time"), fingerprints)
             }.getOrNull()
         }.toMutableList()
     private fun serializeSessions(all:List<List<NovaAiMessage>>):String {
         val root=JSONObject(); val array=JSONArray()
         all.forEach { session ->
             val entries=JSONArray()
-            session.forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)) }
+            session.forEach { m -> entries.put(JSONObject().put("role",m.role).put("text",m.text).put("time",m.time)
+                .put("pageContextFingerprints", JSONArray(m.pageContextFingerprints.sorted()))) }
             array.put(entries)
         }
         root.put("sessions",array)
         return root.toString()
     }
-    private fun trimSessionsForStorage(all:List<List<NovaAiMessage>>):MutableList<MutableList<NovaAiMessage>> {
-        val bounded=all.takeLast(20).map { session ->
-            session.takeLast(100).map { it.copy(text=it.text.take(MAX_HISTORY_MESSAGE_CHARS)) }.toMutableList()
+    private fun trimSessionsForStorage(all: List<List<NovaAiMessage>>): MutableList<MutableList<NovaAiMessage>> {
+        val bounded = all.takeLast(20).map { session ->
+            val recent = session.takeLast(100)
+            val dropped = session.take((session.size - recent.size).coerceAtLeast(0))
+            var pageContextSeen = dropped.any {
+                it.pageContextFingerprints.isNotEmpty() || NOVA_AI_PAGE_CONTEXT_MARKER in it.text
+            }
+            recent.map { message ->
+                if (NOVA_AI_PAGE_CONTEXT_MARKER in message.text) pageContextSeen = true
+                val fingerprints = if (pageContextSeen && message.pageContextFingerprints.isEmpty())
+                    setOf(LEGACY_PAGE_CONTEXT_FINGERPRINT) else message.pageContextFingerprints
+                message.copy(text = message.text.take(MAX_HISTORY_MESSAGE_CHARS), pageContextFingerprints = fingerprints)
+            }.toMutableList()
         }.toMutableList()
         while(bounded.isNotEmpty() && serializeSessions(bounded).toByteArray(Charsets.UTF_8).size>MAX_HISTORY_BYTES) {
             if(bounded.size>1) bounded.removeAt(0)
@@ -155,12 +177,13 @@ internal class NovaAiSecureStore(context:Context) {
         val all=sessions()
         if(all.isEmpty() || all.last().isNotEmpty()) { all.add(mutableListOf()); saveSessions(all) }
     }
-    fun append(m:NovaAiMessage) {
-        val all=sessions()
-        if(all.isEmpty()) all.add(mutableListOf())
+    fun append(m: NovaAiMessage): Boolean = runCatching {
+        val all = sessions()
+        if (all.isEmpty()) all.add(mutableListOf())
         all.last().add(m)
         saveSessions(all)
-    }
+        true
+    }.getOrDefault(false)
     fun clear(): Boolean = p.edit().remove("history").commit()
 }
 
@@ -242,7 +265,11 @@ internal object NovaAiApi {
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
                 val id=if(p==NovaAiProvider.GEMINI)o.optString("name").removePrefix("models/") else o.optString("id")
                 id.takeIf{it.isNotBlank() && (p!=NovaAiProvider.GEMINI||o.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent")==true)}
-            }.filterNot { id -> p == NovaAiProvider.CHATGPT && id in setOf("gpt-5-pro", "o3-pro") }
+            }.filterNot { id -> p == NovaAiProvider.CHATGPT && (
+                id in setOf("gpt-5-pro", "o3-pro", "text-embedding-ada-002") ||
+                    id.startsWith("text-embedding-") || id.startsWith("whisper-") ||
+                    id.startsWith("dall-e-") || id.startsWith("tts-") || id.startsWith("omni-moderation-")
+                ) }
                 .distinct().sorted().also { ids ->
                     require(ids.isNotEmpty()) { "The provider returned no models supported by Nova" }
                 }
@@ -295,11 +322,15 @@ internal class NovaAiAssistantUi(
     private var displayedModelIds = listOf(model)
     private var changingModelSelection = false
     private val modelRefreshGeneration = mutableMapOf<NovaAiProvider, Long>()
-    private val pageContextTransferAllowedProviders = mutableSetOf<NovaAiProvider>()
+    private val pageContextTransferApprovals = mutableMapOf<NovaAiProvider, MutableSet<String>>()
+    private var attachedPageFingerprint: String? = null
+    private val requestMessages = mutableListOf<NovaAiMessage>()
     private val messageViews = mutableListOf<View>()
     private val maxLiveMessages = 100
     private val maxRenderedMessages = 40
-    private val pageContextMarker = "--- Current webpage context (user attached) ---"
+    private val pageContextMarker = NOVA_AI_PAGE_CONTEXT_MARKER
+    private fun pageFingerprint(page: String): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(page.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     private fun isPremiumModel(id: String) = id in NovaAiModelCatalog.premium(provider)
     private fun isModelLocked(id: String) = isPremiumModel(id) && id !in availableModelIds
@@ -562,13 +593,16 @@ internal class NovaAiAssistantUi(
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val nextProvider = NovaAiProvider.values()[position]
                 if (nextProvider == provider) return
-                val carriesPageText = attachedPageText != null || messages.any { pageContextMarker in it.text }
-                if (carriesPageText && nextProvider !in pageContextTransferAllowedProviders) {
+                val contextFingerprints = requestMessages.flatMap { it.pageContextFingerprints }.toMutableSet()
+                attachedPageFingerprint?.let(contextFingerprints::add)
+                val approved = pageContextTransferApprovals[nextProvider].orEmpty()
+                val missingApprovals = contextFingerprints.filterNot { it in approved }
+                if (missingApprovals.isNotEmpty()) {
                     AlertDialog.Builder(context)
                         .setTitle("Share webpage context?")
-                        .setMessage("This conversation contains text from a webpage attached while using " + provider.label + ". Allow Nova to include that text in requests to " + nextProvider.label + "?")
+                        .setMessage("This conversation contains text from one or more webpage snapshots. Allow Nova to include those exact snapshots in requests to " + nextProvider.label + "? New or changed page content will require a separate approval.")
                         .setPositiveButton("Allow transfer") { _, _ ->
-                            pageContextTransferAllowedProviders += nextProvider
+                            pageContextTransferApprovals.getOrPut(nextProvider) { mutableSetOf() }.addAll(missingApprovals)
                             switchProvider(nextProvider)
                         }
                         .setNegativeButton("Cancel") { _, _ -> providers.setSelection(provider.ordinal) }
@@ -599,12 +633,19 @@ internal class NovaAiAssistantUi(
         }
 
         if (persistHistory) {
-            // Page text is intentionally not replayed across sessions because the provider
-            // that originally received it may differ from the provider selected now.
-            messages += store.currentHistory().takeLast(maxLiveMessages).map { message ->
-                if (pageContextMarker in message.text) message.copy(text = message.text.substringBefore(pageContextMarker).trim())
-                else message
-            }.filter { it.text.isNotBlank() }
+            // Keep the full conversation visible in the archive, but do not replay page-derived
+            // turns to any provider after restore. Older records are also fenced from the first
+            // legacy page-context marker onward, even if they predate fingerprint metadata.
+            var legacyPageContextSeen = false
+            store.currentHistory().takeLast(maxLiveMessages).forEach { message ->
+                val hasLegacyMarker = pageContextMarker in message.text
+                if (hasLegacyMarker) legacyPageContextSeen = true
+                val archived = if (hasLegacyMarker) message.copy(text = message.text.substringBefore(pageContextMarker).trim()) else message
+                if (archived.text.isNotBlank()) messages += archived
+                if (!legacyPageContextSeen && message.pageContextFingerprints.isEmpty() && message.text.isNotBlank()) {
+                    requestMessages += message
+                }
+            }
             if (messages.isNotEmpty()) messages.forEach(::render)
         }
         if (messages.isEmpty()) showWelcome()
@@ -677,10 +718,11 @@ internal class NovaAiAssistantUi(
         conversationGeneration++
         busy = false
         messages.clear()
+        requestMessages.clear()
         messageViews.clear()
         attachedPageText = null
-        pageContextTransferAllowedProviders.clear()
-        pageContextTransferAllowedProviders += provider
+        attachedPageFingerprint = null
+        pageContextTransferApprovals.clear()
         contextChip.visibility = View.GONE
         feed.removeAllViews()
         showWelcome()
@@ -692,14 +734,17 @@ internal class NovaAiAssistantUi(
         attachedPageText = page?.take(24_000)
         if (attachedPageText.isNullOrBlank()) {
             attachedPageText = null
+            attachedPageFingerprint = null
             contextChip.visibility = View.GONE
             return
         }
-        pageContextTransferAllowedProviders += provider
+        attachedPageFingerprint = pageFingerprint(attachedPageText!!)
+        pageContextTransferApprovals.getOrPut(provider) { mutableSetOf() }.add(attachedPageFingerprint!!)
         contextChip.text = "▣ Current page attached · " + attachedPageText!!.length + " characters   ×"
         contextChip.visibility = View.VISIBLE
         contextChip.setOnClickListener {
             attachedPageText = null
+            attachedPageFingerprint = null
             contextChip.visibility = View.GONE
         }
     }
@@ -826,19 +871,23 @@ internal class NovaAiAssistantUi(
             prompt + "\n\n" + pageContextMarker + "\n" +
                 NovaAiInputPolicy.limitPageContext(attachedPageText!!) + "\n--- End webpage context ---"
         } else prompt
-        val user = NovaAiMessage("user", fullPrompt)
-        // Prepare the exact bounded history before clearing the composer or committing the turn.
+        val turnFingerprints = requestMessages.flatMap { it.pageContextFingerprints }.toMutableSet()
+        if (attachedPageText != null) attachedPageFingerprint?.let(turnFingerprints::add)
+        val user = NovaAiMessage("user", fullPrompt, pageContextFingerprints = turnFingerprints)
+        // Restored page-derived turns are intentionally excluded from requestMessages.
         val requestHistory = runCatching {
-            NovaAiInputPolicy.boundedHistory(messages + user, 512 * 1024)
+            NovaAiInputPolicy.boundedHistory(requestMessages + user, 512 * 1024)
         }.getOrElse {
             notify("This turn is too large for the provider request. Shorten the prompt or remove the attached page.")
             return
         }
         input.setText("")
         messages += user
+        requestMessages += user
         if (messages.size > maxLiveMessages) messages.removeAt(0)
+        if (requestMessages.size > maxLiveMessages) requestMessages.removeAt(0)
         render(user)
-        if (persistHistory) runCatching { store.append(user) }
+        if (persistHistory && !store.append(user)) notify("This turn is available in the current conversation, but Nova could not save it to encrypted history.")
         busy = true
         status.text = "Thinking · " + provider.label + " · " + model
         val requestGeneration = conversationGeneration
@@ -848,11 +897,14 @@ internal class NovaAiAssistantUi(
             busy = false
             result.onSuccess { answer ->
                 usageWarning.visibility = View.GONE
-                val reply = NovaAiMessage("assistant", answer)
+                val replyFingerprints = requestHistory.flatMap { it.pageContextFingerprints }.toSet()
+                val reply = NovaAiMessage("assistant", answer, pageContextFingerprints = replyFingerprints)
                 messages += reply
+                requestMessages += reply
                 if (messages.size > maxLiveMessages) messages.removeAt(0)
+                if (requestMessages.size > maxLiveMessages) requestMessages.removeAt(0)
                 render(reply)
-                if (persistHistory) runCatching { store.append(reply) }
+                if (persistHistory && !store.append(reply)) notify("The reply is visible now, but Nova could not save it to encrypted history.")
                 status.text = provider.label + " · " + model
             }.onFailure { failure ->
                 if (failure is NovaAiUsageLimitException) {
@@ -919,12 +971,13 @@ internal class NovaAiAssistantUi(
                 conversationGeneration++
                 busy = false
                 messages.clear()
+                requestMessages.clear()
                 messageViews.clear()
                 feed.removeAllViews()
                 attachedPageText = null
+                attachedPageFingerprint = null
                 contextChip.visibility = View.GONE
-                pageContextTransferAllowedProviders.clear()
-                pageContextTransferAllowedProviders += provider
+                pageContextTransferApprovals.clear()
                 showWelcome()
                 notify("Conversation history cleared")
             }

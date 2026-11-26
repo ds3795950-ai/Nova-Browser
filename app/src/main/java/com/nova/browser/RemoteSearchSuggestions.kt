@@ -76,7 +76,11 @@ internal object RemoteSearchSuggestions {
             if (!mayContinue()) return emptyList()
             val json = JSONArray(text)
             when (engine) {
-                "DuckDuckGo" -> List(json.length()) { i -> json.optJSONObject(i)?.optString("phrase").orEmpty() }
+                "DuckDuckGo" -> {
+                    val nested = json.optJSONArray(1)
+                    if (nested != null) List(nested.length()) { i -> nested.optString(i) }
+                    else json.optJSONArray("g")?.let { values -> List(values.length()) { i -> values.optJSONObject(i)?.optString("phrase").orEmpty() } }.orEmpty()
+                }
                 else -> json.optJSONArray(1)?.let { values -> List(values.length()) { i -> values.optString(i) } }.orEmpty()
             }.asSequence().map { it.trim() }.filter { it.isNotBlank() && it.length <= 256 }
                 .distinct().take(5).toList()

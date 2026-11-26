@@ -12,7 +12,6 @@ import java.net.URL
 import java.net.URI
 import java.security.MessageDigest
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /** Loads only the site's own HTTPS /favicon.ico; failed loads retain the local monogram. */
@@ -20,7 +19,9 @@ internal object ShortcutFaviconLoader {
     private const val MAX_BYTES = 512 * 1024
     private val executor = Executors.newSingleThreadExecutor()
     private val main by lazy { Handler(Looper.getMainLooper()) }
-    private val memory = ConcurrentHashMap<String, Bitmap>()
+    private val memory = object : android.util.LruCache<String, Bitmap>(4 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = maxOf(1, value.allocationByteCount)
+    }
 
     internal fun faviconUrl(pageUrl: String): String? {
         val uri = runCatching { URI(pageUrl) }.getOrNull() ?: return null
@@ -29,7 +30,9 @@ internal object ShortcutFaviconLoader {
         if (scheme !in setOf("http", "https") || uri.rawUserInfo != null) return null
         val port = uri.port
         if (port != -1 && port !in 1..65535) return null
-        // Preserve non-default HTTPS ports so the favicon request stays on the same origin.
+        // Only upgrade default-port HTTP. An HTTP service on :8080 is not the HTTPS
+        // application on :443; keep its monogram unless the shortcut is already HTTPS.
+        if (scheme == "http" && port != -1 && port != 80) return null
         val portSuffix = if (scheme == "https" && port != -1 && port != 443) ":$port" else ""
         return "https://$host$portSuffix/favicon.ico"
     }
@@ -37,10 +40,10 @@ internal object ShortcutFaviconLoader {
     fun load(context: Context, pageUrl: String, callback: (Bitmap?) -> Unit) {
         val favicon = faviconUrl(pageUrl) ?: return
         val key = sha256(favicon)
-        memory[key]?.let { callback(it); return }
+        memory.get(key)?.let { callback(it); return }
         executor.execute {
             val file = File(File(context.applicationContext.cacheDir, "shortcut-favicons"), "$key.png")
-            val bitmap = memory[key] ?: runCatching {
+            val bitmap = memory.get(key) ?: runCatching {
                 if (file.isFile) BitmapFactory.decodeFile(file.absolutePath) else null
             }.getOrNull() ?: download(favicon)?.also { decoded ->
                 runCatching {
@@ -48,7 +51,7 @@ internal object ShortcutFaviconLoader {
                     file.outputStream().use { decoded.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 }
             }
-            if (bitmap != null) memory[key] = bitmap
+            if (bitmap != null) memory.put(key, bitmap)
             main.post { callback(bitmap) }
         }
     }

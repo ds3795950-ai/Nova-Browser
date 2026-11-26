@@ -185,10 +185,13 @@ class NovaDownloadManager(
             }
             if (offset > 0 && (validator == null || worker.item.resourceUrl.isBlank())) { part.delete(); offset = 0 }
             var connection = openConnection(worker, offset, validator)
-            if (offset > 0 && connection.url.toString().take(8192) != worker.item.resourceUrl) {
+            var restartedFromZero = false
+            val finalResourceUrl = connection.url.toString()
+            if (offset > 0 && (finalResourceUrl.length >= 8192 || finalResourceUrl != worker.item.resourceUrl)) {
                 connection.disconnect()
                 part.delete()
                 offset = 0
+                restartedFromZero = true
                 connection = openConnection(worker, 0, null)
             }
             var code = connection.responseCode
@@ -197,6 +200,7 @@ class NovaDownloadManager(
                 connection.disconnect()
                 part.delete()
                 offset = 0
+                restartedFromZero = true
                 connection = openConnection(worker, 0, null)
                 code = connection.responseCode
             }
@@ -209,9 +213,10 @@ class NovaDownloadManager(
             } else if (offset > 0) {
                 part.delete()
                 offset = 0
+                restartedFromZero = true
             }
-            val etag = connection.getHeaderField("ETag") ?: worker.item.etag
-            val modified = connection.getHeaderField("Last-Modified") ?: worker.item.lastModified
+            val etag = connection.getHeaderField("ETag") ?: if (restartedFromZero || offset == 0L) null else worker.item.etag
+            val modified = connection.getHeaderField("Last-Modified") ?: if (restartedFromZero || offset == 0L) null else worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
             val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 && validator != null
             val total = when {

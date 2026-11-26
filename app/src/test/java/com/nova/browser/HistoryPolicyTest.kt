@@ -31,4 +31,8 @@ class HistoryPolicyTest {
         assertTrue(HistoryPolicy.shouldAppendVisit("https://example.com", 1_000L, "https://example.com", 3_000L))
         assertTrue(HistoryPolicy.shouldAppendVisit("https://example.com/a", 1_000L, "https://example.com/b", 1_001L))
     }
+
+    @Test fun clockRollbackDoesNotSuppressAVisit() {
+        assertTrue(HistoryPolicy.shouldAppendVisit("https://example.com", 20_000L, "https://example.com", 10_000L))
+    }
 }

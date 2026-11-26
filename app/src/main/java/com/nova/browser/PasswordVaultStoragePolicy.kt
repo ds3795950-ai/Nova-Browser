@@ -9,7 +9,13 @@ internal object PasswordVaultStoragePolicy {
 
     fun canRead(size: Int): Boolean = size in MIN_BLOB_BYTES..MAX_LEGACY_VAULT_BYTES
 
-    fun canWrite(packedSize: Int, existingSize: Long, allowReduction: Boolean): Boolean =
-        packedSize <= MAX_VAULT_BYTES || (allowReduction && existingSize > MAX_VAULT_BYTES &&
-            packedSize < existingSize && packedSize <= MAX_LEGACY_VAULT_BYTES)
+    fun canWrite(
+        packedSize: Int,
+        existingSize: Long,
+        allowReduction: Boolean,
+        allowLegacyImport: Boolean = false
+    ): Boolean = packedSize <= MAX_VAULT_BYTES ||
+        (allowReduction && existingSize > MAX_VAULT_BYTES && packedSize < existingSize &&
+            packedSize <= MAX_LEGACY_VAULT_BYTES) ||
+        (allowLegacyImport && packedSize <= MAX_LEGACY_VAULT_BYTES)
 }
