@@ -7070,9 +7070,43 @@ private fun showForgotPassword(prefillEmail: String = "") {
         applyFoldAwareLayout(separatingFold)
     }
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val activeFullscreenTab = fullscreenTabId?.let { id -> currentTab()?.id == id } == true
+        if (!BrowserPictureInPicturePolicy.shouldEnter(
+                apiLevel = Build.VERSION.SDK_INT,
+                isFullscreen = isFullscreen,
+                fullscreenTabIsActive = activeFullscreenTab,
+                alreadyInPictureInPicture = isInPictureInPictureMode
+            )) return
+        runCatching {
+            val params = android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(android.util.Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
+        }.onFailure {
+            android.util.Log.w("NovaBrowser", "Could not enter Picture-in-Picture", it)
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (!::topChrome.isInitialized || !::bottomToolbar.isInitialized) return
+        if (isInPictureInPictureMode) {
+            topChrome.visibility = View.GONE
+            bottomToolbar.visibility = View.GONE
+        } else if (isFullscreen) {
+            setBrowserFullscreen(true, tabs.firstOrNull { it.id == fullscreenTabId })
+        }
+    }
+
     override fun onPause() {
         cancelPendingRemoteSuggestions()
-        tabs.forEach { it.browserEngine?.onHostPause() }
+        // Keep the renderer alive while Android hosts fullscreen video in PiP.
+        if (!isInPictureInPictureMode) tabs.forEach { it.browserEngine?.onHostPause() }
         persistTabs()
         super.onPause()
     }
