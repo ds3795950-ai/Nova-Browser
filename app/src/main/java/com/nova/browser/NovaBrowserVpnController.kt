@@ -82,7 +82,7 @@ object NovaBrowserVpnController {
                                                     .putBoolean("nova_vpn_routing_ready", payload.optBoolean("routingReady", false))
                                                     .putBoolean("nova_tor_guest_configured", payload.has("torGuestMode"))
                                                     .putBoolean("nova_tor_guest_mode", payload.optBoolean("torGuestMode", false))
-                                                    .putBoolean("nova_tor_guest_proxy_ready", prefs.getBoolean("nova_tor_guest_enabled", false) && payload.optBoolean("torRoutingReady", false))
+                                                    .putBoolean("nova_tor_guest_proxy_ready", prefs.getBoolean("nova_tor_guest_enabled", false) && payload.optBoolean("torRoutingReady", false) && payload.optBoolean("routingReady", false))
                                                     .putString("nova_vpn_status", payload.optString("status", "Proxy backend ready"))
                                                     .apply()
                                                 statusListener?.invoke()

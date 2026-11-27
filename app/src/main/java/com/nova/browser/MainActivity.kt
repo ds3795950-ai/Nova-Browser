@@ -1757,6 +1757,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun activateTab(tab: BrowserTab) {
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) {
+            tab.needsReload = tab.lastUrl != HOME_URL
+            applyVpnRoutingReadiness()
+            if (currentTab() === tab) setPageStatus("1VPN is connecting · this tab will resume when protected routing is ready", 1)
+            return
+        }
         enforceCefriumCompatibility(tab)
         if (pendingGeckoDataClearActive && tab.engineType == BrowserEngineType.GECKOVIEW &&
             !tab.isPrivate && !tab.isGuest) {
@@ -1838,6 +1846,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadTabUrl(tab: BrowserTab, url: String) {
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) {
+            if (url != HOME_URL) {
+                tab.lastUrl = url
+                tab.needsReload = true
+            }
+            applyVpnRoutingReadiness()
+            if (currentTab() === tab) setPageStatus("1VPN is connecting · navigation will resume when protected routing is ready", 1)
+            return
+        }
         if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
             toast("Normal browsing is paused while Guest Tor is connecting, active, or disconnecting")
             return
@@ -1871,6 +1890,9 @@ class MainActivity : ComponentActivity() {
 
     private fun switchCurrentTabToGecko(reason: String) {
         val tab = currentTab() ?: return
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) return
         if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return
         if (tab.engineType != BrowserEngineType.CEFRIUM) return
         closeTabRuntime(tab)
@@ -2833,8 +2855,11 @@ class MainActivity : ComponentActivity() {
                 if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                         NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
                     )) {
+                    tab.lastUrl = request.uri
+                    tab.needsReload = request.uri != HOME_URL
                     runOnUiThread {
-                        if (currentTab()?.id == tab.id) setPageStatus("1VPN is not ready · navigation blocked until protected routing is restored", 1)
+                        applyVpnRoutingReadiness()
+                        if (currentTab()?.id == tab.id) setPageStatus("1VPN is not ready · navigation paused until protected routing is restored", 1)
                     }
                     return GeckoResult.deny()
                 }
@@ -3184,6 +3209,19 @@ class MainActivity : ComponentActivity() {
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
         val requestedTab = tabs[index]
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) {
+            applyVpnRoutingReadiness()
+            cancelPendingRemoteSuggestions()
+            activeIndex = index
+            requestedTab.needsReload = requestedTab.lastUrl != HOME_URL
+            if (!addressBar.hasFocus()) addressBar.setText(requestedTab.lastUrl)
+            updateTabChrome(requestedTab)
+            showHomeScreen()
+            setPageStatus("1VPN is connecting · tabs are paused until protected routing is ready", 1)
+            return
+        }
         if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(requestedTab.isGuest, guestTorReservesGeckoRuntime())) {
             toast("Normal and Private tabs are paused until Guest Tor has fully disconnected")
             return

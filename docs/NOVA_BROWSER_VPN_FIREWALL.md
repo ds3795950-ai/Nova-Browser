@@ -18,7 +18,7 @@ Cefrium has a profile proxy adapter, but Nova currently routes Normal tabs to Ge
 
 ## Guest Tor
 
-Guest Mode uses the embedded Tor service and the GeckoView extension's SOCKS5 proxy with remote DNS. Guest startup waits for Tor bootstrap and WebRTC protection. Because the extension proxy is runtime-wide, Nova refuses Guest startup while Private tabs are open and suspends Normal GeckoView sessions until Guest exits. This is a mitigation, not a formal proof of per-session routing isolation; verify concurrent Normal Cefrium traffic and session restoration before making a Guest-only Tor guarantee.
+Guest Mode uses the embedded Tor service and the GeckoView extension's SOCKS5 proxy with remote DNS. Guest startup waits for Tor bootstrap, WebRTC protection, and the combined routing-ready acknowledgment (including 1VPN readiness when 1VPN is enabled). Because the extension proxy is runtime-wide, Nova refuses Guest startup while Private tabs are open and suspends Normal GeckoView sessions until Guest exits. This is a mitigation, not a formal proof of per-session routing isolation; verify concurrent Normal Cefrium traffic and session restoration before making a Guest-only Tor guarantee.
 
 ## Provider and licensing
 

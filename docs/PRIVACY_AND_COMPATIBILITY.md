@@ -20,7 +20,7 @@ Cefrium has a profile-level proxy adapter and in-memory credential bridge, but M
 
 ## Guest Mode and Tor
 
-Guest Mode uses the embedded Tor Android service and a GeckoView WebExtension SOCKS5 proxy. Guest startup waits for Tor circuit bootstrap, a valid local SOCKS port, and extension confirmation of remote-DNS SOCKS routing plus WebRTC protection. Loss of the Tor service or proxy bridge closes Guest Mode rather than intentionally falling back to DIRECT.
+Guest Mode uses the embedded Tor Android service and a GeckoView WebExtension SOCKS5 proxy. Guest startup waits for Tor circuit bootstrap, a valid local SOCKS port, extension confirmation of remote-DNS SOCKS routing plus WebRTC protection, and the combined routing-ready acknowledgment (including 1VPN readiness when 1VPN is enabled). Loss of the Tor service or proxy bridge closes Guest Mode rather than intentionally falling back to DIRECT.
 
 GeckoView's proxy extension is runtime-wide, not a supported per-session proxy API. To reduce cross-profile exposure, Nova refuses to start Guest Tor while Private tabs are open, suspends every persistent Normal engine session before enabling the Guest circuit, and blocks all non-Guest tab creation/switching while the Tor proxy is starting, active or stopping. Normal tabs are reopened only after the extension explicitly acknowledges `torGuestMode=false`; if the bridge cannot confirm the reset, tabs remain paused. This is a strong runtime barrier but still needs concurrent-session and physical-device verification before Nova can claim a formally audited Guest-only Tor boundary. Do not claim Tor anonymity or equivalence to the Tor Browser.
 
