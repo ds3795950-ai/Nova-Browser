@@ -5121,14 +5121,14 @@ class MainActivity : ComponentActivity() {
                               if (!root) return JSON.stringify({ url: location.href, text: '' });
                               const clone = root.cloneNode(true);
                               clone.querySelectorAll('script,style,form,input,textarea,select,button,iframe,object,embed,[contenteditable="true"]').forEach(node => node.remove());
-                              const text = (clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 24000);
+                              const text = (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24000);
                               return JSON.stringify({ url: location.href, text });
                             })()
                         """.trimIndent()
                         runCatching {
                             engine.evaluateJavaScript(script) { raw ->
                                 val pageText = runCatching {
-                                    val decoded = JSONTokener(raw ?: "{}").nextValue()
+                                    val decoded = org.json.JSONTokener(raw ?: "{}").nextValue()
                                     val payload = if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
                                     val pageUrl = payload.optString("url")
                                     val text = payload.optString("text").take(24000)
