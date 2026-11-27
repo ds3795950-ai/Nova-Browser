@@ -1096,6 +1096,13 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.share_page) to { sharePage() }
             actions += getString(R.string.nova_shield) to { showShieldSettings() }
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
+            if (!tab.isPrivate && !tab.isGuest) actions += "Nova Hub" to {
+                startActivity(Intent(this, NovaPhase2HubActivity::class.java).apply {
+                    putExtra(NovaPhase2HubActivity.EXTRA_URL, tab.lastUrl)
+                    putExtra(NovaPhase2HubActivity.EXTRA_TITLE, tab.title)
+                })
+            }
+            actions += "Search tabs" to { showTabSearch() }
             actions += "Nova Add-ons" to { showExtensions() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
             actions += "Site Settings" to { showSiteSettingsHub() }
@@ -2088,7 +2095,7 @@ class MainActivity : ComponentActivity() {
         onComplete: ((Boolean) -> Unit)? = null
     ) {
         if (!::runtime.isInitialized) { onComplete?.invoke(false); return }
-        val value = if (requestedValue == 2) 2 else 1
+        val value = NovaPhase2Policy.imagePermissionDefault(prefs.getBoolean("nova_data_saver_enabled", false), requestedValue)
         org.mozilla.geckoview.GeckoPreferenceController.setGeckoPref(
             "permissions.default.image",
             value,
@@ -3409,6 +3416,42 @@ class MainActivity : ComponentActivity() {
                 trimTabThumbnails()
             } else preview.recycle()
         }, android.os.Handler(android.os.Looper.getMainLooper()))
+    }
+
+    private fun showTabSearch() {
+        val input = EditText(this).apply {
+            hint = "Search title, URL or group"
+            setSingleLine(true)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Search tabs")
+            .setView(input)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton("Search", null)
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val query = input.text.toString().trim()
+                        if (query.isBlank()) { input.error = "Enter a title, URL or group"; return@setOnClickListener }
+                        val guestOnly = currentTab()?.isGuest == true
+                        val matches = tabs.filter { tab ->
+                            (!guestOnly || tab.isGuest) &&
+                                listOf(tab.title, tab.renamedTitle.orEmpty(), tab.lastUrl, tab.group)
+                                    .any { it.contains(query, ignoreCase = true) }
+                        }.take(100)
+                        if (matches.isEmpty()) { toast("No matching tabs"); return@setOnClickListener }
+                        val ids = matches.map { it.id }
+                        dialog.dismiss()
+                        AlertDialog.Builder(this).setTitle("${matches.size} matching tabs")
+                            .setItems(matches.map { "${it.renamedTitle ?: it.title}\n${it.lastUrl}" }.toTypedArray()) { _, which ->
+                                val index = tabs.indexOfFirst { it.id == ids[which] }
+                                if (index >= 0) switchTab(index)
+                            }.setNegativeButton(getString(R.string.close), null).show()
+                    }
+                }
+                dialog.show()
+            }
     }
 
     private fun showTabs() {
@@ -6618,6 +6661,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
     override fun onResume() {
         super.onResume()
         resumePendingGeckoDataClearTab()
+        applyGeckoImageBehavior()
         if (NovaBrowserVpnController.isVpnEnabled()) switchAllCefriumTabsToGecko("1VPN is enabled")
         tabs.forEach { it.browserEngine?.onHostResume() }
     }
