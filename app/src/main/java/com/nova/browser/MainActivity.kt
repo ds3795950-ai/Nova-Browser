@@ -438,17 +438,6 @@ class MainActivity : ComponentActivity() {
                     // Take ownership of its completion callback in this Activity.
                     TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
                 }
-            } else if (guestTorReservesGeckoRuntime() || BrowserVpnNavigationPolicy.shouldBlockNavigation(
-                    NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
-                )) {
-                if (splitTabId != null) exitSplitScreen()
-                tabs.forEach { tab ->
-                    if (tab.browserEngine != null || tab.session != null) closeTabRuntime(tab)
-                    tab.needsReload = tab.lastUrl != HOME_URL
-                }
-                if (TorGuestRoutingController.blocksNormalGeckoSessions()) {
-                    TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
-                }
             } else {
                 tabs.filter { it.session != null && it.engineType == BrowserEngineType.GECKOVIEW }.forEach { ensureSession(it) }
                 if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
@@ -461,6 +450,7 @@ class MainActivity : ComponentActivity() {
                 TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
             }
         }
+        if (tabs.isEmpty()) ensureHomeTabRecord()
         applyVpnRoutingReadiness()
         if (intent?.data != null) handleViewIntent(intent)
     }
@@ -1206,6 +1196,18 @@ class MainActivity : ComponentActivity() {
         minimumHeight = dp(48)
         setPadding(dp(7), 0, dp(7), 0)
         setOnClickListener { action() }
+    }
+
+    /** Keep a selectable home tab record while protected routing is still coming up. */
+    private fun ensureHomeTabRecord() {
+        if (tabs.isNotEmpty()) return
+        val tab = BrowserTab(null, isPrivate = false, lastUrl = HOME_URL)
+        tab.engineType = resolveEngineForTab(tab)
+        tabs.add(tab)
+        activeIndex = 0
+        if (::addressBar.isInitialized && !addressBar.hasFocus()) addressBar.setText(HOME_URL)
+        updateTabChrome(tab)
+        showHomeScreen()
     }
 
     private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false): Boolean {
