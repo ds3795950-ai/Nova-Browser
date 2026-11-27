@@ -34,6 +34,23 @@ internal object BrowserVpnNavigationPolicy {
     fun shouldBlockNavigation(vpnEnabled: Boolean, routingReady: Boolean): Boolean = vpnEnabled && !routingReady
 }
 
+/** Owner-scoped observers; destroying one Activity must not detach another Activity. */
+internal class OwnerScopedListenerRegistry {
+    private val listeners = java.util.IdentityHashMap<Any, () -> Unit>()
+
+    fun set(owner: Any, listener: (() -> Unit)?) {
+        if (listener == null) listeners.remove(owner) else listeners[owner] = listener
+    }
+
+    fun remove(owner: Any) {
+        listeners.remove(owner)
+    }
+
+    fun dispatch() {
+        listeners.values.toList().forEach { listener -> runCatching { listener.invoke() } }
+    }
+}
+
 /** Controls the bundled 1VPN browser proxy. It never creates an Android VpnService. */
 object NovaBrowserVpnController {
     const val EXTENSION_ID = "1vpn-internal@nova.browser"
@@ -47,7 +64,7 @@ object NovaBrowserVpnController {
     private var credentialBootstrapTimeout: Runnable? = null
     // Multiple Activities can observe routing concurrently (browser + VPN settings).
     // A closing screen must only remove its own observer.
-    private val statusListeners = LinkedHashMap<Any, () -> Unit>()
+    private val statusListeners = OwnerScopedListenerRegistry()
     private var torRoutingStatusListener: (() -> Unit)? = null
     private var latestConfigRequestId = 0L
 
@@ -208,7 +225,7 @@ object NovaBrowserVpnController {
     }
 
     fun setStatusListener(owner: Any, listener: (() -> Unit)?) {
-        if (listener == null) statusListeners.remove(owner) else statusListeners[owner] = listener
+        statusListeners.set(owner, listener)
     }
 
     fun clearStatusListener(owner: Any) {
@@ -216,8 +233,7 @@ object NovaBrowserVpnController {
     }
 
     private fun notifyStatusListeners() {
-        // Snapshot so listeners may safely unregister themselves during a callback.
-        statusListeners.values.toList().forEach { listener -> runCatching { listener.invoke() } }
+        statusListeners.dispatch()
     }
 
     /** Re-evaluate all active Activities after a routing transition completes. */
