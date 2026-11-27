@@ -150,6 +150,7 @@ class MainActivity : ComponentActivity() {
     private var pendingFilePrompt: FilePrompt? = null
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private val activePromptDialogs = linkedSetOf<AlertDialog>()
+    private var tabSearchResultsDialog: AlertDialog? = null
     private val activeBottomSheetDialogs = linkedSetOf<Dialog>()
     private val activeUndoPopups = linkedSetOf<PopupWindow>()
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
@@ -1075,6 +1076,7 @@ class MainActivity : ComponentActivity() {
         val tab = currentTab() ?: return
         val actions = mutableListOf<Pair<String, () -> Unit>>()
         if (tab.isGuest) {
+            actions += "Search tabs" to { showTabSearch() }
             actions += getString(R.string.new_guest_tab) to { createGuestTab() }
             actions += getString(R.string.guest_settings) to { showSettings() }
             actions += getString(R.string.exit_guest_mode) to { confirmExitGuestMode() }
@@ -1098,7 +1100,8 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
             if (!tab.isPrivate && !tab.isGuest) actions += "Nova Hub" to {
                 startActivity(Intent(this, NovaPhase2HubActivity::class.java).apply {
-                    putExtra(NovaPhase2HubActivity.EXTRA_URL, tab.lastUrl)
+                    val hubUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+                    putExtra(NovaPhase2HubActivity.EXTRA_URL, hubUrl)
                     putExtra(NovaPhase2HubActivity.EXTRA_TITLE, tab.title)
                 })
             }
@@ -1165,6 +1168,8 @@ class MainActivity : ComponentActivity() {
             toast("Guest Tor is already connecting")
             return
         }
+        tabSearchResultsDialog?.dismiss()
+        tabSearchResultsDialog = null
         guestTorStartPending = true
         pageStatus.text = "Guest Mode · connecting to Tor…"
         TorGuestRoutingController.start(
@@ -3443,11 +3448,14 @@ class MainActivity : ComponentActivity() {
                         if (matches.isEmpty()) { toast("No matching tabs"); return@setOnClickListener }
                         val ids = matches.map { it.id }
                         dialog.dismiss()
-                        AlertDialog.Builder(this).setTitle("${matches.size} matching tabs")
+                        val resultsDialog = AlertDialog.Builder(this).setTitle("${matches.size} matching tabs")
                             .setItems(matches.map { "${it.renamedTitle ?: it.title}\n${it.lastUrl}" }.toTypedArray()) { _, which ->
                                 val index = tabs.indexOfFirst { it.id == ids[which] }
                                 if (index >= 0) switchTab(index)
-                            }.setNegativeButton(getString(R.string.close), null).show()
+                            }.setNegativeButton(getString(R.string.close), null).create()
+                        tabSearchResultsDialog = resultsDialog
+                        resultsDialog.setOnDismissListener { if (tabSearchResultsDialog === resultsDialog) tabSearchResultsDialog = null }
+                        resultsDialog.show()
                     }
                 }
                 dialog.show()
@@ -6769,6 +6777,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
             request.complete(false)
         }
         activeCefriumAndroidPermission = null
+        tabSearchResultsDialog?.dismiss()
+        tabSearchResultsDialog = null
         activeBottomSheetDialogs.toList().forEach { runCatching { it.dismiss() } }
         activeBottomSheetDialogs.clear()
         activeUndoPopups.toList().forEach { runCatching { it.dismiss() } }

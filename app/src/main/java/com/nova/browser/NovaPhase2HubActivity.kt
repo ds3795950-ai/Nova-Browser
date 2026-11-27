@@ -34,6 +34,7 @@ class NovaPhase2HubActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
     private val worker = Executors.newSingleThreadExecutor()
+    private var discoverRequestGeneration = 0
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
@@ -90,11 +91,13 @@ class NovaPhase2HubActivity : Activity() {
     private data class FeedItem(val title: String, val url: String, val source: String)
 
     private fun loadDiscover(topic: NovaDiscoverTopic) {
+        val requestGeneration = ++discoverRequestGeneration
         content.removeAllViews(); status.text = "Loading ${topic.label}…"
         worker.execute {
             val result = runCatching { fetchFeed(topic) }
             mainHandler.post {
-                if (isFinishing || isDestroyed) return@post
+                if (isFinishing || isDestroyed || requestGeneration != discoverRequestGeneration) return@post
+                content.removeAllViews()
                 val items = result.getOrDefault(emptyList())
                 status.text = if (items.isEmpty()) "No stories loaded. Check your connection and try again." else "${items.size} stories · ${topic.label}"
                 items.forEach { item ->
@@ -188,7 +191,11 @@ class NovaPhase2HubActivity : Activity() {
         if (links.isEmpty()) { status.text = "Your reading list is empty."; return }
         AlertDialog.Builder(this).setTitle("Reading list (${links.size})")
             .setItems(links.map { it.title + "\n" + it.url }.toTypedArray()) { _, which -> openUrl(links[which].url) }
-            .setNeutralButton("Clear list") { _, _ -> writeLinks(emptyList()); status.text = "Reading list cleared" }
+            .setNeutralButton("Clear list") { _, _ ->
+                runCatching { writeLinks(emptyList()) }
+                    .onSuccess { status.text = "Reading list cleared" }
+                    .onFailure { status.text = it.message ?: "Could not clear reading list" }
+            }
             .setNegativeButton("Close", null).show()
     }
 
@@ -198,5 +205,5 @@ class NovaPhase2HubActivity : Activity() {
             .onFailure { status.text = "No app can open this link." }
     }
 
-    override fun onDestroy() { worker.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { discoverRequestGeneration++; worker.shutdownNow(); super.onDestroy() }
 }
