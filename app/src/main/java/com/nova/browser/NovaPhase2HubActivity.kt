@@ -51,7 +51,7 @@ class NovaPhase2HubActivity : Activity() {
         root.addView(status)
         val scroll = ScrollView(this).apply { isFillViewport = true }
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.TOP }
-        scroll.addView(content, ScrollView.LayoutParams(-1, -2))
+        scroll.addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(button("Discover news & sports") { showDiscoverTopics() })
         root.addView(button("Flow · Share current page") { shareCurrentPage() })
