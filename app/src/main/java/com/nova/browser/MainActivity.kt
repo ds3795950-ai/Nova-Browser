@@ -1337,7 +1337,7 @@ class MainActivity : ComponentActivity() {
         engine.installDelegates { configureSession(it, tab) }
         session.open(runtime)
         attachAiPageReader(session, tab)
-        if (tab.needsReload && tab.lastUrl != HOME_URL && !vpnRoutingBlocked) {
+        if (tab.needsReload && tab.lastUrl != HOME_URL) {
             engine.loadUrl(tab.lastUrl)
             tab.needsReload = false
         }
