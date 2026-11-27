@@ -469,23 +469,44 @@ class MainActivity : ComponentActivity() {
         val scheme = link.scheme?.lowercase()
         if (scheme != "http" && scheme != "https") return
         val url = link.toString()
-        // Persist ownership on the launch Intent so Activity recreation cannot turn a
-        // Guest-owned deferred link into a Normal tab after Guest mode exits.
+        // Never trust an ownership flag supplied by another app. Only a random token
+        // stored in Nova's private preferences can restore a deferred link's context
+        // after Activity recreation or process death.
         val ownershipKey = "com.nova.browser.extra.PENDING_LINK_GUEST"
-        val guestOwned = if (incoming.hasExtra(ownershipKey)) {
-            incoming.getBooleanExtra(ownershipKey, false)
+        val tokenKey = "com.nova.browser.extra.PENDING_LINK_TOKEN"
+        val suppliedToken = incoming.getStringExtra(tokenKey)
+        val storedToken = prefs.getString("pending_external_link_token", null)
+        val restoredGuestOwner = !suppliedToken.isNullOrBlank() &&
+            suppliedToken == storedToken &&
+            prefs.getString("pending_external_link_url", null) == url
+        if (suppliedToken != null && !restoredGuestOwner) {
+            prefs.edit().remove("pending_external_link_token")
+                .remove("pending_external_link_url")
+                .remove("pending_external_link_guest").apply()
+        }
+        val guestOwned = if (restoredGuestOwner) {
+            prefs.getBoolean("pending_external_link_guest", false)
         } else {
             currentTab()?.isGuest == true || guestTorStartPending || TorGuestRoutingController.isReady()
         }
         if (createTab(false, url, isGuest = guestOwned)) {
             pendingExternalLink = null
             pendingExternalLinkGuest = null
+            prefs.edit().remove("pending_external_link_token")
+                .remove("pending_external_link_url")
+                .remove("pending_external_link_guest").apply()
             incoming.data = null
+            incoming.removeExtra(tokenKey)
             incoming.removeExtra(ownershipKey)
         } else {
             pendingExternalLink = url
             pendingExternalLinkGuest = guestOwned
-            incoming.putExtra(ownershipKey, guestOwned)
+            val token = if (restoredGuestOwner) suppliedToken!! else UUID.randomUUID().toString()
+            prefs.edit().putString("pending_external_link_token", token)
+                .putString("pending_external_link_url", url)
+                .putBoolean("pending_external_link_guest", guestOwned).apply()
+            incoming.putExtra(tokenKey, token)
+            incoming.removeExtra(ownershipKey)
             toast("External link saved · it will open when protected routing is ready")
         }
     }
@@ -505,8 +526,12 @@ class MainActivity : ComponentActivity() {
             // A Guest-owned link must never fall through into a Normal/Private tab after Guest exits.
             pendingExternalLink = null
             pendingExternalLinkGuest = null
+            prefs.edit().remove("pending_external_link_token")
+                .remove("pending_external_link_url")
+                .remove("pending_external_link_guest").apply()
             if (intent?.data?.toString() == url) {
                 intent?.data = null
+                intent?.removeExtra("com.nova.browser.extra.PENDING_LINK_TOKEN")
                 intent?.removeExtra("com.nova.browser.extra.PENDING_LINK_GUEST")
             }
             return
@@ -524,8 +549,12 @@ class MainActivity : ComponentActivity() {
         if (createTab(false, url, isGuest = guest)) {
             pendingExternalLink = null
             pendingExternalLinkGuest = null
+            prefs.edit().remove("pending_external_link_token")
+                .remove("pending_external_link_url")
+                .remove("pending_external_link_guest").apply()
             if (intent?.data?.toString() == url) {
                 intent?.data = null
+                intent?.removeExtra("com.nova.browser.extra.PENDING_LINK_TOKEN")
                 intent?.removeExtra("com.nova.browser.extra.PENDING_LINK_GUEST")
             }
         }
@@ -1849,6 +1878,14 @@ class MainActivity : ComponentActivity() {
 
     /** Return true to cancel the Cefrium navigation and reopen the destination in GeckoView. */
     private fun routeCefriumNavigation(tab: BrowserTab, destination: String, method: String = "GET"): Boolean {
+        val selection = engineSelectionForTab(tab, destination)
+        if (selection.engine == BrowserEngineType.CEFRIUM) return false
+        // Reject non-GET engine handoffs before a routing pause can store only the URL;
+        // replaying that URL later would silently turn a submitted POST into a GET.
+        if (!method.equals("GET", ignoreCase = true)) {
+            toast("This form cannot be transferred to the other browser engine without losing its submitted data. It was blocked.")
+            return true
+        }
         if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime()) ||
             BrowserVpnNavigationPolicy.shouldBlockNavigation(NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady())) {
             tab.lastUrl = destination
@@ -1857,14 +1894,8 @@ class MainActivity : ComponentActivity() {
             toast("Navigation paused until Nova confirms protected routing")
             return true
         }
-        val selection = engineSelectionForTab(tab, destination)
-        if (selection.engine == BrowserEngineType.CEFRIUM) return false
         if (pendingGeckoDataClearActive && !tab.isPrivate && !tab.isGuest) {
             toast("Wait for GeckoView data deletion to finish before opening this destination")
-            return true
-        }
-        if (!method.equals("GET", ignoreCase = true)) {
-            toast("This form cannot be transferred to the other browser engine without losing its submitted data. It was blocked.")
             return true
         }
         if (!pendingEngineFallbackTabIds.add(tab.id)) return true
