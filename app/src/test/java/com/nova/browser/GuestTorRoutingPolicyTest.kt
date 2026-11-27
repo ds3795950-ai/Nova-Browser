@@ -14,6 +14,12 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorRoutingPolicy.canEnterGuest(true, 65536, true))
     }
 
+    @Test fun failedAdditionalGuestTabDoesNotStopExistingGuestTorSession() {
+        assertTrue(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(0))
+        assertFalse(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(1))
+        assertFalse(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(2))
+    }
+
     @Test fun guestCleanupMarkerIsPreservedWhileAnyGuestTabExists() {
         assertTrue(GuestTorRoutingPolicy.shouldClearGuestContextMarker(0))
         assertFalse(GuestTorRoutingPolicy.shouldClearGuestContextMarker(1))

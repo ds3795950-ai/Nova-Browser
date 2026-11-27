@@ -1199,7 +1199,9 @@ class MainActivity : ComponentActivity() {
                     if (GuestTorRoutingPolicy.shouldClearGuestContextMarker(tabs.count { it.isGuest })) {
                         prefs.edit().putBoolean("guest_context_used", false).commit()
                     }
-                    TorGuestRoutingController.stop()
+                    if (GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(tabs.count { it.isGuest })) {
+                        TorGuestRoutingController.stop()
+                    }
                     val reason = creation.exceptionOrNull()?.localizedMessage
                         ?: "Guest tab creation was blocked before a tab could be opened"
                     pageStatus.text = "Guest Mode unavailable · tab could not be created"
