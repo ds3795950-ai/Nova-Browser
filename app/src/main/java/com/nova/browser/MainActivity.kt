@@ -469,15 +469,23 @@ class MainActivity : ComponentActivity() {
         val scheme = link.scheme?.lowercase()
         if (scheme != "http" && scheme != "https") return
         val url = link.toString()
-        // Preserve the browsing context that owned the link when tab creation was blocked.
-        val guestOwned = currentTab()?.isGuest == true || guestTorStartPending || TorGuestRoutingController.isReady()
+        // Persist ownership on the launch Intent so Activity recreation cannot turn a
+        // Guest-owned deferred link into a Normal tab after Guest mode exits.
+        val ownershipKey = "com.nova.browser.extra.PENDING_LINK_GUEST"
+        val guestOwned = if (incoming.hasExtra(ownershipKey)) {
+            incoming.getBooleanExtra(ownershipKey, false)
+        } else {
+            currentTab()?.isGuest == true || guestTorStartPending || TorGuestRoutingController.isReady()
+        }
         if (createTab(false, url, isGuest = guestOwned)) {
             pendingExternalLink = null
             pendingExternalLinkGuest = null
             incoming.data = null
+            incoming.removeExtra(ownershipKey)
         } else {
             pendingExternalLink = url
             pendingExternalLinkGuest = guestOwned
+            incoming.putExtra(ownershipKey, guestOwned)
             toast("External link saved · it will open when protected routing is ready")
         }
     }
@@ -497,6 +505,10 @@ class MainActivity : ComponentActivity() {
             // A Guest-owned link must never fall through into a Normal/Private tab after Guest exits.
             pendingExternalLink = null
             pendingExternalLinkGuest = null
+            if (intent?.data?.toString() == url) {
+                intent?.data = null
+                intent?.removeExtra("com.nova.browser.extra.PENDING_LINK_GUEST")
+            }
             return
         }
         if (!PendingExternalLinkPolicy.canOpen(
@@ -512,7 +524,10 @@ class MainActivity : ComponentActivity() {
         if (createTab(false, url, isGuest = guest)) {
             pendingExternalLink = null
             pendingExternalLinkGuest = null
-            if (intent?.data?.toString() == url) intent?.data = null
+            if (intent?.data?.toString() == url) {
+                intent?.data = null
+                intent?.removeExtra("com.nova.browser.extra.PENDING_LINK_GUEST")
+            }
         }
     }
 
