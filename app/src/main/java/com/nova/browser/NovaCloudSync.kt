@@ -246,6 +246,7 @@ class NovaCloudSync(context: Context) {
 
     fun signedInUserId(): String? = runCatching { validSession()?.optString("user_id")?.takeIf { it.isNotBlank() } }.getOrNull()
 
+    @Synchronized
     fun signOut() {
         runCatching { validSession()?.let { request("POST", "/auth/v1/logout", "{}", it.getString("access_token")) } }
         sessionFile.delete()
@@ -255,6 +256,7 @@ class NovaCloudSync(context: Context) {
         vaultUpdatedAt = null
     }
 
+    @Synchronized
     internal fun downloadEncrypted(expectedUserId: String): NovaCloudDownload {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
@@ -276,6 +278,7 @@ class NovaCloudSync(context: Context) {
         return NovaCloudDownload(unpacked.first, payloads)
     }
 
+    @Synchronized
     fun uploadEncrypted(expectedUserId: String, snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
@@ -338,6 +341,7 @@ class NovaCloudSync(context: Context) {
         }
     }
 
+    @Synchronized
     private fun validSession(): JSONObject? {
         val session = loadSession() ?: return null
         if (session.optLong("expires_at") > System.currentTimeMillis() / 1000 + 90) return session
