@@ -1357,10 +1357,14 @@ class MainActivity : ComponentActivity() {
                             failedTab.thumbnail = null
                         }
                     }
+                    // Restore the prior selection before starting asynchronous Tor
+                    // shutdown. The completion callback can then safely resume it, including
+                    // when 1VPN is still connecting and session creation remains gated.
+                    val restoredIndex = previousTabId?.let { id -> tabs.indexOfFirst { it.id == id } }
+                        ?.takeIf { it >= 0 }
+                        ?: activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0)
+                    if (tabs.isNotEmpty()) activeIndex = restoredIndex
                     if (existingGuestIds.isNotEmpty()) {
-                        activeIndex = previousTabId?.let { id -> tabs.indexOfFirst { it.id == id } }
-                            ?.takeIf { it >= 0 }
-                            ?: activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0)
                         if (tabs.isNotEmpty()) runCatching { switchTab(activeIndex.coerceIn(tabs.indices)) }
                     } else {
                         cleanupGuestContextIfIdle()
@@ -3952,7 +3956,9 @@ class MainActivity : ComponentActivity() {
         }
         if (tabs.isEmpty()) {
             activeIndex = 0
-            createTab(false, HOME_URL)
+            // VPN or data-clear gates may reject engine creation. Keep a runtime-free
+            // home tab so the browser remains recoverable when the gate is lifted.
+            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
             return
         }
         persistTabs()
