@@ -28,7 +28,7 @@ class GuestTorRoutingPolicyTest {
     }
 
     @Test fun guestCreationRollbackIdentifiesOnlyNewTabs() {
-        assertEquals(setOf("new"), GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old", "new")))
+        assertEquals(listOf("new"), GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old", "new")))
         assertTrue(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old")).isEmpty())
     }
 
