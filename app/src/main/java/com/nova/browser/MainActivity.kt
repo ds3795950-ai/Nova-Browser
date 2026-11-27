@@ -159,6 +159,9 @@ class MainActivity : ComponentActivity() {
     private var guestContextId: String = ""
     private var guestTorStartPending: Boolean = false
     private val guestContextCleanupLock = Any()
+
+    private fun guestTorReservesGeckoRuntime(): Boolean =
+        guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()
     private val downloadManagers = mutableMapOf<BrowserEngineType, NovaDownloadManager>()
 
     private fun downloadManager(engineType: BrowserEngineType): NovaDownloadManager = synchronized(downloadManagers) {
@@ -1153,6 +1156,10 @@ class MainActivity : ComponentActivity() {
         deactivateTabRuntime(currentTab())
         val tab = BrowserTab(null, isPrivate, isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
         tab.engineType = resolveEngineForTab(tab)
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+            toast("Normal and Private tabs are paused while Guest Tor routing is connecting, active, or disconnecting")
+            return
+        }
         tabs.add(tab)
         activeIndex = tabs.lastIndex
         activateTab(tab)
@@ -1169,19 +1176,22 @@ class MainActivity : ComponentActivity() {
             toast("Guest Tor is already connecting")
             return
         }
+        if (TorGuestRoutingController.blocksNormalGeckoSessions() && !TorGuestRoutingController.isReady()) {
+            toast("Guest Tor is still disconnecting; wait for the proxy reset")
+            return
+        }
         if (!GuestTorIsolationPolicy.canStart(tabs.any { it.isPrivate })) {
             toast("Close Private tabs before starting Guest Mode. Guest Tor uses GeckoView's shared network proxy.")
             return
         }
         if (splitTabId != null) exitSplitScreen()
-        // GeckoView's proxy extension is runtime-wide rather than per-session. Close
-        // persistent Gecko sessions before enabling Guest Tor so their pages cannot
-        // continue making requests through the Guest circuit. Their URLs are restored
-        // after Guest exits; persistent Normal profile data remains untouched.
+        // GeckoView's proxy extension is runtime-wide rather than per-session. Suspend
+        // every persistent Normal engine session before enabling Guest Tor, including
+        // Cefrium tabs, so no Normal page continues background activity during Guest.
+        // Navigation state is retained and sessions are recreated only after Tor reset.
         deactivateTabRuntime(currentTab())
         tabs.filter { tab ->
-            GuestTorIsolationPolicy.shouldSuspendNormalTab(tab.isGuest, tab.isPrivate, tab.engineType) &&
-                tab.browserEngine != null
+            GuestTorIsolationPolicy.shouldSuspendNormalTab(tab.isGuest, tab.isPrivate) && tab.browserEngine != null
         }.forEach { tab ->
             closeTabRuntime(tab)
             tab.needsReload = tab.lastUrl != HOME_URL
@@ -1202,8 +1212,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (!prefs.edit().putBoolean("guest_context_used", true).commit()) {
                     if (tabs.any { it.isGuest }) closeGuestTabs()
-                    TorGuestRoutingController.stop()
-                    if (tabs.isNotEmpty()) switchTab(activeIndex.coerceIn(tabs.indices))
+                    else TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
                     pageStatus.text = "Guest Mode unavailable · could not save cleanup state"
                     toast("Guest Mode could not start safely because its cleanup marker could not be saved")
                     return@start
@@ -1211,8 +1220,8 @@ class MainActivity : ComponentActivity() {
                 runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
                     .onSuccess { toast("Guest Mode started · Tor routing active") }
                     .onFailure {
-                        TorGuestRoutingController.stop()
-                        if (tabs.isNotEmpty()) switchTab(activeIndex.coerceIn(tabs.indices))
+                        if (tabs.any { it.isGuest }) closeGuestTabs()
+                        else TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
                         toast("Guest Mode could not start: ${it.localizedMessage ?: "browser initialization failed"}")
                     }
             },
@@ -1223,7 +1232,7 @@ class MainActivity : ComponentActivity() {
                     toast("Tor connection lost. Closing Guest Mode to prevent direct traffic.")
                     closeGuestTabs()
                 } else {
-                    if (tabs.isNotEmpty()) switchTab(activeIndex.coerceIn(tabs.indices))
+                    TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
                     pageStatus.text = "Guest Mode unavailable · Tor required"
                     toast("Guest Mode blocked: Tor is unavailable. No direct connection was made. $reason")
                 }
@@ -1239,6 +1248,9 @@ class MainActivity : ComponentActivity() {
     private fun tabKey(session: GeckoSession): String = tabs.firstOrNull { it.session === session }?.id ?: ""
 
     private fun ensureSession(tab: BrowserTab): GeckoSession {
+        check(!GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+            "Normal and Private sessions are paused while Guest Tor owns the shared proxy"
+        }
         check(!pendingGeckoDataClearActive && tab.id !in pendingGeckoDataClearTabIds) {
             "Browsing-data deletion is still running for this tab"
         }
@@ -1275,6 +1287,7 @@ class MainActivity : ComponentActivity() {
         retryRetiredCefriumProfileDeletes()
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
         check(!tab.isPrivate && !tab.isGuest) { "Private and Guest tabs must use GeckoView" }
+        check(!guestTorReservesGeckoRuntime()) { "Normal Cefrium sessions are paused while Guest Tor owns the browser network context" }
         val profile = CefriumProfile.get(enginePreferences.cefriumProfileName())
         val restoredNavigationState = tab.cefriumNavigationState?.let { CefriumTabStateCipher.decrypt(it, enginePreferences.cefriumProfileName()) }
         val engine = CefriumBrowserEngine(
@@ -1825,6 +1838,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadTabUrl(tab: BrowserTab, url: String) {
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+            toast("Normal browsing is paused while Guest Tor is connecting, active, or disconnecting")
+            return
+        }
         if (url == HOME_URL) {
             tab.browserEngine?.stop()
             deactivateTabRuntime(tab)
@@ -1854,6 +1871,7 @@ class MainActivity : ComponentActivity() {
 
     private fun switchCurrentTabToGecko(reason: String) {
         val tab = currentTab() ?: return
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return
         if (tab.engineType != BrowserEngineType.CEFRIUM) return
         closeTabRuntime(tab)
         tab.engineType = BrowserEngineType.GECKOVIEW
@@ -1872,13 +1890,14 @@ class MainActivity : ComponentActivity() {
      */
     private fun applyVpnRoutingReadiness() {
         if (!::browserPane.isInitialized) return
+        if (guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()) return
         if (GuestTorIsolationPolicy.shouldDeferTabRestore(
                 guestStartPending = guestTorStartPending,
                 activeTabIsGuest = currentTab()?.isGuest == true,
                 torReady = TorGuestRoutingController.isReady()
             )) return
         if (!NovaBrowserVpnController.isVpnEnabled()) {
-            if (tabs.isNotEmpty() && currentTab()?.needsReload == true) {
+            if (tabs.isNotEmpty() && (currentTab()?.needsReload == true || currentTab()?.browserEngine == null)) {
                 switchTab(activeIndex.coerceIn(tabs.indices))
             }
             return
@@ -1896,7 +1915,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         switchAllCefriumTabsToGecko("1VPN is enabled")
-        if (tabs.isNotEmpty() && currentTab()?.needsReload == true) {
+        if (tabs.isNotEmpty() && (currentTab()?.needsReload == true || currentTab()?.browserEngine == null)) {
             switchTab(activeIndex.coerceIn(tabs.indices))
         }
     }
@@ -3165,6 +3184,10 @@ class MainActivity : ComponentActivity() {
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
         val requestedTab = tabs[index]
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(requestedTab.isGuest, guestTorReservesGeckoRuntime())) {
+            toast("Normal and Private tabs are paused until Guest Tor has fully disconnected")
+            return
+        }
         if (pendingGeckoDataClearActive && engineSelectionForTab(requestedTab).engine == BrowserEngineType.GECKOVIEW &&
             !requestedTab.isPrivate && !requestedTab.isGuest) {
             toast("Wait for GeckoView data deletion to finish before opening this tab")
@@ -3207,7 +3230,8 @@ class MainActivity : ComponentActivity() {
         if (denyGuestAccess("Split screen")) return
         val candidates = tabs.filter {
             !it.isPrivate && !it.isGuest && it !== currentTab() &&
-                (!pendingGeckoDataClearActive || engineSelectionForTab(it).engine == BrowserEngineType.CEFRIUM)
+                (!pendingGeckoDataClearActive || engineSelectionForTab(it).engine == BrowserEngineType.CEFRIUM) &&
+                !guestTorReservesGeckoRuntime()
         }
         if (candidates.isEmpty()) { toast("Open another normal tab before using split screen"); return }
         AlertDialog.Builder(this).setTitle("Open second pane")
@@ -3215,6 +3239,10 @@ class MainActivity : ComponentActivity() {
                 // Guest Tor may finish connecting while this chooser is open.
                 if (denyGuestAccess("Split screen")) return@setItems
                 val tab = candidates[which]
+                if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+                    toast("Split screen is paused while Guest Tor owns the shared proxy")
+                    return@setItems
+                }
                 if (splitTabId != null) exitSplitScreen()
                 enforceCefriumCompatibility(tab)
                 if (pendingGeckoDataClearActive && tab.engineType == BrowserEngineType.GECKOVIEW) {
@@ -3664,9 +3692,12 @@ class MainActivity : ComponentActivity() {
         if (removed.id == splitTabId) exitSplitScreen()
         closeTabRuntime(removed)
         removed.thumbnail?.recycle(); removed.thumbnail = null
+        if (index < activeIndex) activeIndex--
+        else if (wasActive) activeIndex = index.coerceAtMost(tabs.lastIndex)
         cleanupGuestContextIfIdle()
         if (removed.isGuest && wasGuestActive && tabs.none { it.isGuest }) {
-            createGuestTab()
+            if (tabs.isNotEmpty()) persistTabs()
+            toast("The last Guest tab was closed · Guest Mode is exiting")
             return
         }
         if (tabs.isEmpty()) {
@@ -3674,8 +3705,6 @@ class MainActivity : ComponentActivity() {
             createTab(false, HOME_URL)
             return
         }
-        if (index < activeIndex) activeIndex--
-        else if (wasActive) activeIndex = index.coerceAtMost(tabs.lastIndex)
         persistTabs()
         if (wasActive) switchTab(activeIndex.coerceIn(tabs.indices)) else currentTab()?.let { updateTabChrome(it) }
     }
@@ -4472,8 +4501,23 @@ class MainActivity : ComponentActivity() {
             }.setNegativeButton("Cancel", null).show()
     }
 
+    private fun restoreAfterGuestTorStop() {
+        if (isFinishing || isDestroyed) return
+        if (tabs.isEmpty()) {
+            createTab(false, HOME_URL)
+            return
+        }
+        applyVpnRoutingReadiness()
+        if ((!NovaBrowserVpnController.isVpnEnabled() || NovaBrowserVpnController.isVpnRoutingReady()) &&
+            (currentTab()?.browserEngine == null || currentTab()?.needsReload == true)) {
+            switchTab(activeIndex.coerceIn(tabs.indices))
+        }
+    }
+
     private fun cleanupGuestContextIfIdle() {
-        if (tabs.none { it.isGuest }) TorGuestRoutingController.stop()
+        if (tabs.none { it.isGuest } && !guestTorStartPending && TorGuestRoutingController.blocksNormalGeckoSessions()) {
+            TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
+        }
         if (tabs.none { it.isGuest } && guestContextId.isNotBlank()) {
             if (prefs.getBoolean("guest_context_used", false)) queueGuestContextCleanup(guestContextId)
             guestContextId = "nova-guest-${UUID.randomUUID()}"
@@ -4482,6 +4526,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return
         val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
         if (desired != tab.desktopSite) {
             tab.desktopSite = desired
@@ -6836,7 +6881,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
         if (currentActivityReference?.get() === this) currentActivityReference = null
         downloadManagers.values.forEach { it.setOnChangedListener(null) }
         guestTorStartPending = false
-        if (!isChangingConfigurations || tabs.none { it.isGuest }) TorGuestRoutingController.stop()
+        if (!isChangingConfigurations) TorGuestRoutingController.stop()
+        else if (tabs.none { it.isGuest }) TorGuestRoutingController.stop { /* recreated Activity restores after the extension acknowledges the reset */ }
         cancelPendingRemoteSuggestions()
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()

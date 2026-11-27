@@ -57,7 +57,7 @@ The first combined-engine manifest merge exposed a conflict: GeckoView declares 
 ## Tor implementation and isolation boundary
 
 - Nova now bundles the embedded Tor Android service and configures a GeckoView WebExtension SOCKS5 proxy with remote DNS and WebRTC protection. Guest startup waits for a Tor circuit, valid SOCKS port and extension readiness; loss of the chain closes Guest Mode.
-- GeckoView has no supported public per-session proxy API. The extension proxy is runtime-wide, so the app suspends persistent Normal GeckoView sessions and refuses Guest startup while Private tabs are open. This is a mitigation, not yet a formally verified Guest-only boundary.
+- GeckoView has no supported public per-session proxy API. The extension proxy is runtime-wide, so the app suspends every persistent Normal engine session, refuses Guest startup while Private tabs are open, and blocks non-Guest tab creation/switching throughout Tor startup, active use and shutdown. Normal sessions resume only after the extension acknowledges `torGuestMode=false`. This is a mitigation, not yet a formally verified Guest-only boundary.
 - Cefrium exposes a proxy on each CefriumProfile; its adapter is scoped to Normal Cefrium profiles and must pass independent DNS/WebRTC/IP leak tests.
 - Physical-device tests must verify Guest Tor while Normal Cefrium tabs exist, that Private tabs are refused, and that Normal GeckoView sessions restore after Guest exit. Also test DNS, UDP/WebRTC, redirects, proxy failure, circuit changes and Normal/Private non-interference.
 

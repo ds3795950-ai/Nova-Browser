@@ -194,10 +194,10 @@ val prepare1VpnAssets by tasks.registering {
         val proxyRegistration = "browser.proxy.onRequest.addListener(m,{urls:[\"<all_urls>\"]})"
         check(background.contains(proxyRegistration)) { "Upstream 1VPN proxy registration changed; review before bundling." }
         val torAwareProxyRegistration = """
+            (function() {
             // Hold requests until Nova has sent the persisted routing configuration.
             // This prevents a startup race from briefly sending traffic DIRECT.
-            var __novaProxyConfigResolve = null;
-            var __novaProxyConfigPromise = new Promise(function(resolve) { __novaProxyConfigResolve = resolve; });
+            var __novaProxyConfigPromise = new Promise(function(resolve) { globalThis.__novaProxyConfigResolve = resolve; });
             var __novaFailClosedProxy = {type: "http", host: "127.0.0.1", port: 9};
             var __novaTorAwareProxyRequest = function(details) {
               return __novaProxyConfigPromise.then(function() {
@@ -227,12 +227,15 @@ val prepare1VpnAssets by tasks.registering {
               browser.proxy.onRequest.addListener(__novaTorAwareProxyRequest, {urls: ["<all_urls>"]});
               globalThis.__novaProxyReady = true;
             } catch (e) { globalThis.__novaProxyReady = false; console.error(e); }
+            })()
         """.trimIndent()
         background = background.replace(proxyRegistration, torAwareProxyRegistration)
 
         val novaBridge = """
             ;(function() {
               var nativePort = null;
+              var nativeGeneration = 0;
+              var configureQueue = Promise.resolve();
               var webRtcProtected = false;
               globalThis.__novaTorGuestMode = false;
               globalThis.__novaTorSocksPort = 0;
@@ -293,30 +296,36 @@ val prepare1VpnAssets by tasks.registering {
                   return true;
                 } catch (_) { return false; }
               }
-              async function configure(message) {
+              async function configure(message, generation, port) {
+                if (generation !== nativeGeneration || nativePort !== port) return;
                 // Reconfiguration is a protected transition too: pause traffic until
                 // the new VPN/Tor state and leak protections have been applied.
                 globalThis.__novaVpnConfigReady = false;
                 var location = ["sgp", "ams", "lax"].indexOf(message.location) >= 0 ? message.location : "sgp";
                 var enabled = message.enabled === true;
-                globalThis.__nova1VpnEnabled = enabled;
-                globalThis.__novaTorGuestMode = message.torGuestMode === true;
+                var torGuestMode = message.torGuestMode === true;
                 var requestedTorPort = Number(message.torSocksPort);
-                globalThis.__novaTorSocksPort = Number.isInteger(requestedTorPort) && requestedTorPort > 0 && requestedTorPort <= 65535 ? requestedTorPort : 0;
+                var torSocksPort = Number.isInteger(requestedTorPort) && requestedTorPort > 0 && requestedTorPort <= 65535 ? requestedTorPort : 0;
+                globalThis.__nova1VpnEnabled = enabled;
+                globalThis.__novaTorGuestMode = torGuestMode;
+                globalThis.__novaTorSocksPort = torSocksPort;
                 await chrome.storage.local.set({ isConnected: enabled, currentLocation: location });
-                webRtcProtected = await setWebRtcProtection(enabled || globalThis.__novaTorGuestMode);
-                var torRoutingReady = !globalThis.__novaTorGuestMode || (globalThis.__novaProxyReady === true &&
-                  globalThis.__novaTrafficGateReady === true && globalThis.__novaTorSocksPort > 0 && webRtcProtected === true);
+                var protectedState = await setWebRtcProtection(enabled || torGuestMode);
+                if (generation !== nativeGeneration || nativePort !== port) return;
+                webRtcProtected = protectedState === true;
+                var torRoutingReady = !torGuestMode || (globalThis.__novaProxyReady === true &&
+                  globalThis.__novaTrafficGateReady === true && torSocksPort > 0 && webRtcProtected === true);
                 var vpnRoutingReady = !enabled || (supported() && webRtcProtected === true);
-                report(enabled ? "1VPN browser proxy enabled" : (globalThis.__novaTorGuestMode ? "Guest Tor routing active" : "VPN off"), {
+                report(enabled ? "1VPN browser proxy enabled" : (torGuestMode ? "Guest Tor routing active" : "VPN off"), {
                   enabled: enabled,
                   location: location,
-                  torGuestMode: globalThis.__novaTorGuestMode,
+                  torGuestMode: torGuestMode,
                   torRoutingReady: torRoutingReady,
                   routingReady: vpnRoutingReady && torRoutingReady
                 });
                 if (!vpnRoutingReady) throw new Error("1VPN cannot safely route traffic because proxy authentication or WebRTC protection is unavailable");
                 if (!torRoutingReady) throw new Error("Guest Tor cannot safely route traffic because SOCKS5 or WebRTC protection is unavailable");
+                if (generation !== nativeGeneration || nativePort !== port) return;
                 globalThis.__novaVpnConfigReady = true;
                 if (globalThis.__novaProxyConfigResolve) {
                   globalThis.__novaProxyConfigResolve();
@@ -325,26 +334,44 @@ val prepare1VpnAssets by tasks.registering {
               }
               function connectNative() {
                 try {
-                  nativePort = browser.runtime.connectNative("com.nova.browser.vpn");
-                  nativePort.onMessage.addListener(function(message) {
-                    if (message && message.type === "configure") configure(message).catch(function(error) {
-                      report("1VPN configuration error", { error: String(error) });
-                    });
+                  var connectedPort = browser.runtime.connectNative("com.nova.browser.vpn");
+                  nativePort = connectedPort;
+                  var generation = ++nativeGeneration;
+                  connectedPort.onMessage.addListener(function(message) {
+                    if (nativePort !== connectedPort || generation !== nativeGeneration) return;
+                    if (message && message.type === "configure") {
+                      configureQueue = configureQueue.then(function() {
+                        return configure(message, generation, connectedPort);
+                      }).catch(function(error) {
+                        if (nativePort === connectedPort && generation === nativeGeneration) {
+                          globalThis.__novaVpnConfigReady = false;
+                          report("1VPN configuration error", {
+                            error: String(error),
+                            routingReady: false,
+                            torGuestMode: globalThis.__novaTorGuestMode === true
+                          });
+                        }
+                      });
+                    }
                   });
-                  nativePort.onDisconnect.addListener(function() {
+                  connectedPort.onDisconnect.addListener(function() {
+                    if (nativePort !== connectedPort || generation !== nativeGeneration) return;
                     nativePort = null;
+                    nativeGeneration++;
                     // Stop top-level and subresource traffic until Nova re-sends the
                     // persisted VPN/Tor configuration after the native bridge reconnects.
                     globalThis.__novaVpnConfigReady = false;
                     setTimeout(connectNative, 2500);
                   });
-                  nativePort.postMessage({
+                  connectedPort.postMessage({
                     type: "ready",
                     supported: supported(),
                     status: supported() ? "1VPN proxy backend ready" : "GeckoView proxy API unavailable"
                   });
                 } catch (_) {
                   nativePort = null;
+                  nativeGeneration++;
+                  globalThis.__novaVpnConfigReady = false;
                   setTimeout(connectNative, 3000);
                 }
               }
@@ -352,9 +379,12 @@ val prepare1VpnAssets by tasks.registering {
               connectNative();
             })();
         """.trimIndent()
-        check(background.contains("__novaProxyConfigPromise") && background.contains("__novaFailClosedProxy") &&
-            background.contains("result.type === \"direct\"") && background.contains("__novaProxyConfigResolve") &&
-            novaBridge.contains("__novaTrafficGateReady") && novaBridge.contains("__novaVpnConfigReady")) {
+        check(background.contains("(function()") && background.contains("globalThis.__novaProxyConfigResolve = resolve") &&
+            background.contains("__novaProxyConfigPromise") && background.contains("__novaFailClosedProxy") &&
+            background.contains("result.type === \"direct\"") &&
+            novaBridge.contains("globalThis.__novaProxyConfigResolve") && novaBridge.contains("__novaTrafficGateReady") &&
+            novaBridge.contains("__novaVpnConfigReady") && novaBridge.contains("configureQueue") &&
+            novaBridge.contains("nativeGeneration")) {
             "Nova's fail-closed proxy guard is missing from the generated 1VPN extension."
         }
         backgroundFile.writeText(background + "\n" + novaBridge)

@@ -24,11 +24,16 @@ class GuestTorRoutingPolicyTest {
         assertTrue(GuestTorIsolationPolicy.canStart(hasPrivateTabs = false))
     }
 
-    @Test fun guestTorSuspendsOnlyPersistentGeckoSessions() {
-        assertTrue(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, false, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
-        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, false, com.nova.browser.engine.BrowserEngineType.CEFRIUM))
-        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, true, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
-        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(true, false, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
+    @Test fun guestTorSuspendsEveryPersistentNormalEngineSession() {
+        assertTrue(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, false))
+        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, true))
+        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(true, false))
+    }
+
+    @Test fun allNonGuestTabsAreBlockedWhileGuestTorOwnsTheRuntime() {
+        assertTrue(GuestTorIsolationPolicy.shouldBlockNonGuestSession(false, true))
+        assertFalse(GuestTorIsolationPolicy.shouldBlockNonGuestSession(true, true))
+        assertFalse(GuestTorIsolationPolicy.shouldBlockNonGuestSession(false, false))
     }
 
     @Test fun tabRestoreWaitsUntilGuestTorStartupAndCircuitValidationFinish() {

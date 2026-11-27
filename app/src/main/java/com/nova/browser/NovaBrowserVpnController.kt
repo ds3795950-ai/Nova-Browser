@@ -34,7 +34,7 @@ object NovaBrowserVpnController {
         if (runtime === geckoRuntime) return
         runtime = geckoRuntime
         preferences = context.applicationContext.getSharedPreferences("nova_local", Context.MODE_PRIVATE)
-        preferences?.edit()?.putBoolean("nova_tor_guest_enabled", false)?.putInt("nova_tor_guest_socks_port", 0)?.putBoolean("nova_tor_guest_proxy_ready", false)?.putBoolean("nova_vpn_routing_ready", false)?.apply()
+        preferences?.edit()?.putBoolean("nova_tor_guest_enabled", false)?.putInt("nova_tor_guest_socks_port", 0)?.putBoolean("nova_tor_guest_proxy_ready", false)?.putBoolean("nova_tor_guest_configured", false)?.putBoolean("nova_tor_guest_mode", false)?.putBoolean("nova_vpn_routing_ready", false)?.apply()
         CefriumVpnController.setStatusListener { message ->
             preferences?.edit()?.putString("nova_vpn_status", message)?.apply()
             statusListener?.invoke()
@@ -80,6 +80,8 @@ object NovaBrowserVpnController {
                                                     .putBoolean("nova_vpn_proxy_supported", payload.optBoolean("supported", false))
                                                     .putBoolean("nova_vpn_webrtc_protected", payload.optBoolean("webrtcProtected", false))
                                                     .putBoolean("nova_vpn_routing_ready", payload.optBoolean("routingReady", false))
+                                                    .putBoolean("nova_tor_guest_configured", payload.has("torGuestMode"))
+                                                    .putBoolean("nova_tor_guest_mode", payload.optBoolean("torGuestMode", false))
                                                     .putBoolean("nova_tor_guest_proxy_ready", prefs.getBoolean("nova_tor_guest_enabled", false) && payload.optBoolean("torRoutingReady", false))
                                                     .putString("nova_vpn_status", payload.optString("status", "Proxy backend ready"))
                                                     .apply()
@@ -104,6 +106,7 @@ object NovaBrowserVpnController {
                                         preferences?.edit()
                                             ?.putBoolean("nova_vpn_routing_ready", false)
                                             ?.putBoolean("nova_tor_guest_proxy_ready", false)
+                                            ?.putBoolean("nova_tor_guest_configured", false)
                                             ?.putString("nova_vpn_status", if (isVpnEnabled()) "1VPN bridge disconnected; navigation paused until protection is restored" else "Proxy bridge disconnected; Guest Tor is no longer verified")
                                             ?.apply()
                                         statusListener?.invoke()
@@ -181,6 +184,11 @@ object NovaBrowserVpnController {
         statusListener = listener
     }
 
+    /** Re-evaluate the current Activity after a routing transition completes. */
+    fun notifyStatusChanged() {
+        statusListener?.invoke()
+    }
+
     fun setTorRoutingStatusListener(listener: (() -> Unit)?) {
         torRoutingStatusListener = listener
     }
@@ -191,6 +199,7 @@ object NovaBrowserVpnController {
             ?.putBoolean("nova_tor_guest_enabled", valid)
             ?.putInt("nova_tor_guest_socks_port", if (valid) socksPort else 0)
             ?.putBoolean("nova_tor_guest_proxy_ready", false)
+            ?.putBoolean("nova_tor_guest_configured", false)
             ?.apply()
         sendCurrentSettings()
         torRoutingStatusListener?.invoke()
@@ -199,6 +208,11 @@ object NovaBrowserVpnController {
     fun isTorGuestRoutingReady(): Boolean =
         nativePort != null && preferences?.getBoolean("nova_tor_guest_enabled", false) == true &&
             preferences?.getBoolean("nova_tor_guest_proxy_ready", false) == true
+
+    /** True only after the extension explicitly acknowledges that Guest Tor routing is disabled. */
+    fun isTorGuestRoutingDisabledConfirmed(): Boolean =
+        nativePort != null && preferences?.getBoolean("nova_tor_guest_configured", false) == true &&
+            preferences?.getBoolean("nova_tor_guest_mode", true) == false
 
     private fun sendCurrentSettings() {
         val prefs = preferences ?: return
