@@ -1,5 +1,6 @@
 package com.nova.browser
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,7 +28,7 @@ class GuestTorRoutingPolicyTest {
     }
 
     @Test fun guestCreationRollbackIdentifiesOnlyNewTabs() {
-        assertTrue(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old", "new")).contains("new"))
+        assertEquals(setOf("new"), GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old", "new")))
         assertTrue(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old")).isEmpty())
     }
 
