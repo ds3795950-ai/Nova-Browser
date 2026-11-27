@@ -19,6 +19,13 @@ class GuestTorRoutingPolicyTest {
         assertTrue(GuestTorRoutingPolicy.canEnterGuest(true, 9050, true))
     }
 
+    @Test fun vpnCredentialBootstrapNeverRunsWhileGuestTorOwnsTheRuntime() {
+        assertTrue(VpnCredentialBootstrapPolicy.shouldStart(true, false, false))
+        assertFalse(VpnCredentialBootstrapPolicy.shouldStart(true, true, true))
+        assertFalse(VpnCredentialBootstrapPolicy.shouldStart(true, false, true))
+        assertFalse(VpnCredentialBootstrapPolicy.shouldStart(false, false, false))
+    }
+
     @Test fun privateTabsBlockGuestTorStartup() {
         assertFalse(GuestTorIsolationPolicy.canStart(hasPrivateTabs = true))
         assertTrue(GuestTorIsolationPolicy.canStart(hasPrivateTabs = false))

@@ -11,6 +11,11 @@ import org.mozilla.geckoview.WebExtension
 import com.nova.browser.engine.CefriumVpnController
 import com.nova.browser.engine.CefriumVpnCredentials
 
+internal object VpnCredentialBootstrapPolicy {
+    fun shouldStart(vpnEnabled: Boolean, guestTorEnabled: Boolean, torProxyReserved: Boolean): Boolean =
+        vpnEnabled && !guestTorEnabled && !torProxyReserved
+}
+
 /** A Tor stop is confirmed only by the acknowledgement for the latest disable request. */
 internal object TorGuestConfigAckPolicy {
     fun isLatestDisableAcknowledgement(
@@ -223,6 +228,7 @@ object NovaBrowserVpnController {
     }
 
     fun setTorGuestRouting(enabled: Boolean, socksPort: Int) {
+        if (enabled) closeCredentialBootstrap()
         val valid = enabled && socksPort in 1..65535
         preferences?.edit()
             ?.putBoolean("nova_tor_guest_enabled", valid)
@@ -273,16 +279,40 @@ object NovaBrowserVpnController {
                 .put("torSocksPort", prefs.getInt("nova_tor_guest_socks_port", 0))
         }.getOrNull() ?: return
         runCatching { nativePort?.postMessage(payload) }
-        if (prefs.getBoolean("nova_vpn_enabled", false)) requestCredentialBootstrap()
+        if (VpnCredentialBootstrapPolicy.shouldStart(
+                vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
+                guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+            )) requestCredentialBootstrap()
     }
 
     /** A short-lived hidden Gecko session makes one ordinary request so 1VPN's own
      * onAuthRequired handler can hand its resolved credentials to Cefrium. */
+    fun onGuestTorStopped() {
+        val prefs = preferences ?: return
+        if (VpnCredentialBootstrapPolicy.shouldStart(
+                vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
+                guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+            )) requestCredentialBootstrap()
+    }
+
     private fun requestCredentialBootstrap() {
         val geckoRuntime = runtime ?: return
+        val prefs = preferences ?: return
+        if (!VpnCredentialBootstrapPolicy.shouldStart(
+                vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
+                guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+            )) return
         if (nativePort == null || credentialBootstrapSession != null) return
         Handler(Looper.getMainLooper()).postDelayed({
-            if (nativePort == null || !isVpnEnabled() || credentialBootstrapSession != null) return@postDelayed
+            if (nativePort == null || !isVpnEnabled() || credentialBootstrapSession != null ||
+                !VpnCredentialBootstrapPolicy.shouldStart(
+                    vpnEnabled = isVpnEnabled(),
+                    guestTorEnabled = preferences?.getBoolean("nova_tor_guest_enabled", false) == true,
+                    torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+                )) return@postDelayed
             runCatching {
                 val session = GeckoSession()
                 credentialBootstrapSession = session

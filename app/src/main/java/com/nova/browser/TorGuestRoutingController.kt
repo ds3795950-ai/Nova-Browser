@@ -176,6 +176,7 @@ internal object TorGuestRoutingController {
             state = State.STOPPED
             lastError = "Tor is not running"
             NovaBrowserVpnController.notifyStatusChanged()
+            NovaBrowserVpnController.onGuestTorStopped()
             val callback = onStopped
             onStopped = null
             callback?.invoke()
