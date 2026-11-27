@@ -151,6 +151,7 @@ class MainActivity : ComponentActivity() {
     private var pendingFileResult: GeckoResult<PromptResponse>? = null
     private val activePromptDialogs = linkedSetOf<AlertDialog>()
     private var tabSearchResultsDialog: AlertDialog? = null
+    private var tabSearchInputDialog: AlertDialog? = null
     private val activeBottomSheetDialogs = linkedSetOf<Dialog>()
     private val activeUndoPopups = linkedSetOf<PopupWindow>()
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
@@ -1168,6 +1169,8 @@ class MainActivity : ComponentActivity() {
             toast("Guest Tor is already connecting")
             return
         }
+        tabSearchInputDialog?.dismiss()
+        tabSearchInputDialog = null
         tabSearchResultsDialog?.dismiss()
         tabSearchResultsDialog = null
         guestTorStartPending = true
@@ -3429,37 +3432,38 @@ class MainActivity : ComponentActivity() {
             setSingleLine(true)
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
-        AlertDialog.Builder(this)
+        val searchDialog = AlertDialog.Builder(this)
             .setTitle("Search tabs")
             .setView(input)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Search", null)
-            .create().also { dialog ->
-                dialog.setOnShowListener {
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                        val query = input.text.toString().trim()
-                        if (query.isBlank()) { input.error = "Enter a title, URL or group"; return@setOnClickListener }
-                        val guestOnly = currentTab()?.isGuest == true
-                        val matches = tabs.filter { tab ->
-                            (!guestOnly || tab.isGuest) &&
-                                listOf(tab.title, tab.renamedTitle.orEmpty(), tab.lastUrl, tab.group)
-                                    .any { it.contains(query, ignoreCase = true) }
-                        }.take(100)
-                        if (matches.isEmpty()) { toast("No matching tabs"); return@setOnClickListener }
-                        val ids = matches.map { it.id }
-                        dialog.dismiss()
-                        val resultsDialog = AlertDialog.Builder(this).setTitle("${matches.size} matching tabs")
-                            .setItems(matches.map { "${it.renamedTitle ?: it.title}\n${it.lastUrl}" }.toTypedArray()) { _, which ->
-                                val index = tabs.indexOfFirst { it.id == ids[which] }
-                                if (index >= 0) switchTab(index)
-                            }.setNegativeButton(getString(R.string.close), null).create()
-                        tabSearchResultsDialog = resultsDialog
-                        resultsDialog.setOnDismissListener { if (tabSearchResultsDialog === resultsDialog) tabSearchResultsDialog = null }
-                        resultsDialog.show()
-                    }
-                }
-                dialog.show()
+            .create()
+        tabSearchInputDialog = searchDialog
+        searchDialog.setOnDismissListener { if (tabSearchInputDialog === searchDialog) tabSearchInputDialog = null }
+        searchDialog.setOnShowListener {
+            searchDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val query = input.text.toString().trim()
+                if (query.isBlank()) { input.error = "Enter a title, URL or group"; return@setOnClickListener }
+                val guestOnly = currentTab()?.isGuest == true
+                val matches = tabs.filter { tab ->
+                    (!guestOnly || tab.isGuest) &&
+                        listOf(tab.title, tab.renamedTitle.orEmpty(), tab.lastUrl, tab.group)
+                            .any { it.contains(query, ignoreCase = true) }
+                }.take(100)
+                if (matches.isEmpty()) { toast("No matching tabs"); return@setOnClickListener }
+                val ids = matches.map { it.id }
+                searchDialog.dismiss()
+                val resultsDialog = AlertDialog.Builder(this).setTitle("${matches.size} matching tabs")
+                    .setItems(matches.map { "${it.renamedTitle ?: it.title}\n${it.lastUrl}" }.toTypedArray()) { _, which ->
+                        val index = tabs.indexOfFirst { it.id == ids[which] }
+                        if (index >= 0) switchTab(index)
+                    }.setNegativeButton(getString(R.string.close), null).create()
+                tabSearchResultsDialog = resultsDialog
+                resultsDialog.setOnDismissListener { if (tabSearchResultsDialog === resultsDialog) tabSearchResultsDialog = null }
+                resultsDialog.show()
             }
+        }
+        searchDialog.show()
     }
 
     private fun showTabs() {
@@ -6779,6 +6783,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
             request.complete(false)
         }
         activeCefriumAndroidPermission = null
+        tabSearchInputDialog?.dismiss()
+        tabSearchInputDialog = null
         tabSearchResultsDialog?.dismiss()
         tabSearchResultsDialog = null
         activeBottomSheetDialogs.toList().forEach { runCatching { it.dismiss() } }
