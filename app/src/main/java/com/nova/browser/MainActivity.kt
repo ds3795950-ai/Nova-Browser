@@ -1183,24 +1183,28 @@ class MainActivity : ComponentActivity() {
         setOnClickListener { action() }
     }
 
-    private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false) {
+    private fun createTab(isPrivate: Boolean, url: String, isGuest: Boolean = false): Boolean {
         if (pendingGeckoDataClearActive) {
-            toast("Wait for GeckoView data deletion to finish before opening another tab")
-            return
+            toast(if (isGuest) "Guest Mode cannot start while GeckoView data deletion is running" else "Wait for GeckoView data deletion to finish before opening another tab")
+            return false
+        }
+        if (isGuest && !TorGuestRoutingController.isReady()) {
+            toast("Guest Mode waits until Nova verifies Tor routing")
+            return false
         }
         if (isGuest && splitTabId != null) exitSplitScreen()
         cancelPendingRemoteSuggestions()
         if (currentTab()?.isGuest == true && !isGuest) {
             toast("Normal and Private tabs are unavailable in Guest Mode")
-            return
+            return false
         }
-        deactivateTabRuntime(currentTab())
         val tab = BrowserTab(null, isPrivate, isGuest, lastUrl = url, desktopSite = isDesktopUrl(url))
         tab.engineType = resolveEngineForTab(tab)
         if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
             toast("Normal and Private tabs are paused while Guest Tor routing is connecting, active, or disconnecting")
-            return
+            return false
         }
+        deactivateTabRuntime(currentTab())
         tabs.add(tab)
         activeIndex = tabs.lastIndex
         activateTab(tab)
@@ -1210,9 +1214,14 @@ class MainActivity : ComponentActivity() {
         if (!isPrivate && !isGuest) persistTabs()
         if (url == HOME_URL) showHomeScreen() else navigate(url)
         enforceSessionBudget()
+        return true
     }
 
     private fun createGuestTab() {
+        if (pendingGeckoDataClearActive) {
+            toast("Guest Mode cannot start while GeckoView data deletion is running")
+            return
+        }
         if (guestTorStartPending) {
             toast("Guest Tor is already connecting")
             return
@@ -1259,7 +1268,14 @@ class MainActivity : ComponentActivity() {
                     return@start
                 }
                 runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
-                    .onSuccess { toast("Guest Mode started · Tor routing active") }
+                    .onSuccess { created ->
+                        if (!created || tabs.none { it.isGuest }) {
+                            TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
+                            toast("Guest Mode could not open a tab · Tor is disconnecting safely")
+                        } else {
+                            toast("Guest Mode started · Tor routing active")
+                        }
+                    }
                     .onFailure {
                         if (tabs.any { it.isGuest }) closeGuestTabs()
                         else TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
