@@ -353,8 +353,8 @@ class MainActivity : ComponentActivity() {
         configureExtensionPermissions()
         NovaBrowserVpnController.initialize(this, runtime)
         NovaBrowserVpnController.setStatusListener {
-            if (NovaBrowserVpnController.isVpnEnabled()) runOnUiThread {
-                if (!isFinishing && !isDestroyed && ::browserPane.isInitialized) switchAllCefriumTabsToGecko("1VPN is enabled")
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && ::browserPane.isInitialized) applyVpnRoutingReadiness()
             }
         }
         val retained = retainedTabsForConfiguration
@@ -416,7 +416,7 @@ class MainActivity : ComponentActivity() {
             restoreTabs()
             if (tabs.isEmpty()) createTab(false, HOME_URL)
         }
-        if (NovaBrowserVpnController.isVpnEnabled()) switchAllCefriumTabsToGecko("1VPN is enabled")
+        applyVpnRoutingReadiness()
         if (savedInstanceState == null) handleViewIntent(intent)
     }
 
@@ -1862,6 +1862,38 @@ class MainActivity : ComponentActivity() {
         tab.engineFallbackReason = reason
         activateTab(tab)
         toast("Switched this tab to GeckoView: $reason")
+    }
+
+    /**
+     * Enforce the requested 1VPN state at the tab/session boundary. If the extension
+     * bridge or its blocking traffic gate is not ready, close live engines so existing
+     * documents cannot keep issuing background requests. Restore the active tab only
+     * after the protected route is verified, or when the user turns 1VPN off.
+     */
+    private fun applyVpnRoutingReadiness() {
+        if (!::browserPane.isInitialized) return
+        if (!NovaBrowserVpnController.isVpnEnabled()) {
+            if (tabs.isNotEmpty() && currentTab()?.needsReload == true) {
+                switchTab(activeIndex.coerceIn(tabs.indices))
+            }
+            return
+        }
+        if (!NovaBrowserVpnController.isVpnRoutingReady()) {
+            if (splitTabId != null) exitSplitScreen()
+            tabs.forEach { tab ->
+                if (tab.browserEngine != null) {
+                    if (currentTab() === tab) deactivateTabRuntime(tab)
+                    closeTabRuntime(tab)
+                    tab.needsReload = tab.lastUrl != HOME_URL
+                }
+            }
+            currentTab()?.let { if (it.lastUrl != HOME_URL) setPageStatus("1VPN connecting · browser tabs paused until protected routing is ready", 1) }
+            return
+        }
+        switchAllCefriumTabsToGecko("1VPN is enabled")
+        if (tabs.isNotEmpty() && currentTab()?.needsReload == true) {
+            switchTab(activeIndex.coerceIn(tabs.indices))
+        }
     }
 
     private fun switchAllCefriumTabsToGecko(reason: String) {
@@ -6704,7 +6736,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         applyGeckoImageBehavior { applied ->
             if (!applied) toast("Could not update GeckoView image-loading settings")
         }
-        if (NovaBrowserVpnController.isVpnEnabled()) switchAllCefriumTabsToGecko("1VPN is enabled")
+        applyVpnRoutingReadiness()
         tabs.forEach { it.browserEngine?.onHostResume() }
     }
 
