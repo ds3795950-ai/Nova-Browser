@@ -415,8 +415,13 @@ class MainActivity : ComponentActivity() {
                                 break
                             }
                         }
-                        if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
+                        if (tabs.isEmpty()) {
+                            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+                        } else {
+                            switchTab(activeIndex)
+                        }
                         restoreSplitPane()
+                        retryPendingExternalLink()
                     },
                     onFailure = { reason ->
                         guestTorStartPending = false
@@ -4878,11 +4883,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun prepareDesktopModeForNavigation(tab: BrowserTab, target: String) {
-        if (!canUseTabEngine(tab, "Desktop site")) return
+        // Resolve the destination preference before the routing guard. If 1VPN is still
+        // connecting, the tab record must remember the destination's mode so ensureSession()
+        // restores the correct desktop/mobile GeckoSession after routing becomes ready.
         val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
-        if (desired != tab.desktopSite) {
-            tab.desktopSite = desired
-            if (tab.engineType == BrowserEngineType.CEFRIUM) {
+        if (desired == tab.desktopSite) return
+        tab.desktopSite = desired
+        if (!canUseTabEngine(tab, "Desktop site")) return
+        if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) return
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
                 runCatching { (tab.browserEngine as? CefriumBrowserEngine)?.setDesktopMode(desired) }
                     .onFailure { failure ->
                         val fallback = fallbackTabToGecko(tab, failure)
@@ -6700,7 +6709,9 @@ private fun showQuickSettings() {
                     removed.thumbnail?.recycle(); removed.thumbnail = null
                 }
                 cleanupGuestContextIfIdle()
-                if (tabs.isEmpty()) createTab(false, HOME_URL) else {
+                if (tabs.isEmpty()) {
+                    if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+                } else {
                     activeIndex = tabs.indexOfFirst { it.id == activeId }.takeIf { it >= 0 } ?: tabs.lastIndex
                     switchTab(activeIndex)
                 }
