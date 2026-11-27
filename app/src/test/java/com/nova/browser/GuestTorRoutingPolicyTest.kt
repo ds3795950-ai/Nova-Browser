@@ -30,4 +30,11 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, true, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
         assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(true, false, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
     }
+
+    @Test fun tabRestoreWaitsUntilGuestTorStartupAndCircuitValidationFinish() {
+        assertTrue(GuestTorIsolationPolicy.shouldDeferTabRestore(true, false, false))
+        assertTrue(GuestTorIsolationPolicy.shouldDeferTabRestore(false, true, false))
+        assertFalse(GuestTorIsolationPolicy.shouldDeferTabRestore(false, true, true))
+        assertFalse(GuestTorIsolationPolicy.shouldDeferTabRestore(false, false, false))
+    }
 }

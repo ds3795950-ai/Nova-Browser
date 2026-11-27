@@ -294,6 +294,9 @@ val prepare1VpnAssets by tasks.registering {
                 } catch (_) { return false; }
               }
               async function configure(message) {
+                // Reconfiguration is a protected transition too: pause traffic until
+                // the new VPN/Tor state and leak protections have been applied.
+                globalThis.__novaVpnConfigReady = false;
                 var location = ["sgp", "ams", "lax"].indexOf(message.location) >= 0 ? message.location : "sgp";
                 var enabled = message.enabled === true;
                 globalThis.__nova1VpnEnabled = enabled;

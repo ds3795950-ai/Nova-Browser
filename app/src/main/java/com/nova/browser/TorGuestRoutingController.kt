@@ -236,6 +236,10 @@ internal object GuestTorIsolationPolicy {
     /** Suspend persistent Gecko sessions while the shared Gecko proxy is routed through Tor. */
     fun shouldSuspendNormalTab(isGuest: Boolean, isPrivate: Boolean, engine: BrowserEngineType): Boolean =
         !isGuest && !isPrivate && engine == BrowserEngineType.GECKOVIEW
+
+    /** Never recreate a Gecko session while the runtime-wide proxy may still be in Tor mode. */
+    fun shouldDeferTabRestore(guestStartPending: Boolean, activeTabIsGuest: Boolean, torReady: Boolean): Boolean =
+        guestStartPending || (activeTabIsGuest && !torReady)
 }
 
 internal object GuestTorRoutingPolicy {

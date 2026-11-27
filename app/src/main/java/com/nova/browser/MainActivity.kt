@@ -1872,6 +1872,11 @@ class MainActivity : ComponentActivity() {
      */
     private fun applyVpnRoutingReadiness() {
         if (!::browserPane.isInitialized) return
+        if (GuestTorIsolationPolicy.shouldDeferTabRestore(
+                guestStartPending = guestTorStartPending,
+                activeTabIsGuest = currentTab()?.isGuest == true,
+                torReady = TorGuestRoutingController.isReady()
+            )) return
         if (!NovaBrowserVpnController.isVpnEnabled()) {
             if (tabs.isNotEmpty() && currentTab()?.needsReload == true) {
                 switchTab(activeIndex.coerceIn(tabs.indices))
