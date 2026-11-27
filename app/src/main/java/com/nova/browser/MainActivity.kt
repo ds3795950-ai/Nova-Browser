@@ -369,7 +369,7 @@ class MainActivity : ComponentActivity() {
         runtime.settings.setLoginAutofillEnabled(true)
         configureExtensionPermissions()
         NovaBrowserVpnController.initialize(this, runtime)
-        NovaBrowserVpnController.setStatusListener {
+        NovaBrowserVpnController.setStatusListener(this) {
             runOnUiThread {
                 if (!isFinishing && !isDestroyed && ::browserPane.isInitialized) applyVpnRoutingReadiness()
             }
@@ -7031,7 +7031,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         if ((!isChangingConfigurations || tabs.none { it.isGuest }) && TorGuestRoutingController.blocksNormalGeckoSessions()) {
             TorGuestRoutingController.stop { /* a recreated Activity is notified after the extension acknowledges the reset */ }
         }
-        NovaBrowserVpnController.setStatusListener(null)
+        NovaBrowserVpnController.clearStatusListener(this)
         cancelPendingRemoteSuggestions()
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()

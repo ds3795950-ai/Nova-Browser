@@ -41,6 +41,7 @@ object NovaBrowserVpnController {
     private var credentialBootstrapSession: GeckoSession? = null
     private var credentialBootstrapTimeout: Runnable? = null
     private var statusListener: (() -> Unit)? = null
+    private var statusListenerOwner: Any? = null
     private var torRoutingStatusListener: (() -> Unit)? = null
     private var latestConfigRequestId = 0L
 
@@ -200,8 +201,16 @@ object NovaBrowserVpnController {
         statusListener?.invoke()
     }
 
-    fun setStatusListener(listener: (() -> Unit)?) {
+    fun setStatusListener(owner: Any, listener: (() -> Unit)?) {
+        statusListenerOwner = owner
         statusListener = listener
+    }
+
+    fun clearStatusListener(owner: Any) {
+        if (statusListenerOwner === owner) {
+            statusListenerOwner = null
+            statusListener = null
+        }
     }
 
     /** Re-evaluate the current Activity after a routing transition completes. */
