@@ -48,6 +48,16 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorIsolationPolicy.shouldBlockNonGuestSession(false, false))
     }
 
+    @Test fun pendingExternalLinksNeverCrossGuestAndNormalContexts() {
+        assertTrue(PendingExternalLinkPolicy.canOpen(true, true, false, true, true))
+        assertFalse(PendingExternalLinkPolicy.canOpen(true, false, false, false, false))
+        assertTrue(PendingExternalLinkPolicy.shouldDiscardGuestLink(true, false, false, false))
+        assertFalse(PendingExternalLinkPolicy.shouldDiscardGuestLink(true, false, true, true))
+        assertFalse(PendingExternalLinkPolicy.shouldDiscardGuestLink(false, false, false, false))
+        assertTrue(PendingExternalLinkPolicy.canOpen(false, false, false, false, false))
+        assertFalse(PendingExternalLinkPolicy.canOpen(false, true, false, true, false))
+    }
+
     @Test fun pendingExternalLinksRespectGuestRuntimeIsolation() {
         assertTrue(GuestTorIsolationPolicy.shouldBlockPendingExternalLink(false, true, false))
         assertFalse(GuestTorIsolationPolicy.shouldBlockPendingExternalLink(false, false, false))

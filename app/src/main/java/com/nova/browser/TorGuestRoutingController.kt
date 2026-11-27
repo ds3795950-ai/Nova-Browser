@@ -291,6 +291,27 @@ internal object TorGuestRoutingController {
     }
 }
 
+internal object PendingExternalLinkPolicy {
+    fun canOpen(
+        pendingForGuest: Boolean,
+        activeTabIsGuest: Boolean,
+        guestStartPending: Boolean,
+        torProxyReserved: Boolean,
+        guestTorReady: Boolean
+    ): Boolean = if (pendingForGuest) {
+        activeTabIsGuest && !guestStartPending && guestTorReady
+    } else {
+        !activeTabIsGuest && !guestStartPending && !torProxyReserved
+    }
+
+    fun shouldDiscardGuestLink(
+        pendingForGuest: Boolean,
+        activeTabIsGuest: Boolean,
+        guestStartPending: Boolean,
+        torProxyReserved: Boolean
+    ): Boolean = pendingForGuest && !activeTabIsGuest && !guestStartPending && !torProxyReserved
+}
+
 internal object GuestTorIsolationPolicy {
     /** The GeckoView proxy is runtime-wide; Private tabs must not share it with Guest Tor. */
     fun canStart(hasPrivateTabs: Boolean): Boolean = !hasPrivateTabs

@@ -207,6 +207,7 @@ class MainActivity : ComponentActivity() {
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
     private var pendingExternalLink: String? = null
+    private var pendingExternalLinkGuest: Boolean? = null
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
@@ -468,22 +469,41 @@ class MainActivity : ComponentActivity() {
         val scheme = link.scheme?.lowercase()
         if (scheme != "http" && scheme != "https") return
         val url = link.toString()
-        if (createTab(false, url, isGuest = currentTab()?.isGuest == true)) {
+        // Preserve the browsing context that owned the link when tab creation was blocked.
+        val guestOwned = currentTab()?.isGuest == true || guestTorStartPending || TorGuestRoutingController.isReady()
+        if (createTab(false, url, isGuest = guestOwned)) {
             pendingExternalLink = null
+            pendingExternalLinkGuest = null
             incoming.data = null
         } else {
             pendingExternalLink = url
+            pendingExternalLinkGuest = guestOwned
             toast("External link saved · it will open when protected routing is ready")
         }
     }
 
     private fun retryPendingExternalLink() {
         val url = pendingExternalLink ?: return
-        if (pendingGeckoDataClearActive || guestTorStartPending) return
-        val guest = currentTab()?.isGuest == true
-        if (GuestTorIsolationPolicy.shouldBlockPendingExternalLink(
-                isGuest = guest,
-                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions(),
+        if (pendingGeckoDataClearActive) return
+        val guest = pendingExternalLinkGuest == true
+        val activeGuest = currentTab()?.isGuest == true
+        val torReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+        if (PendingExternalLinkPolicy.shouldDiscardGuestLink(
+                pendingForGuest = guest,
+                activeTabIsGuest = activeGuest,
+                guestStartPending = guestTorStartPending,
+                torProxyReserved = torReserved
+            )) {
+            // A Guest-owned link must never fall through into a Normal/Private tab after Guest exits.
+            pendingExternalLink = null
+            pendingExternalLinkGuest = null
+            return
+        }
+        if (!PendingExternalLinkPolicy.canOpen(
+                pendingForGuest = guest,
+                activeTabIsGuest = activeGuest,
+                guestStartPending = guestTorStartPending,
+                torProxyReserved = torReserved,
                 guestTorReady = TorGuestRoutingController.isReady()
             )) return
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
@@ -491,6 +511,7 @@ class MainActivity : ComponentActivity() {
             )) return
         if (createTab(false, url, isGuest = guest)) {
             pendingExternalLink = null
+            pendingExternalLinkGuest = null
             if (intent?.data?.toString() == url) intent?.data = null
         }
     }
@@ -2017,6 +2038,11 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+            if (url != HOME_URL) {
+                tab.lastUrl = url
+                tab.needsReload = true
+                tab.cefriumNavigationState = null
+            }
             toast("Normal browsing is paused while Guest Tor is connecting, active, or disconnecting")
             return
         }
@@ -4715,7 +4741,8 @@ class MainActivity : ComponentActivity() {
     private fun restoreAfterGuestTorStop() {
         if (isFinishing || isDestroyed) return
         if (tabs.isEmpty()) {
-            createTab(false, HOME_URL)
+            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+            retryPendingExternalLink()
             return
         }
         applyVpnRoutingReadiness()
