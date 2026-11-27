@@ -206,6 +206,7 @@ class MainActivity : ComponentActivity() {
     private var clipboardClearTask: Runnable? = null
     private val cloudSync: NovaCloudSync by lazy { NovaCloudSync(this) }
     private var pendingHistoryExport: String? = null
+    private var pendingExternalLink: String? = null
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
@@ -461,7 +462,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         applyVpnRoutingReadiness()
-        if (savedInstanceState == null) handleViewIntent(intent)
+        if (intent?.data != null) handleViewIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -476,8 +477,28 @@ class MainActivity : ComponentActivity() {
         val link = incoming.data ?: return
         val scheme = link.scheme?.lowercase()
         if (scheme != "http" && scheme != "https") return
-        incoming.data = null
-        createTab(false, link.toString(), isGuest = currentTab()?.isGuest == true)
+        val url = link.toString()
+        if (createTab(false, url, isGuest = currentTab()?.isGuest == true)) {
+            pendingExternalLink = null
+            incoming.data = null
+        } else {
+            pendingExternalLink = url
+            toast("External link saved · it will open when protected routing is ready")
+        }
+    }
+
+    private fun retryPendingExternalLink() {
+        val url = pendingExternalLink ?: return
+        if (pendingGeckoDataClearActive || guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()) return
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) return
+        val guest = currentTab()?.isGuest == true
+        if (guest && !TorGuestRoutingController.isReady()) return
+        if (createTab(false, url, isGuest = guest)) {
+            pendingExternalLink = null
+            if (intent?.data?.toString() == url) intent?.data = null
+        }
     }
 
     private fun observeWindowLayout() {
@@ -1275,6 +1296,7 @@ class MainActivity : ComponentActivity() {
                             toast("Guest Mode could not open a tab · Tor is disconnecting safely")
                         } else {
                             toast("Guest Mode started · Tor routing active")
+                            retryPendingExternalLink()
                         }
                     }
                     .onFailure {
@@ -2030,6 +2052,7 @@ class MainActivity : ComponentActivity() {
             if (tabs.isNotEmpty() && (currentTab()?.needsReload == true || currentTab()?.browserEngine == null)) {
                 switchTab(activeIndex.coerceIn(tabs.indices))
             }
+            retryPendingExternalLink()
             return
         }
         if (!NovaBrowserVpnController.isVpnRoutingReady()) {
@@ -2048,6 +2071,7 @@ class MainActivity : ComponentActivity() {
         if (tabs.isNotEmpty() && (currentTab()?.needsReload == true || currentTab()?.browserEngine == null)) {
             switchTab(activeIndex.coerceIn(tabs.indices))
         }
+        retryPendingExternalLink()
     }
 
     private fun switchAllCefriumTabsToGecko(reason: String) {
@@ -4666,6 +4690,7 @@ class MainActivity : ComponentActivity() {
             (currentTab()?.browserEngine == null || currentTab()?.needsReload == true)) {
             switchTab(activeIndex.coerceIn(tabs.indices))
         }
+        retryPendingExternalLink()
     }
 
     private fun cleanupGuestContextIfIdle() {
@@ -6320,14 +6345,17 @@ private fun showQuickSettings() {
 
     private fun resumePendingGeckoDataClearTab() {
         if (pendingGeckoDataClearActive) return
-        val tabId = pendingGeckoDataClearResumeTabId ?: return
+        val tabId = pendingGeckoDataClearResumeTabId
         pendingGeckoDataClearResumeTabId = null
-        val index = tabs.indexOfFirst { it.id == tabId }
-        if (currentTab()?.id == tabId && index >= 0 &&
-            tabs[index].engineType == BrowserEngineType.GECKOVIEW &&
-            !tabs[index].isPrivate && !tabs[index].isGuest) {
-            switchTab(index)
+        if (tabId != null) {
+            val index = tabs.indexOfFirst { it.id == tabId }
+            if (currentTab()?.id == tabId && index >= 0 &&
+                tabs[index].engineType == BrowserEngineType.GECKOVIEW &&
+                !tabs[index].isPrivate && !tabs[index].isGuest) {
+                switchTab(index)
+            }
         }
+        retryPendingExternalLink()
     }
 
     private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
