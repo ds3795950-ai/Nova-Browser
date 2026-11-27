@@ -291,6 +291,17 @@ internal object TorGuestRoutingController {
     }
 }
 
+internal object DeferredExternalLinkOwnershipPolicy {
+    /** An Intent extra is trusted only when it matches Nova's private one-time token and URL. */
+    fun isTrusted(suppliedToken: String?, storedToken: String?, storedUrl: String?, incomingUrl: String): Boolean =
+        !suppliedToken.isNullOrBlank() && suppliedToken == storedToken && storedUrl == incomingUrl
+}
+
+internal object CrossEngineNavigationPolicy {
+    /** Only GET requests can be replayed after a browser-engine handoff. */
+    fun canTransfer(method: String): Boolean = method.equals("GET", ignoreCase = true)
+}
+
 internal object PendingExternalLinkPolicy {
     fun canOpen(
         pendingForGuest: Boolean,
