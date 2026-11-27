@@ -4892,35 +4892,34 @@ class MainActivity : ComponentActivity() {
         if (!canUseTabEngine(tab, "Desktop site")) return
         if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) return
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
-                runCatching { (tab.browserEngine as? CefriumBrowserEngine)?.setDesktopMode(desired) }
-                    .onFailure { failure ->
-                        val fallback = fallbackTabToGecko(tab, failure)
-                        if (currentTab() === tab) {
-                            fallback.attachTo(browserView)
-                            showPrimaryEngineView(fallback.view)
-                            fallback.setActive(true, true)
-                        }
-                        if (tab.id == splitTabId) {
-                            fallback.attachTo(secondaryBrowserView)
-                            showSecondaryEngineView(fallback.view)
-                            fallback.setActive(true, false)
-                        }
+            runCatching { (tab.browserEngine as? CefriumBrowserEngine)?.setDesktopMode(desired) }
+                .onFailure { failure ->
+                    val fallback = fallbackTabToGecko(tab, failure)
+                    if (currentTab() === tab) {
+                        fallback.attachTo(browserView)
+                        showPrimaryEngineView(fallback.view)
+                        fallback.setActive(true, true)
                     }
-            } else {
-                closeTabRuntime(tab)
-                tab.needsReload = false
-                val newSession = ensureSession(tab)
-                val engine = ensureBrowserEngine(tab)
-                if (currentTab() === tab) {
-                    engine.attachTo(browserView)
-                    showPrimaryEngineView(engine.view)
-                    engine.setActive(true, true)
+                    if (tab.id == splitTabId) {
+                        fallback.attachTo(secondaryBrowserView)
+                        showSecondaryEngineView(fallback.view)
+                        fallback.setActive(true, false)
+                    }
                 }
-                if (tab.id == splitTabId) {
-                    engine.attachTo(secondaryBrowserView)
-                    showSecondaryEngineView(engine.view)
-                    engine.setActive(true, false)
-                }
+        } else {
+            closeTabRuntime(tab)
+            tab.needsReload = false
+            ensureSession(tab)
+            val engine = ensureBrowserEngine(tab)
+            if (currentTab() === tab) {
+                engine.attachTo(browserView)
+                showPrimaryEngineView(engine.view)
+                engine.setActive(true, true)
+            }
+            if (tab.id == splitTabId) {
+                engine.attachTo(secondaryBrowserView)
+                showSecondaryEngineView(engine.view)
+                engine.setActive(true, false)
             }
         }
     }
