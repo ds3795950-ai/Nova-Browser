@@ -72,6 +72,28 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorIsolationPolicy.shouldDeferTabRestore(false, false, false))
     }
 
+    @Test fun deferredLinkOwnershipRequiresNovaTokenAndMatchingUrl() {
+        assertTrue(DeferredExternalLinkOwnershipPolicy.isTrusted(
+            "private-token", "private-token", "https://example.com", "https://example.com"
+        ))
+        assertFalse(DeferredExternalLinkOwnershipPolicy.isTrusted(
+            "attacker-token", "private-token", "https://example.com", "https://example.com"
+        ))
+        assertFalse(DeferredExternalLinkOwnershipPolicy.isTrusted(
+            "private-token", "private-token", "https://example.com", "https://attacker.example"
+        ))
+        assertFalse(DeferredExternalLinkOwnershipPolicy.isTrusted(
+            null, "private-token", "https://example.com", "https://example.com"
+        ))
+    }
+
+    @Test fun crossEngineNavigationOnlyTransfersGetRequests() {
+        assertTrue(CrossEngineNavigationPolicy.canTransfer("GET"))
+        assertTrue(CrossEngineNavigationPolicy.canTransfer("get"))
+        assertFalse(CrossEngineNavigationPolicy.canTransfer("POST"))
+        assertFalse(CrossEngineNavigationPolicy.canTransfer("PUT"))
+    }
+
     @Test fun onlyLatestTorDisableAcknowledgementReleasesNormalSessionBarrier() {
         assertTrue(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false, true))
         assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 11L, 11L, true, false, true))
