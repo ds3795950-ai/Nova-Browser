@@ -476,9 +476,12 @@ class MainActivity : ComponentActivity() {
         val tokenKey = "com.nova.browser.extra.PENDING_LINK_TOKEN"
         val suppliedToken = incoming.getStringExtra(tokenKey)
         val storedToken = prefs.getString("pending_external_link_token", null)
-        val restoredGuestOwner = !suppliedToken.isNullOrBlank() &&
-            suppliedToken == storedToken &&
-            prefs.getString("pending_external_link_url", null) == url
+        val restoredGuestOwner = DeferredExternalLinkOwnershipPolicy.isTrusted(
+            suppliedToken = suppliedToken,
+            storedToken = storedToken,
+            storedUrl = prefs.getString("pending_external_link_url", null),
+            incomingUrl = url
+        )
         if (suppliedToken != null && !restoredGuestOwner) {
             prefs.edit().remove("pending_external_link_token")
                 .remove("pending_external_link_url")
@@ -1882,7 +1885,7 @@ class MainActivity : ComponentActivity() {
         if (selection.engine == BrowserEngineType.CEFRIUM) return false
         // Reject non-GET engine handoffs before a routing pause can store only the URL;
         // replaying that URL later would silently turn a submitted POST into a GET.
-        if (!method.equals("GET", ignoreCase = true)) {
+        if (!CrossEngineNavigationPolicy.canTransfer(method)) {
             toast("This form cannot be transferred to the other browser engine without losing its submitted data. It was blocked.")
             return true
         }
