@@ -63,7 +63,7 @@ class NovaPhase2HubActivity : Activity() {
             isChecked = prefs.getBoolean("nova_data_saver_enabled", false)
             setOnCheckedChangeListener { _, enabled ->
                 prefs.edit().putBoolean("nova_data_saver_enabled", enabled).apply()
-                status.text = if (enabled) "Data Saver enabled for GeckoView tabs. Cefrium image control is not exposed by the current adapter." else "Data Saver disabled. Existing image preferences are restored."
+                status.text = if (enabled) "Data Saver preference saved. GeckoView will apply image blocking when you return to the browser; Cefrium is not covered." else "Data Saver preference saved. GeckoView will restore your previous image setting when you return."
             }
         }
         root.addView(dataSaver)
@@ -201,8 +201,13 @@ class NovaPhase2HubActivity : Activity() {
 
     private fun openUrl(url: String) {
         val safe = NovaPhase2Policy.safeHttpUrl(url) ?: return
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(safe))) }
-            .onFailure { status.text = "No app can open this link." }
+        runCatching {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = android.net.Uri.parse(safe)
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            })
+        }.onFailure { status.text = "Could not open this page in Nova." }
     }
 
     override fun onDestroy() { discoverRequestGeneration++; worker.shutdownNow(); super.onDestroy() }

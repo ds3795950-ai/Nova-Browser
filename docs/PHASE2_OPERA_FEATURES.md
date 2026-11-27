@@ -4,9 +4,9 @@ This document records the integrated Phase 2 work on `main` and distinguishes sh
 
 ## Integrated in this change
 - **Discover:** opt-in RSS fetch for India, world, football and general sports using HTTPS Google News RSS feeds. Requests run off the UI thread, have bounded response size/time, accept only HTTP(S) article links and do not run in Private or Guest contexts.
-- **Flow:** current-page sharing through Android's system Sharesheet. Nearby Share may be available when the OS offers it; Nova does not claim QR-paired Nova-to-Nova transport.
+- **Flow:** current-page sharing through Android's system Sharesheet. Nearby Share may be available when the OS offers it; Nova does not claim QR-paired Nova-to-Nova transport. Discover and reading-list links open in Nova by default.
 - **Offline reading:** persistent, user-initiated reading-list links, with URL validation and a 200-item cap. This is not an offline page snapshot; the current engine adapters do not expose a common, verified page-archive API.
-- **Data Saver:** GeckoView-only image blocking, with the prior image preference restored when disabled. Cefrium does not expose a verified equivalent in the current adapter; the UI states this limitation.
+- **Data Saver:** GeckoView-only image blocking, with the prior image preference restored when disabled. The Hub reports the preference as saved until GeckoView confirms the update; failures are surfaced by the browser. Cefrium does not expose a verified equivalent in the current adapter.
 - **Tab search:** searches title, URL and group, uses stable tab IDs for selection and keeps Guest search scoped to Guest tabs.
 
 ## Existing Nova AI capabilities

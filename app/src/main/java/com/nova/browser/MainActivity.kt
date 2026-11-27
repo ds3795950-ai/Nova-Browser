@@ -6669,7 +6669,9 @@ private fun showForgotPassword(prefillEmail: String = "") {
     override fun onResume() {
         super.onResume()
         resumePendingGeckoDataClearTab()
-        applyGeckoImageBehavior()
+        applyGeckoImageBehavior { applied ->
+            if (!applied) toast("Could not update GeckoView image-loading settings")
+        }
         if (NovaBrowserVpnController.isVpnEnabled()) switchAllCefriumTabsToGecko("1VPN is enabled")
         tabs.forEach { it.browserEngine?.onHostResume() }
     }
