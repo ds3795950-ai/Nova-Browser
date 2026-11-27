@@ -49,6 +49,7 @@ object BrowserUrlResolver {
             "Bing" -> "https://www.bing.com/search?q=$query"
             "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
             "Brave Search" -> "https://search.brave.com/search?q=$query"
+            "Perplexity" -> "https://www.perplexity.ai/search?q=$query"
             else -> "https://www.google.com/search?q=$query"
         }
     }
