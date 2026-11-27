@@ -1765,6 +1765,11 @@ class MainActivity : ComponentActivity() {
             if (currentTab() === tab) setPageStatus("1VPN is connecting · this tab will resume when protected routing is ready", 1)
             return
         }
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+            tab.needsReload = tab.lastUrl != HOME_URL
+            if (currentTab() === tab) setPageStatus("Normal and Private tabs are paused while Guest Tor owns the browser", 1)
+            return
+        }
         enforceCefriumCompatibility(tab)
         if (pendingGeckoDataClearActive && tab.engineType == BrowserEngineType.GECKOVIEW &&
             !tab.isPrivate && !tab.isGuest) {
