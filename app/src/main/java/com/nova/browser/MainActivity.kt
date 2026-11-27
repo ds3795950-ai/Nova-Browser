@@ -1241,7 +1241,8 @@ class MainActivity : ComponentActivity() {
         // Navigation state is retained and sessions are recreated only after Tor reset.
         deactivateTabRuntime(currentTab())
         tabs.filter { tab ->
-            GuestTorIsolationPolicy.shouldSuspendNormalTab(tab.isGuest, tab.isPrivate) && tab.browserEngine != null
+            GuestTorIsolationPolicy.shouldSuspendNormalTab(tab.isGuest, tab.isPrivate) &&
+                (tab.browserEngine != null || tab.session != null)
         }.forEach { tab ->
             closeTabRuntime(tab)
             tab.needsReload = tab.lastUrl != HOME_URL
@@ -1322,10 +1323,6 @@ class MainActivity : ComponentActivity() {
             }
             return existing
         }
-        val vpnRoutingBlocked = BrowserVpnNavigationPolicy.shouldBlockNavigation(
-            NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
-        )
-        if (vpnRoutingBlocked) tab.needsReload = tab.lastUrl != HOME_URL
         val settings = GeckoSessionSettings.Builder()
             .usePrivateMode(tab.isPrivate || tab.isGuest)
             .contextId(if (tab.isGuest) guestContextId else null)
@@ -1765,6 +1762,7 @@ class MainActivity : ComponentActivity() {
             BrowserVpnNavigationPolicy.shouldBlockNavigation(NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady())) {
             tab.lastUrl = destination
             tab.needsReload = destination != HOME_URL
+            tab.cefriumNavigationState = null
             toast("Navigation paused until Nova confirms protected routing")
             return true
         }
@@ -1786,6 +1784,7 @@ class MainActivity : ComponentActivity() {
                     BrowserVpnNavigationPolicy.shouldBlockNavigation(NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady())) {
                     tab.lastUrl = destination
                     tab.needsReload = destination != HOME_URL
+                    tab.cefriumNavigationState = null
                     return@post
                 }
                 val latestSelection = engineSelectionForTab(tab, destination)
@@ -1905,7 +1904,14 @@ class MainActivity : ComponentActivity() {
                 tab.cefriumNavigationState = CefriumTabStateCipher.encrypt(rawState, enginePreferences.cefriumProfileName())
             }
         }
-        tab.browserEngine?.close()
+        val engine = tab.browserEngine
+        if (engine != null) {
+            engine.close()
+        } else {
+            // Configuration changes detach the Gecko view but retain its session.
+            // If no engine owns it, close it here before dropping the last reference.
+            tab.session?.let { detachedSession -> runCatching { detachedSession.close() } }
+        }
         tab.browserEngine = null
         tab.session = null
     }
@@ -1953,6 +1959,7 @@ class MainActivity : ComponentActivity() {
             if (url != HOME_URL) {
                 tab.lastUrl = url
                 tab.needsReload = true
+                tab.cefriumNavigationState = null
             }
             applyVpnRoutingReadiness()
             if (currentTab() === tab) setPageStatus("1VPN is connecting · navigation will resume when protected routing is ready", 1)
