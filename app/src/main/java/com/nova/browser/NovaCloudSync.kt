@@ -27,6 +27,7 @@ internal object CloudCrypto {
     private const val MAX_READ_PLAINTEXT_BYTES = 32 * 1024 * 1024
     private const val MAX_READ_CIPHERTEXT_BYTES = MAX_READ_PLAINTEXT_BYTES + 16
     private const val MAX_CIPHERTEXT_B64_CHARS = ((MAX_READ_CIPHERTEXT_BYTES + 2) / 3) * 4
+    internal const val MAX_HTTP_RESPONSE_BYTES = MAX_CIPHERTEXT_B64_CHARS + 1_048_576
     private fun utf8ByteCount(value: String, stopAfter: Int): Int {
         var total = 0
         var index = 0
@@ -52,6 +53,21 @@ internal object CloudCrypto {
         utf8ByteCount(value, MAX_READ_PLAINTEXT_BYTES) <= MAX_READ_PLAINTEXT_BYTES
     internal fun isCiphertextWithinLimit(encodedLength: Int): Boolean =
         encodedLength in 1..MAX_CIPHERTEXT_B64_CHARS
+
+    internal fun readBoundedResponse(input: java.io.InputStream, maxBytes: Int = MAX_HTTP_RESPONSE_BYTES): String {
+        require(maxBytes >= 0) { "Response limit cannot be negative" }
+        val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 8_192))
+        val buffer = ByteArray(8_192)
+        var total = 0
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            require(total <= maxBytes) { "Cloud sync response exceeds the allowed size" }
+            output.write(buffer, 0, count)
+        }
+        return output.toString(Charsets.UTF_8.name())
+    }
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
     private fun unb64(value: String) = java.util.Base64.getDecoder().decode(value)
 
@@ -351,7 +367,7 @@ class NovaCloudSync(context: Context) {
             if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val response = stream?.use { CloudCrypto.readBoundedResponse(it) }.orEmpty()
             if (status !in 200..299) {
                 throw IllegalStateException(NovaEmailOtpPolicy.errorMessage(response, status))
             }

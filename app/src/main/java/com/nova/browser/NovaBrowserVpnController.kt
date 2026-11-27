@@ -71,12 +71,22 @@ object NovaBrowserVpnController {
                                                 statusListener?.invoke()
                                             }
                                             "ready", "status" -> {
-                                                prefs.edit()
+                                                val requestId = payload.optLong("requestId", -1L)
+                                                val expectedRequestId = prefs.getLong("nova_tor_guest_request_id", 0L)
+                                                val editor = prefs.edit()
                                                     .putBoolean("nova_vpn_proxy_supported", payload.optBoolean("supported", false))
                                                     .putBoolean("nova_vpn_webrtc_protected", payload.optBoolean("webrtcProtected", false))
-                                                    .putBoolean("nova_tor_guest_proxy_ready", prefs.getBoolean("nova_tor_guest_enabled", false) && payload.optBoolean("torRoutingReady", false))
                                                     .putString("nova_vpn_status", payload.optString("status", "Proxy backend ready"))
-                                                    .apply()
+                                                if (GuestTorRoutingPolicy.isCurrentAcknowledgement(expectedRequestId, requestId)) {
+                                                    editor.putLong("nova_tor_guest_applied_request_id", requestId)
+                                                        .putBoolean(
+                                                            "nova_tor_guest_proxy_ready",
+                                                            prefs.getBoolean("nova_tor_guest_enabled", false) &&
+                                                                payload.optBoolean("torRoutingReady", false) &&
+                                                                payload.optBoolean("webrtcProtected", false)
+                                                        )
+                                                }
+                                                editor.apply()
                                                 statusListener?.invoke()
                                                 torRoutingStatusListener?.invoke()
                                             }
@@ -168,20 +178,32 @@ object NovaBrowserVpnController {
         torRoutingStatusListener = listener
     }
 
-    fun setTorGuestRouting(enabled: Boolean, socksPort: Int) {
+    fun setTorGuestRouting(enabled: Boolean, socksPort: Int): Long {
         val valid = enabled && socksPort in 1..65535
-        preferences?.edit()
-            ?.putBoolean("nova_tor_guest_enabled", valid)
-            ?.putInt("nova_tor_guest_socks_port", if (valid) socksPort else 0)
-            ?.putBoolean("nova_tor_guest_proxy_ready", false)
-            ?.apply()
+        val prefs = preferences ?: return 0L
+        val requestId = prefs.getLong("nova_tor_guest_request_id", 0L) + 1L
+        prefs.edit()
+            .putLong("nova_tor_guest_request_id", requestId)
+            .putBoolean("nova_tor_guest_enabled", valid)
+            .putInt("nova_tor_guest_socks_port", if (valid) socksPort else 0)
+            .putBoolean("nova_tor_guest_proxy_ready", false)
+            .commit()
         sendCurrentSettings()
         torRoutingStatusListener?.invoke()
+        return requestId
     }
 
-    fun isTorGuestRoutingReady(): Boolean =
-        nativePort != null && preferences?.getBoolean("nova_tor_guest_enabled", false) == true &&
-            preferences?.getBoolean("nova_tor_guest_proxy_ready", false) == true
+    fun isTorGuestRoutingRequestApplied(requestId: Long): Boolean =
+        requestId > 0L && preferences?.getLong("nova_tor_guest_applied_request_id", 0L) == requestId
+
+    fun isTorGuestRoutingReady(): Boolean {
+        val prefs = preferences ?: return false
+        val requestId = prefs.getLong("nova_tor_guest_request_id", 0L)
+        return nativePort != null && requestId > 0L &&
+            prefs.getLong("nova_tor_guest_applied_request_id", 0L) == requestId &&
+            prefs.getBoolean("nova_tor_guest_enabled", false) &&
+            prefs.getBoolean("nova_tor_guest_proxy_ready", false)
+    }
 
     private fun sendCurrentSettings() {
         val prefs = preferences ?: return
@@ -192,6 +214,7 @@ object NovaBrowserVpnController {
                 .put("location", prefs.getString("nova_vpn_location", NovaVpnLocations.DEFAULT_ID))
                 .put("torGuestMode", prefs.getBoolean("nova_tor_guest_enabled", false))
                 .put("torSocksPort", prefs.getInt("nova_tor_guest_socks_port", 0))
+                .put("requestId", prefs.getLong("nova_tor_guest_request_id", 0L))
         }.getOrNull() ?: return
         runCatching { nativePort?.postMessage(payload) }
         if (prefs.getBoolean("nova_vpn_enabled", false)) requestCredentialBootstrap()

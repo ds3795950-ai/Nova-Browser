@@ -14,6 +14,12 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorRoutingPolicy.canEnterGuest(true, 65536, true))
     }
 
+    @Test fun staleProxyAcknowledgementCannotSatisfyCurrentRequest() {
+        assertFalse(GuestTorRoutingPolicy.isCurrentAcknowledgement(12L, 11L))
+        assertFalse(GuestTorRoutingPolicy.isCurrentAcknowledgement(12L, 0L))
+        assertTrue(GuestTorRoutingPolicy.isCurrentAcknowledgement(12L, 12L))
+    }
+
     @Test fun guestCannotStartUntilProxyBridgeConfirmsLeakProtection() {
         assertFalse(GuestTorRoutingPolicy.canEnterGuest(true, 9050, false))
         assertTrue(GuestTorRoutingPolicy.canEnterGuest(true, 9050, true))

@@ -229,6 +229,9 @@ internal object TorGuestRoutingController {
 }
 
 internal object GuestTorRoutingPolicy {
+    fun isCurrentAcknowledgement(expectedRequestId: Long, acknowledgedRequestId: Long): Boolean =
+        expectedRequestId > 0L && acknowledgedRequestId == expectedRequestId
+
     fun canEnableProxy(torBootstrapped: Boolean, socksPort: Int): Boolean =
         torBootstrapped && socksPort in 1..65535
 

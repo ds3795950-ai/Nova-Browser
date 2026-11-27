@@ -1190,12 +1190,19 @@ class MainActivity : ComponentActivity() {
                     toast("Guest Mode could not start safely because its cleanup marker could not be saved")
                     return@start
                 }
-                runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
-                    .onSuccess { toast("Guest Mode started · Tor routing active") }
-                    .onFailure {
-                        TorGuestRoutingController.stop()
-                        toast("Guest Mode could not start: ${it.localizedMessage ?: "browser initialization failed"}")
-                    }
+                val guestCountBefore = tabs.count { it.isGuest }
+                val creation = runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
+                val guestTabCreated = creation.isSuccess && tabs.count { it.isGuest } > guestCountBefore
+                if (guestTabCreated) {
+                    toast("Guest Mode started · Tor routing active")
+                } else {
+                    prefs.edit().putBoolean("guest_context_used", false).commit()
+                    TorGuestRoutingController.stop()
+                    val reason = creation.exceptionOrNull()?.localizedMessage
+                        ?: "Guest tab creation was blocked before a tab could be opened"
+                    pageStatus.text = "Guest Mode unavailable · tab could not be created"
+                    toast("Guest Mode could not start: $reason")
+                }
             },
             onFailure = { reason ->
                 guestTorStartPending = false

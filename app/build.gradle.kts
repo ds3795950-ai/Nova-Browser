@@ -208,6 +208,7 @@ val prepare1VpnAssets by tasks.registering {
         val novaBridge = """
             ;(function() {
               var nativePort = null;
+              var configureQueue = Promise.resolve();
               var webRtcProtected = false;
               globalThis.__novaTorGuestMode = false;
               globalThis.__novaTorSocksPort = 0;
@@ -259,6 +260,8 @@ val prepare1VpnAssets by tasks.registering {
                 } catch (_) { return false; }
               }
               async function configure(message) {
+                var requestId = Number(message.requestId);
+                if (!Number.isSafeInteger(requestId) || requestId < 0) requestId = 0;
                 var location = ["sgp", "ams", "lax"].indexOf(message.location) >= 0 ? message.location : "sgp";
                 var enabled = message.enabled === true;
                 globalThis.__novaTorGuestMode = message.torGuestMode === true;
@@ -271,16 +274,19 @@ val prepare1VpnAssets by tasks.registering {
                   enabled: enabled,
                   location: location,
                   torGuestMode: globalThis.__novaTorGuestMode,
-                  torRoutingReady: torRoutingReady
+                  torRoutingReady: torRoutingReady,
+                  requestId: requestId
                 });
               }
               function connectNative() {
                 try {
                   nativePort = browser.runtime.connectNative("com.nova.browser.vpn");
                   nativePort.onMessage.addListener(function(message) {
-                    if (message && message.type === "configure") configure(message).catch(function(error) {
-                      report("1VPN configuration error", { error: String(error) });
-                    });
+                    if (message && message.type === "configure") {
+                      configureQueue = configureQueue.then(function() { return configure(message); }).catch(function(error) {
+                        report("1VPN configuration error", { requestId: Number(message.requestId) || 0, error: String(error) });
+                      });
+                    }
                   });
                   nativePort.onDisconnect.addListener(function() {
                     nativePort = null;
