@@ -229,6 +229,8 @@ internal object TorGuestRoutingController {
 }
 
 internal object GuestTorRoutingPolicy {
+    fun shouldClearGuestContextMarker(guestTabCount: Int): Boolean = guestTabCount <= 0
+
     fun isCurrentAcknowledgement(expectedRequestId: Long, acknowledgedRequestId: Long): Boolean =
         expectedRequestId > 0L && acknowledgedRequestId == expectedRequestId
 

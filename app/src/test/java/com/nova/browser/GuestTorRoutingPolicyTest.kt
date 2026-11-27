@@ -14,6 +14,12 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorRoutingPolicy.canEnterGuest(true, 65536, true))
     }
 
+    @Test fun guestCleanupMarkerIsPreservedWhileAnyGuestTabExists() {
+        assertTrue(GuestTorRoutingPolicy.shouldClearGuestContextMarker(0))
+        assertFalse(GuestTorRoutingPolicy.shouldClearGuestContextMarker(1))
+        assertFalse(GuestTorRoutingPolicy.shouldClearGuestContextMarker(3))
+    }
+
     @Test fun staleProxyAcknowledgementCannotSatisfyCurrentRequest() {
         assertFalse(GuestTorRoutingPolicy.isCurrentAcknowledgement(12L, 11L))
         assertFalse(GuestTorRoutingPolicy.isCurrentAcknowledgement(12L, 0L))
