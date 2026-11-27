@@ -3975,6 +3975,18 @@ class MainActivity : ComponentActivity() {
         val wasActive = index == activeIndex
         val wasGuestActive = currentTab()?.isGuest == true
         val removed = tabs.removeAt(index)
+        if (!removed.isPrivate && !removed.isGuest) {
+            writeRecentlyClosedTabs(
+                RecentlyClosedTabsPolicy.add(
+                    existing = readRecentlyClosedTabs(),
+                    title = removed.title,
+                    rawUrl = removed.lastUrl,
+                    isPrivate = false,
+                    isGuest = false,
+                    closedAt = System.currentTimeMillis()
+                )
+            )
+        }
         aiPageText.remove(removed.id)
         aiPageUrl.remove(removed.id)
         if (removed.id == splitTabId) exitSplitScreen()
@@ -4434,6 +4446,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun readRecentlyClosedTabs(): List<RecentlyClosedTab> =
+        RecentlyClosedTabsPolicy.decode(prefs.getString("nova_recently_closed_tabs", "[]"))
+
+    private fun writeRecentlyClosedTabs(entries: List<RecentlyClosedTab>) {
+        prefs.edit().putString("nova_recently_closed_tabs", RecentlyClosedTabsPolicy.encode(entries)).apply()
+    }
+
+    private fun showRecentlyClosedTabs() {
+        val entries = readRecentlyClosedTabs()
+        if (entries.isEmpty()) {
+            toast("No recently closed tabs")
+            return
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Recently closed · ${entries.size}")
+            .setItems(entries.map { "${it.title}\n${it.url}" }.toTypedArray()) { _, position ->
+                val entry = entries.getOrNull(position) ?: return@setItems
+                if (createTab(false, entry.url)) {
+                    writeRecentlyClosedTabs(RecentlyClosedTabsPolicy.remove(entries, entry.id))
+                    toast("Tab restored")
+                } else {
+                    toast("Tab could not be restored while protected routing or Guest Mode is active")
+                }
+            }
+            .setNeutralButton("Clear list", null)
+            .setNegativeButton(getString(R.string.close), null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                writeRecentlyClosedTabs(emptyList())
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     private fun showHistory() {
         if (currentTab()?.let { it.isPrivate || it.isGuest } == true) {
             toast(getString(R.string.history_unavailable_private))
@@ -4478,6 +4526,11 @@ class MainActivity : ComponentActivity() {
             addView(listView, FrameLayout.LayoutParams(-1, -1))
             addView(emptyView, FrameLayout.LayoutParams(-1, -1))
         }
+        val recentlyClosedButton = Button(this).apply {
+            text = "Recently closed tabs"
+            isAllCaps = false
+        }
+        content.addView(recentlyClosedButton)
         content.addView(searchRow)
         content.addView(listContainer, LinearLayout.LayoutParams(-1, 0, 1f))
         val dialog = AlertDialog.Builder(this)
@@ -4486,6 +4539,10 @@ class MainActivity : ComponentActivity() {
             .setNeutralButton(getString(R.string.clear_history), null)
             .setNegativeButton(getString(R.string.close), null)
             .create()
+        recentlyClosedButton.setOnClickListener {
+            dialog.dismiss()
+            showRecentlyClosedTabs()
+        }
         var filteredItems: List<HistoryEntry> = items
         val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
