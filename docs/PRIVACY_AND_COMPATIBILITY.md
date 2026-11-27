@@ -39,3 +39,5 @@ Cloud sync is end-to-end encrypted with a passphrase that is not uploaded. Each 
 - Test 1VPN proxy failure, DNS, WebRTC and IPv4/IPv6 leakage with the actual bundled extension on physical Android devices.
 - Test Guest Tor while Normal Cefrium tabs exist, reject Private-tab coexistence, and verify Normal GeckoView sessions restore after Guest exit.
 - BrowserStack UI tests are useful for regression but do not prove VPN/Tor routing or leak resistance.
+
+Guest Tor shutdown is confirmed only by a request-scoped acknowledgement from the currently connected proxy extension. Every native proxy configuration carries a monotonically increasing request ID; the extension echoes that ID after applying the requested VPN/Tor mode. Nova ignores stale IDs and keeps the Normal/Private session barrier closed until the latest Tor-disabled request is acknowledged with combined routing readiness. Engine and Gecko-session factories also enforce the Guest Tor and 1VPN readiness barriers, so UI or asynchronous callbacks cannot bypass them.

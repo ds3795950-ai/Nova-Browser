@@ -25,3 +25,5 @@ Guest Mode uses the embedded Tor service and the GeckoView extension's SOCKS5 pr
 Upstream project: https://github.com/1vpn/browser-extension. The corresponding GPL-3.0 licence is bundled alongside the downloaded component. Provider privacy policy: https://1vpn.org/privacy-policy/.
 
 1VPN is a third-party service. When enabled, the provider operates the proxy servers and may process destination connection metadata as described in its privacy policy. Do not treat the service as an independently audited or end-to-end anonymous network.
+
+Guest Tor shutdown is confirmed only by a request-scoped acknowledgement from the currently connected proxy extension. Every native proxy configuration carries a monotonically increasing request ID; the extension echoes that ID after applying the requested VPN/Tor mode. Nova ignores stale IDs and keeps the Normal/Private session barrier closed until the latest Tor-disabled request is acknowledged with combined routing readiness. Engine and Gecko-session factories also enforce the Guest Tor and 1VPN readiness barriers, so UI or asynchronous callbacks cannot bypass them.

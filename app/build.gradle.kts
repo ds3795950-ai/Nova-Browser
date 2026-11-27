@@ -298,6 +298,9 @@ val prepare1VpnAssets by tasks.registering {
               }
               async function configure(message, generation, port) {
                 if (generation !== nativeGeneration || nativePort !== port) return;
+                if (!Number.isSafeInteger(message.configRequestId) || message.configRequestId <= 0) {
+                  throw new Error("Nova proxy configuration request ID is invalid");
+                }
                 // Reconfiguration is a protected transition too: pause traffic until
                 // the new VPN/Tor state and leak protections have been applied.
                 globalThis.__novaVpnConfigReady = false;
@@ -322,7 +325,8 @@ val prepare1VpnAssets by tasks.registering {
                   location: location,
                   torGuestMode: torGuestMode,
                   torRoutingReady: torRoutingReady,
-                  routingReady: vpnRoutingReady && torRoutingReady
+                  routingReady: vpnRoutingReady && torRoutingReady,
+                  configRequestId: message.configRequestId
                 });
                 if (!vpnRoutingReady) throw new Error("1VPN cannot safely route traffic because proxy authentication or WebRTC protection is unavailable");
                 if (!torRoutingReady) throw new Error("Guest Tor cannot safely route traffic because SOCKS5 or WebRTC protection is unavailable");
@@ -349,7 +353,8 @@ val prepare1VpnAssets by tasks.registering {
                           report("1VPN configuration error", {
                             error: String(error),
                             routingReady: false,
-                            torGuestMode: globalThis.__novaTorGuestMode === true
+                            torGuestMode: globalThis.__novaTorGuestMode === true,
+                            configRequestId: message.configRequestId
                           });
                         }
                       });

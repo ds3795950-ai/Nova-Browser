@@ -42,4 +42,13 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorIsolationPolicy.shouldDeferTabRestore(false, true, true))
         assertFalse(GuestTorIsolationPolicy.shouldDeferTabRestore(false, false, false))
     }
+
+    @Test fun onlyLatestTorDisableAcknowledgementReleasesNormalSessionBarrier() {
+        assertTrue(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false, true))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 11L, 11L, true, false, true))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 11L, true, false, true))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, false, false, true))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, true, true))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false, false))
+    }
 }
