@@ -151,6 +151,9 @@ val prepare1VpnAssets by tasks.registering {
         val geckoSettings = manifest["browser_specific_settings"] as MutableMap<String, Any?>
         val gecko = geckoSettings["gecko"] as MutableMap<String, Any?>
         gecko["id"] = "1vpn-internal@nova.browser"
+        // Bump the internal add-on version whenever Nova patches the bundled bridge.
+        // GeckoView's ensureBuiltIn() otherwise keeps an older installed copy with the same ID/version.
+        manifest["version"] = "4.2.3.1"
         val permissions = (manifest["permissions"] as List<*>).map { it.toString() }.toMutableList()
         permissions.add("nativeMessaging")
         permissions.add("geckoViewAddons")
