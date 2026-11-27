@@ -135,14 +135,8 @@ internal object TorGuestRoutingController {
      * [onStopped]; lifecycle teardown may use the immediate no-callback path.
      */
     fun stop(onStopped: (() -> Unit)? = null) {
-        if (onStopped == null) {
-            state = State.STOPPING
-            stopInternal(disableProxy = true)
-            state = State.STOPPED
-            lastError = "Tor is not running"
-            this.onStopped = null
-            onReady = null
-            onFailure = null
+        if (state == State.STOPPED && NovaBrowserVpnController.isTorGuestRoutingDisabledConfirmed()) {
+            onStopped?.invoke()
             return
         }
         this.onStopped = onStopped
@@ -151,6 +145,8 @@ internal object TorGuestRoutingController {
             return
         }
         state = State.STOPPING
+        // Keep the status listener alive while requesting the reset. Even Activity teardown
+        // without a completion callback must not release the shared Gecko runtime early.
         stopInternal(disableProxy = false, clearStatusListener = false)
         onReady = null
         onFailure = null
@@ -163,6 +159,7 @@ internal object TorGuestRoutingController {
             stopPoll?.let(mainHandler::removeCallbacks)
             stopPoll = null
             lastError = "Waiting for the proxy extension to confirm Guest Tor is disabled"
+            // Stay STOPPING (and keep the runtime barrier) until a matching acknowledgement arrives.
         }
         mainHandler.postDelayed(stopTimeout!!, 15_000L)
         checkStopReadiness()
