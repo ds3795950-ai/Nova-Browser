@@ -1196,7 +1196,7 @@ class MainActivity : ComponentActivity() {
                 if (guestTabCreated) {
                     toast("Guest Mode started · Tor routing active")
                 } else {
-                    prefs.edit().putBoolean("guest_context_used", false).commit()
+                    if (tabs.none { it.isGuest }) prefs.edit().putBoolean("guest_context_used", false).commit()
                     TorGuestRoutingController.stop()
                     val reason = creation.exceptionOrNull()?.localizedMessage
                         ?: "Guest tab creation was blocked before a tab could be opened"
