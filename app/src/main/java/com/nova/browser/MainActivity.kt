@@ -4947,7 +4947,7 @@ class MainActivity : ComponentActivity() {
 
     private fun chooseSearchEngine() {
         if (denyGuestAccess("Search engine settings")) return
-        val engines = arrayOf("Google", "Bing", "DuckDuckGo", "Brave Search")
+        val engines = arrayOf("Google", "Bing", "DuckDuckGo", "Brave Search", "Perplexity")
         AlertDialog.Builder(this).setTitle("Default search engine")
             .setSingleChoiceItems(engines, engines.indexOf(searchEngine)) { dialog, which ->
                 searchEngine = engines[which]
