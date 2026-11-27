@@ -41,6 +41,7 @@
         <activity
             android:name=".MainActivity"
             android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="stateUnchanged|adjustResize"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode|locale|layoutDirection|smallestScreenSize|screenLayout|keyboard|navigation"
             android:launchMode="singleTask"
