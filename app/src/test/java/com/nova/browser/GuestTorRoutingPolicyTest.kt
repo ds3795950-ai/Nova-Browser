@@ -14,6 +14,12 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorRoutingPolicy.canEnterGuest(true, 65536, true))
     }
 
+    @Test fun failedGuestCreationRollbackSelectsOnlyTabsAddedByThatAttempt() {
+        assertTrue(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old", "new")).contains("new"))
+        assertFalse(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old")).isNotEmpty())
+        assertFalse(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(emptySet(), listOf("guest")).contains("old"))
+    }
+
     @Test fun failedAdditionalGuestTabDoesNotStopExistingGuestTorSession() {
         assertTrue(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(0))
         assertFalse(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(1))

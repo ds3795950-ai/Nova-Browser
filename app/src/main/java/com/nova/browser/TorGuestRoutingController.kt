@@ -233,6 +233,9 @@ internal object GuestTorRoutingPolicy {
 
     fun shouldStopTorAfterGuestCreationFailure(guestTabCount: Int): Boolean = guestTabCount <= 0
 
+    fun newlyCreatedGuestTabIds(existingGuestIds: Set<String>, currentGuestIds: List<String>): List<String> =
+        currentGuestIds.filterNot { it in existingGuestIds }
+
     fun isCurrentAcknowledgement(expectedRequestId: Long, acknowledgedRequestId: Long): Boolean =
         expectedRequestId > 0L && acknowledgedRequestId == expectedRequestId
 

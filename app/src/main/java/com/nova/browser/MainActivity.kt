@@ -1190,12 +1190,29 @@ class MainActivity : ComponentActivity() {
                     toast("Guest Mode could not start safely because its cleanup marker could not be saved")
                     return@start
                 }
-                val guestCountBefore = tabs.count { it.isGuest }
+                val existingGuestIds = tabs.filter { it.isGuest }.map { it.id }.toSet()
+                val previousTabId = currentTab()?.id
                 val creation = runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
-                val guestTabCreated = creation.isSuccess && tabs.count { it.isGuest } > guestCountBefore
+                val newGuestIds = GuestTorRoutingPolicy.newlyCreatedGuestTabIds(existingGuestIds, tabs.filter { it.isGuest }.map { it.id })
+                val guestTabCreated = creation.isSuccess && newGuestIds.isNotEmpty()
                 if (guestTabCreated) {
                     toast("Guest Mode started · Tor routing active")
                 } else {
+                    // A later engine/UI step can throw after createTab has inserted the tab.
+                    // Remove only tabs created by this attempt before deciding whether Tor can stop.
+                    newGuestIds.forEach { id ->
+                        val failedIndex = tabs.indexOfFirst { it.id == id }
+                        if (failedIndex >= 0) {
+                            val failedTab = tabs.removeAt(failedIndex)
+                            runCatching { closeTabRuntime(failedTab) }
+                            failedTab.thumbnail?.recycle()
+                            failedTab.thumbnail = null
+                        }
+                    }
+                    activeIndex = previousTabId?.let { id -> tabs.indexOfFirst { it.id == id } }
+                        ?.takeIf { it >= 0 }
+                        ?: (activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0))
+                    if (tabs.isNotEmpty()) runCatching { switchTab(activeIndex.coerceIn(tabs.indices)) }
                     if (GuestTorRoutingPolicy.shouldClearGuestContextMarker(tabs.count { it.isGuest })) {
                         prefs.edit().putBoolean("guest_context_used", false).commit()
                     }
