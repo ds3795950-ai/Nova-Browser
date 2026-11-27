@@ -311,6 +311,9 @@ internal object GuestTorIsolationPolicy {
 }
 
 internal object GuestTorRoutingPolicy {
+    fun newlyCreatedGuestTabIds(existingGuestIds: Set<String>, currentGuestIds: List<String>): List<String> =
+        currentGuestIds.filterNot { it in existingGuestIds }
+
     fun canEnableProxy(torBootstrapped: Boolean, socksPort: Int): Boolean =
         torBootstrapped && socksPort in 1..65535
 

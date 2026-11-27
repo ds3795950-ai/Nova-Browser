@@ -1301,21 +1301,38 @@ class MainActivity : ComponentActivity() {
                     toast("Guest Mode could not start safely because its cleanup marker could not be saved")
                     return@start
                 }
-                runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
-                    .onSuccess { created ->
-                        if (!created || tabs.none { it.isGuest }) {
-                            TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
-                            toast("Guest Mode could not open a tab · Tor is disconnecting safely")
-                        } else {
-                            toast("Guest Mode started · Tor routing active")
-                            retryPendingExternalLink()
+                val existingGuestIds = tabs.filter { it.isGuest }.map { it.id }.toSet()
+                val previousTabId = currentTab()?.id
+                val creation = runCatching { createTab(isPrivate = false, url = HOME_URL, isGuest = true) }
+                val newGuestIds = GuestTorRoutingPolicy.newlyCreatedGuestTabIds(
+                    existingGuestIds, tabs.filter { it.isGuest }.map { it.id }
+                )
+                if (creation.getOrDefault(false) && newGuestIds.isNotEmpty()) {
+                    toast("Guest Mode started · Tor routing active")
+                    retryPendingExternalLink()
+                } else {
+                    // Roll back only tabs created by this attempt; never tear down an existing Guest session.
+                    newGuestIds.forEach { id ->
+                        val failedIndex = tabs.indexOfFirst { it.id == id }
+                        if (failedIndex >= 0) {
+                            val failedTab = tabs.removeAt(failedIndex)
+                            runCatching { closeTabRuntime(failedTab) }
+                            failedTab.thumbnail?.recycle()
+                            failedTab.thumbnail = null
                         }
                     }
-                    .onFailure {
-                        if (tabs.any { it.isGuest }) closeGuestTabs()
-                        else TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
-                        toast("Guest Mode could not start: ${it.localizedMessage ?: "browser initialization failed"}")
+                    if (existingGuestIds.isNotEmpty()) {
+                        activeIndex = previousTabId?.let { id -> tabs.indexOfFirst { it.id == id } }
+                            ?.takeIf { it >= 0 }
+                            ?: activeIndex.coerceAtMost(tabs.lastIndex).coerceAtLeast(0)
+                        if (tabs.isNotEmpty()) runCatching { switchTab(activeIndex.coerceIn(tabs.indices)) }
+                    } else {
+                        cleanupGuestContextIfIdle()
                     }
+                    val reason = creation.exceptionOrNull()?.localizedMessage
+                        ?: "Guest tab creation was blocked before a tab could be opened"
+                    toast("Guest Mode could not start: $reason")
+                }
             },
             onFailure = { reason ->
                 guestTorStartPending = false

@@ -26,6 +26,11 @@ class GuestTorRoutingPolicyTest {
         assertFalse(VpnCredentialBootstrapPolicy.shouldStart(false, false, false))
     }
 
+    @Test fun guestCreationRollbackIdentifiesOnlyNewTabs() {
+        assertTrue(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old", "new")).contains("new"))
+        assertTrue(GuestTorRoutingPolicy.newlyCreatedGuestTabIds(setOf("old"), listOf("old")).isEmpty())
+    }
+
     @Test fun privateTabsBlockGuestTorStartup() {
         assertFalse(GuestTorIsolationPolicy.canStart(hasPrivateTabs = true))
         assertTrue(GuestTorIsolationPolicy.canStart(hasPrivateTabs = false))
