@@ -22,8 +22,12 @@ class VpnStatusListenerRegistryTest {
 
     @Test fun ownersAreComparedByIdentityAndMayUnregisterDuringDispatch() {
         val registry = OwnerScopedListenerRegistry()
-        val owner = Any()
-        val equalLookingOwner = Any()
+        class EqualOwner {
+            override fun equals(other: Any?): Boolean = other is EqualOwner
+            override fun hashCode(): Int = 1
+        }
+        val owner = EqualOwner()
+        val equalLookingOwner = EqualOwner()
         var calls = 0
         registry.set(owner) {
             calls++
@@ -34,6 +38,6 @@ class VpnStatusListenerRegistryTest {
         registry.dispatch()
         registry.dispatch()
 
-        assertEquals(11, calls)
+        assertEquals(21, calls)
     }
 }
