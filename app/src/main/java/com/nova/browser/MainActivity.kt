@@ -2774,6 +2774,14 @@ class MainActivity : ComponentActivity() {
                 return GeckoResult.fromValue(newSession)
             }
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
+                if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                        NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+                    )) {
+                    runOnUiThread {
+                        if (currentTab()?.id == tab.id) setPageStatus("1VPN is not ready · navigation blocked until protected routing is restored", 1)
+                    }
+                    return GeckoResult.deny()
+                }
                 session.settings.setAllowJavascript(isJavaScriptAllowed(BrowserEngineType.GECKOVIEW, request.uri))
                 return null
             }
