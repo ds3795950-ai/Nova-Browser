@@ -4412,7 +4412,8 @@ class MainActivity : ComponentActivity() {
             .setMessage(getString(R.string.clear_history_message))
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear") { _, _ ->
-                prefs.edit().putLong("history_cleared_at", System.currentTimeMillis()).remove("history").remove("history_v2").apply()
+                prefs.edit().putLong("history_cleared_at", System.currentTimeMillis())
+                    .remove("history").remove("history_v2").remove("nova_recently_closed_tabs").apply()
                 toast(getString(R.string.history_cleared))
                 onCleared()
             }.show()
