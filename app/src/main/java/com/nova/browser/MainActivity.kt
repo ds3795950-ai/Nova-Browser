@@ -4886,7 +4886,12 @@ class MainActivity : ComponentActivity() {
         // Resolve the destination preference before the routing guard. If 1VPN is still
         // connecting, the tab record must remember the destination's mode so ensureSession()
         // restores the correct desktop/mobile GeckoSession after routing becomes ready.
-        val desired = if (tab.isPrivate || tab.isGuest) tab.desktopSite else isDesktopUrl(target)
+        val desired = DesktopSiteNavigationPolicy.resolve(
+            isPrivate = tab.isPrivate,
+            isGuest = tab.isGuest,
+            currentTabPreference = tab.desktopSite,
+            destinationHostSavedForDesktop = isDesktopUrl(target)
+        )
         if (desired == tab.desktopSite) return
         tab.desktopSite = desired
         if (!canUseTabEngine(tab, "Desktop site")) return
