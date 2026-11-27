@@ -1207,7 +1207,7 @@ class MainActivity : ComponentActivity() {
             onReady = {
                 guestTorStartPending = false
                 if (isFinishing || isDestroyed) {
-                    if (!isChangingConfigurations) TorGuestRoutingController.stop()
+                    TorGuestRoutingController.stop { /* a recreated Activity resumes only after the extension confirms Tor is off */ }
                     return@start
                 }
                 if (!prefs.edit().putBoolean("guest_context_used", true).commit()) {
@@ -1262,6 +1262,10 @@ class MainActivity : ComponentActivity() {
             }
             return existing
         }
+        val vpnRoutingBlocked = BrowserVpnNavigationPolicy.shouldBlockNavigation(
+            NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+        )
+        if (vpnRoutingBlocked) tab.needsReload = tab.lastUrl != HOME_URL
         val settings = GeckoSessionSettings.Builder()
             .usePrivateMode(tab.isPrivate || tab.isGuest)
             .contextId(if (tab.isGuest) guestContextId else null)
@@ -1276,7 +1280,7 @@ class MainActivity : ComponentActivity() {
         engine.installDelegates { configureSession(it, tab) }
         session.open(runtime)
         attachAiPageReader(session, tab)
-        if (tab.needsReload && tab.lastUrl != HOME_URL) {
+        if (tab.needsReload && tab.lastUrl != HOME_URL && !vpnRoutingBlocked) {
             engine.loadUrl(tab.lastUrl)
             tab.needsReload = false
         }
@@ -6924,8 +6928,10 @@ private fun showForgotPassword(prefillEmail: String = "") {
         if (currentActivityReference?.get() === this) currentActivityReference = null
         downloadManagers.values.forEach { it.setOnChangedListener(null) }
         guestTorStartPending = false
-        if (!isChangingConfigurations) TorGuestRoutingController.stop()
-        else if (tabs.none { it.isGuest }) TorGuestRoutingController.stop { /* recreated Activity restores after the extension acknowledges the reset */ }
+        if ((!isChangingConfigurations || tabs.none { it.isGuest }) && TorGuestRoutingController.blocksNormalGeckoSessions()) {
+            TorGuestRoutingController.stop { /* a recreated Activity is notified after the extension acknowledges the reset */ }
+        }
+        NovaBrowserVpnController.setStatusListener(null)
         cancelPendingRemoteSuggestions()
         remoteSuggestionExecutor.shutdownNow()
         pendingAndroidPermissionCallback?.reject()

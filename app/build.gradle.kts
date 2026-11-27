@@ -310,6 +310,7 @@ val prepare1VpnAssets by tasks.registering {
                 globalThis.__novaTorGuestMode = torGuestMode;
                 globalThis.__novaTorSocksPort = torSocksPort;
                 await chrome.storage.local.set({ isConnected: enabled, currentLocation: location });
+                if (generation !== nativeGeneration || nativePort !== port) return;
                 var protectedState = await setWebRtcProtection(enabled || torGuestMode);
                 if (generation !== nativeGeneration || nativePort !== port) return;
                 webRtcProtected = protectedState === true;
