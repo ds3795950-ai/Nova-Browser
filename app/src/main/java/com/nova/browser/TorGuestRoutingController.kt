@@ -303,6 +303,10 @@ internal object GuestTorIsolationPolicy {
 
     fun shouldBlockNonGuestSession(isGuest: Boolean, torProxyReserved: Boolean): Boolean =
         !isGuest && torProxyReserved
+
+    /** Keep the runtime barrier for Normal links, but allow links into a verified Guest tab. */
+    fun shouldBlockPendingExternalLink(isGuest: Boolean, torProxyReserved: Boolean, guestTorReady: Boolean): Boolean =
+        if (isGuest) !guestTorReady else torProxyReserved
 }
 
 internal object GuestTorRoutingPolicy {

@@ -489,12 +489,16 @@ class MainActivity : ComponentActivity() {
 
     private fun retryPendingExternalLink() {
         val url = pendingExternalLink ?: return
-        if (pendingGeckoDataClearActive || guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()) return
+        if (pendingGeckoDataClearActive || guestTorStartPending) return
+        val guest = currentTab()?.isGuest == true
+        if (GuestTorIsolationPolicy.shouldBlockPendingExternalLink(
+                isGuest = guest,
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions(),
+                guestTorReady = TorGuestRoutingController.isReady()
+            )) return
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
             )) return
-        val guest = currentTab()?.isGuest == true
-        if (guest && !TorGuestRoutingController.isReady()) return
         if (createTab(false, url, isGuest = guest)) {
             pendingExternalLink = null
             if (intent?.data?.toString() == url) intent?.data = null
@@ -3348,6 +3352,14 @@ class MainActivity : ComponentActivity() {
     private fun switchTab(index: Int) {
         if (index !in tabs.indices) return
         val requestedTab = tabs[index]
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(requestedTab.isGuest, guestTorReservesGeckoRuntime())) {
+            toast("Normal and Private tabs are paused until Guest Tor has fully disconnected")
+            return
+        }
+        if (currentTab()?.isGuest == true && !requestedTab.isGuest) {
+            toast("Normal tabs are hidden in Guest Mode")
+            return
+        }
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
             )) {
@@ -3359,10 +3371,6 @@ class MainActivity : ComponentActivity() {
             updateTabChrome(requestedTab)
             showHomeScreen()
             setPageStatus("1VPN is connecting · tabs are paused until protected routing is ready", 1)
-            return
-        }
-        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(requestedTab.isGuest, guestTorReservesGeckoRuntime())) {
-            toast("Normal and Private tabs are paused until Guest Tor has fully disconnected")
             return
         }
         if (pendingGeckoDataClearActive && engineSelectionForTab(requestedTab).engine == BrowserEngineType.GECKOVIEW &&

@@ -36,6 +36,13 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorIsolationPolicy.shouldBlockNonGuestSession(false, false))
     }
 
+    @Test fun pendingExternalLinksRespectGuestRuntimeIsolation() {
+        assertTrue(GuestTorIsolationPolicy.shouldBlockPendingExternalLink(false, true, false))
+        assertFalse(GuestTorIsolationPolicy.shouldBlockPendingExternalLink(false, false, false))
+        assertTrue(GuestTorIsolationPolicy.shouldBlockPendingExternalLink(true, true, false))
+        assertFalse(GuestTorIsolationPolicy.shouldBlockPendingExternalLink(true, true, true))
+    }
+
     @Test fun tabRestoreWaitsUntilGuestTorStartupAndCircuitValidationFinish() {
         assertTrue(GuestTorIsolationPolicy.shouldDeferTabRestore(true, false, false))
         assertTrue(GuestTorIsolationPolicy.shouldDeferTabRestore(false, true, false))
