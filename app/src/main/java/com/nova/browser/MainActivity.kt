@@ -1213,6 +1213,12 @@ class MainActivity : ComponentActivity() {
             toast("Guest Mode waits until Nova verifies Tor routing")
             return false
         }
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) {
+            toast("New tabs are paused until Nova confirms protected routing")
+            return false
+        }
         if (isGuest && splitTabId != null) exitSplitScreen()
         cancelPendingRemoteSuggestions()
         if (currentTab()?.isGuest == true && !isGuest) {
