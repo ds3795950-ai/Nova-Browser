@@ -5102,17 +5102,56 @@ class MainActivity : ComponentActivity() {
             requestPageText = { callback ->
                 val active = currentTab()
                 if (active == null || active.isPrivate || active.isGuest ||
-                    active.engineType != BrowserEngineType.GECKOVIEW ||
                     active.lastUrl == HOME_URL || active.lastUrl.startsWith("about:") ||
                     active.lastUrl.startsWith("chrome:")) {
                     callback(null)
-                } else {
+                } else if (active.engineType == BrowserEngineType.CEFRIUM) {
+                    val expectedUrl = active.lastUrl
+                    val engine = active.browserEngine as? CefriumBrowserEngine
+                    if (engine == null) {
+                        callback(null)
+                    } else {
+                        // Cefrium exposes a typed page-JavaScript callback. Extract only readable
+                        // article/main text and remove form controls before sending context to AI.
+                        val script = """
+                            (() => {
+                              const root = document.querySelector('article') ||
+                                document.querySelector('[role="main"]') ||
+                                document.querySelector('main') || document.body;
+                              if (!root) return JSON.stringify({ url: location.href, text: '' });
+                              const clone = root.cloneNode(true);
+                              clone.querySelectorAll('script,style,form,input,textarea,select,button,iframe,object,embed,[contenteditable="true"]').forEach(node => node.remove());
+                              const text = (clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 24000);
+                              return JSON.stringify({ url: location.href, text });
+                            })()
+                        """.trimIndent()
+                        runCatching {
+                            engine.evaluateJavaScript(script) { raw ->
+                                val pageText = runCatching {
+                                    val decoded = JSONTokener(raw ?: "{}").nextValue()
+                                    val payload = if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+                                    val pageUrl = payload.optString("url")
+                                    val text = payload.optString("text").take(24000)
+                                    if (text.isNotBlank() && sameDocumentUrl(expectedUrl, pageUrl) &&
+                                        sameDocumentUrl(active.lastUrl, pageUrl) && currentTab()?.id == active.id) {
+                                        aiPageText[active.id] = text
+                                        aiPageUrl[active.id] = pageUrl
+                                        text
+                                    } else null
+                                }.getOrNull()
+                                callback(pageText)
+                            }
+                        }.onFailure { callback(null) }
+                    }
+                } else if (active.engineType == BrowserEngineType.GECKOVIEW) {
                     val expectedUrl = active.lastUrl
                     val cachedUrl = aiPageUrl[active.id]
                     val fallback = aiPageText[active.id]?.takeIf { cachedUrl != null && sameDocumentUrl(cachedUrl, expectedUrl) }
                     // GeckoView intentionally exposes no direct page-JavaScript evaluation API.
                     // The built-in Nova reader extension asynchronously maintains this tab-bound cache.
                     callback(fallback)
+                } else {
+                    callback(null)
                 }
             },
             persistHistory = tab?.isPrivate != true && tab?.isGuest != true,
