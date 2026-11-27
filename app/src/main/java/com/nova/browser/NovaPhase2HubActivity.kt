@@ -41,8 +41,8 @@ class NovaPhase2HubActivity : Activity() {
     private val currentTitle by lazy { intent.getStringExtra(EXTRA_TITLE).orEmpty().take(200).ifBlank { "Saved page" } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
         NovaThemeManager.applyBeforeCreate(this)
+        super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(18, 12, 28)); setPadding(dp(16), dp(16), dp(16), dp(16)) }
         val header = TextView(this).apply { text = "NOVA HUB"; textSize = 22f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) }
         root.addView(header)

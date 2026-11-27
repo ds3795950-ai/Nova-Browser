@@ -3427,7 +3427,7 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this)
             .setTitle("Search tabs")
             .setView(input)
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton("Search", null)
             .create().also { dialog ->
                 dialog.setOnShowListener {
@@ -3924,7 +3924,7 @@ class MainActivity : ComponentActivity() {
             getString(R.string.edit_bookmark) to { editBookmark(entry, onChanged) },
             getString(R.string.delete_bookmark) to {
                 AlertDialog.Builder(this).setTitle(getString(R.string.delete_bookmark)).setMessage(getString(R.string.delete_bookmark_confirm))
-                    .setNegativeButton(getString(R.string.cancel), null)
+                    .setNegativeButton("Cancel", null)
                     .setPositiveButton(getString(R.string.delete)) { _, _ ->
                         val previous = readBookmarks()
                         val deletedEntry = previous.firstOrNull { it.url == entry.url } ?: run {
@@ -3959,7 +3959,7 @@ class MainActivity : ComponentActivity() {
                 val items = readBookmarks().map { if (it.url == entry.url) it.copy(title = title.text.toString().trim().ifBlank { entry.title }, folder = selectedFolder) else it }
                 if (!saveBookmarks(items)) return@setPositiveButton
                 onChanged(); toast(getString(R.string.bookmark_updated))
-            }.setNegativeButton(getString(R.string.cancel), null).show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun createBookmarkFolder(onCreated: () -> Unit = {}) {
@@ -3971,7 +3971,7 @@ class MainActivity : ComponentActivity() {
                     prefs.edit().putStringSet("bookmark_folders", (prefs.getStringSet("bookmark_folders", emptySet()) ?: emptySet()) + folder).apply()
                     onCreated(); toast(getString(R.string.folder_created))
                 }
-            }.setNegativeButton(getString(R.string.cancel), null).show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun showBookmarkTransfer() {
@@ -4520,7 +4520,7 @@ class MainActivity : ComponentActivity() {
                     val dialog = AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.extension_install_title))
                         .setMessage(detail)
                         .setPositiveButton(getString(R.string.grant_permissions)) { _, _ -> finish(true) }
-                        .setNegativeButton(getString(R.string.cancel), null)
+                        .setNegativeButton("Cancel", null)
                         .create()
                     registerPromptDialog(dialog) { finish(false) }
                 }
@@ -4922,7 +4922,7 @@ class MainActivity : ComponentActivity() {
             },
             getString(R.string.delete_login) to {
                 AlertDialog.Builder(this).setTitle(getString(R.string.delete_login)).setMessage(getString(R.string.delete_login_confirm))
-                    .setNegativeButton(getString(R.string.cancel), null)
+                    .setNegativeButton("Cancel", null)
                     .setPositiveButton(getString(R.string.delete)) { _, _ -> passwordVault.delete(entry.guid ?: return@setPositiveButton); onChanged() }.show()
             }
         ))
@@ -4948,7 +4948,7 @@ class MainActivity : ComponentActivity() {
                 entry?.formActionOrigin?.let { builder.formActionOrigin(it) }
                 runCatching { passwordVault.save(builder.build()); switchCefriumTabsForSavedLogins(); onSaved() }
                     .onFailure { toast(getString(R.string.vault_save_failed)) }
-            }.setNegativeButton(getString(R.string.cancel), null).show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
 
@@ -5574,7 +5574,7 @@ private fun showQuickSettings() {
         val host = Uri.parse(entry.origin).host ?: return
         AlertDialog.Builder(this).setTitle("Clear site data?")
             .setMessage("Delete cookies and site storage for $host in ${entry.engine.name}. The other engine's profile is not affected.")
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear data") { _, _ ->
                 val editor = prefs.edit()
                 siteRuleKeys(entry).forEach(editor::remove)
@@ -5600,7 +5600,7 @@ private fun showQuickSettings() {
         }
         AlertDialog.Builder(this).setTitle("Clear all GeckoView site data?")
             .setMessage("This deletes cookies, site storage, caches and saved site permissions in the GeckoView profile. Open pages may recreate data after clearing.")
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear all data") { _, _ ->
                 runtime.storageController.clearData(StorageController.ClearFlags.SITE_DATA)
                     .accept({ runOnUiThread { toast("GeckoView site data cleared") } },
@@ -5778,7 +5778,7 @@ private fun showQuickSettings() {
                 }
                 toast("Normal-tab engine preference: ${mode.name.lowercase().replace('_', ' ')}")
                 dialog.dismiss()
-            }.setNegativeButton(getString(R.string.cancel), null).show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun switchCurrentTabEngine() {
@@ -5798,7 +5798,7 @@ private fun showQuickSettings() {
         val targetLabel = if (target == BrowserEngineType.CEFRIUM) "Cefrium" else "GeckoView"
         AlertDialog.Builder(this).setTitle("Switch to $targetLabel?")
             .setMessage("The tab will reload. Cookies, local storage and active sessions are not migrated between engines; you may need to sign in again.")
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton("Switch") { _, _ ->
                 if (target == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive && !tab.isPrivate && !tab.isGuest) {
                     toast("Wait for GeckoView data deletion to finish before switching this tab")
@@ -5836,7 +5836,7 @@ private fun showQuickSettings() {
         AlertDialog.Builder(this).setTitle("Related sign-in domains")
             .setMessage("Enter exact hostnames separated by commas. Nova will remember the current engine for those hosts only; no wildcard domains are saved.")
             .setView(input)
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton(getString(R.string.save)) { _, _ ->
                 val hosts = input.text.toString().split(',').map { it.trim() }.filter { it.isNotBlank() }
                 val count = enginePreferences.setRelatedSiteAffinities(hosts, tab.engineType)
@@ -5854,7 +5854,7 @@ private fun showQuickSettings() {
                 dialog.dismiss()
                 recreate()
             }
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -6014,7 +6014,7 @@ private fun showQuickSettings() {
                     finishCefrium()
                 }
             }
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -6160,7 +6160,7 @@ private fun showQuickSettings() {
         if (denyGuestAccess("Cefrium profile deletion")) return
         AlertDialog.Builder(this).setTitle("Clear Cefrium profile data?")
             .setMessage("This removes cookies, cache, local/session storage, IndexedDB and service workers from all Normal Cefrium tabs. Those tabs will reload in a fresh profile. You may need to sign in again. Private and Guest data are separate and are not affected.")
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear profile") { _, _ ->
                 clearCefriumProfileDataNow(currentTab()?.id) { succeeded, message ->
                     toast(message ?: if (succeeded) "Cefrium profile cleared" else "Cefrium profile clear failed")
@@ -6172,7 +6172,7 @@ private fun showQuickSettings() {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.close_private_guest_title))
             .setMessage(getString(R.string.close_private_guest_message))
-            .setNegativeButton(getString(R.string.cancel), null)
+            .setNegativeButton("Cancel", null)
             .setPositiveButton(getString(R.string.close_tabs)) { _, _ ->
                 val activeId = currentTab()?.id
                 tabs.indices.filter { tabs[it].isPrivate || tabs[it].isGuest }.reversed().forEach { index ->
@@ -6204,7 +6204,7 @@ private fun showQuickSettings() {
                 else -> GeckoRuntimeSettings.COLOR_SCHEME_SYSTEM
             })
             dialog.dismiss()
-        }.setNegativeButton(getString(R.string.cancel), null).show()
+        }.setNegativeButton("Cancel", null).show()
     }
 
     private fun showCloudAccount() {
@@ -6439,7 +6439,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
                         .setTitle("Couldn’t send reset link")
                         .setMessage("Nova could not reach the password-recovery service. Check your connection and try again.")
                         .setPositiveButton("Retry") { _, _ -> sendPasswordResetRequest(address) }
-                        .setNegativeButton(getString(R.string.cancel), null)
+                        .setNegativeButton("Cancel", null)
                         .show()
                 }
             }
