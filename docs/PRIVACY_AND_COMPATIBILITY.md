@@ -1,8 +1,10 @@
 # Nova Browser privacy and compatibility boundaries
 
-## Nova Shield
+## Engine selection and Nova Shield
 
-Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Browsing lists. Standard/Aggressive modes additionally enable cookie purging, private-mode query stripping and email-tracker protection; Aggressive enables strict social-tracker blocking. These controls block known trackers and some ad trackers, but they are **not** a complete EasyList/uBlock-style ad blocker and do not remove every ad or cosmetic page element.
+Normal tabs prefer Cefrium, but engine selection is capability-gated. Nova Shield and saved-password autofill currently require GeckoView, so Normal tabs fall back to GeckoView whenever those protections or credentials are needed. Private and Guest tabs are always GeckoView-only and use ephemeral contexts. The Cefrium profile is persistent and reserved for Normal browsing.
+
+Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Browsing lists. Standard/Aggressive modes additionally enable cookie purging, private-mode query stripping and email-tracker protection; Aggressive enables strict social-tracker and fingerprinting protection. These controls block known trackers and some ad trackers, but they are **not** a complete EasyList/uBlock-style ad blocker and do not remove every ad or cosmetic page element. Safe Browsing remains active even when Shield is Off.
 
 ## DNS and network routing
 
@@ -10,17 +12,17 @@ Nova applies AdGuard DNS-over-HTTPS in strict mode to GeckoView and Cefrium brow
 
 Protected DNS is browser-only. It does not create a system VPN, hide the device IP address, or change DNS for other Android apps. When an authenticated browser proxy is active, that proxy may resolve the remote website hostnames instead of the local DoH resolver.
 
-The existing 1VPN browser proxy remains a GeckoView WebExtension and is the source of truth for host selection and credentials. Its own authentication callback now relays the challenged proxy host and resolved credentials through Nova's native bridge to Cefrium in memory. Cefrium uses a fixed profile proxy and disables non-proxied WebRTC UDP. Runtime proxy, DNS and IP-leak acceptance is still required; until then, do not treat a successful UI toggle as proof of a verified VPN tunnel.
+## 1VPN browser proxy
+
+The bundled 1VPN Firefox WebExtension is the source of truth for server selection and credentials. It is a browser proxy, not Android VpnService and not a full-device VPN. The generated extension now waits for Nova's native routing configuration before releasing requests. When 1VPN is enabled, a missing/failed proxy decision or a `DIRECT` result is replaced with a loopback fail-closed proxy; proxy authentication and WebRTC protection must be available before the extension reports routing ready.
+
+Cefrium has a profile-level proxy adapter and in-memory credential bridge, but MainActivity currently routes Normal tabs to GeckoView while 1VPN is enabled. The Cefrium adapter is not a claim that all engines or all app traffic are protected. Proxy-server uptime, DNS, IPv4/IPv6, WebRTC, QUIC, WebSocket, downloads and tunnel-interruption behavior still require physical-device network verification. Do not claim a full-device VPN or independently audited anonymity.
 
 ## Guest Mode and Tor
 
-Guest Mode currently displays an explanation that Guest-only Tor is unavailable. Nova does not launch or configure Orbot because Android VPN routing is app/profile-level and would affect Normal and Private tabs in the same app package. Guest Mode is an isolated, ephemeral GeckoView private session; it does not create a Tor circuit. A dedicated Guest-only Tor transport is not implemented. Do not claim Tor routing, Tor anonymity, or a kill switch.
+Guest Mode uses the embedded Tor Android service and a GeckoView WebExtension SOCKS5 proxy. Guest startup waits for Tor circuit bootstrap, a valid local SOCKS port, and extension confirmation of remote-DNS SOCKS routing plus WebRTC protection. Loss of the Tor service or proxy bridge closes Guest Mode rather than intentionally falling back to DIRECT.
 
-## Browser VPN boundaries
-
-Nova's current 1VPN feature is a browser proxy, not an Android VpnService and not a full-device VPN. It is currently provided through GeckoView's bundled WebExtension. A connected extension status does not imply that every Android app or every Cefrium request is routed through that proxy.
-
-Cefrium uses its profile-level fixed HTTPS proxy and proxy-auth callback. The bundled 1VPN extension remains the credential source: its own auth callback relays the challenged proxy host and resolved credentials to Nova in memory. Cefrium restricts non-proxied WebRTC UDP and fixed-proxy requests have no direct fallback. If the bridge cannot provide credentials, the Cefrium profile remains on a local fail-closed proxy target. Runtime proxy, DNS and IP-leak acceptance still needs real-device verification.
+GeckoView's proxy extension is runtime-wide, not a supported per-session proxy API. To reduce cross-profile exposure, Nova refuses to start Guest Tor while Private tabs are open and closes/suspends persistent Normal GeckoView sessions before enabling the Guest circuit. Those Normal tabs are reopened after Guest exits; Cefrium Normal tabs are not routed through the GeckoView proxy. This mitigation still needs concurrent-session and physical-device verification before Nova can claim a formally audited Guest-only Tor boundary. Do not claim Tor anonymity or equivalence to the Tor Browser.
 
 ## Extensions
 
@@ -28,18 +30,12 @@ Nova uses GeckoView WebExtensions. Firefox-compatible signed extensions that sup
 
 ## Sync
 
-Cloud sync is end-to-end encrypted with a passphrase that is not uploaded. Each device must use the same passphrase. Bookmark, workspace and saved-password deletions plus history-clear timestamps now merge across devices. Supabase updated_at triggers plus compare-and-swap writes detect simultaneous-device edits instead of silently overwriting a newer revision; retry Sync now after a conflict. Private/Guest data is excluded. Automatic sync remains opt-in and requires the encrypted passphrase to be stored locally under Android Keystore protection; the passphrase is never stored in plaintext or sent to Supabase.
+Cloud sync is end-to-end encrypted with a passphrase that is not uploaded. Each device must use the same passphrase. Bookmark, workspace and saved-password deletions plus history-clear timestamps merge across devices. Supabase updated_at triggers plus compare-and-swap writes detect simultaneous-device edits instead of silently overwriting a newer revision; retry Sync now after a conflict. Private/Guest data is excluded. Automatic sync remains opt-in and requires the encrypted passphrase to be stored locally under Android Keystore protection; the passphrase is never stored in plaintext or sent to Supabase.
 
+## Verification still required
 
-## Cefrium settings compatibility — Phase 1 update
-
-- Normal mode defaults to Cefrium with a named persistent profile.
-- Private mode is GeckoView-only and uses ephemeral private sessions. It is excluded from normal persistence and cloud sync.
-- Guest mode remains GeckoView-only. Its engine and isolated Gecko context are unchanged.
-- Protected DNS now applies to both engines. Cefrium uses strict Secure DNS; GeckoView uses TRR_MODE_ONLY. This is browser-only protection, not a full-device VPN.
-- Desktop Site uses a Chromium desktop user agent plus a document-start viewport adjustment in Cefrium.
-- Reader Mode extracts and sanitizes article content before displaying it in a simplified Cefrium reading page. Source scripts and event handlers are removed.
-- Nova Shield and saved-password autofill remain GeckoView-only. Normal tabs may fall back to GeckoView when these features are required; Private and Guest are always GeckoView.
-- Cefrium component updates are disabled because the SDK documents that they do not use a profile proxy.
-- 1VPN now has a Cefrium adapter: the GeckoView extension provides the authenticated proxy credentials through a native bridge, while Cefrium applies its own fixed profile proxy and WebRTC policy. Runtime connectivity and leak tests are still pending.
-
+- Measure Cefrium memory, startup and per-ABI APK/AAB size on ARM64 hardware before making it the unconditional default.
+- Verify Cefrium renderer recovery, activity pause/resume and feature fallbacks on physical devices.
+- Test 1VPN proxy failure, DNS, WebRTC and IPv4/IPv6 leakage with the actual bundled extension on physical Android devices.
+- Test Guest Tor while Normal Cefrium tabs exist, reject Private-tab coexistence, and verify Normal GeckoView sessions restore after Guest exit.
+- BrowserStack UI tests are useful for regression but do not prove VPN/Tor routing or leak resistance.

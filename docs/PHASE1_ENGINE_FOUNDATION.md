@@ -2,15 +2,15 @@
 
 **Branch:** `feature/phase-1-dual-engine-foundation`  
 **Baseline audited:** `fb717c1cd48da2683ad376d40e5b0bfbbe686d22` (`main`, 2026-11-19)  
-**Status:** source foundation added; CI and device verification pending.
+**Status:** dual-engine source integration is merged on `main`; repository CI and emulator smoke checks pass. Physical-device acceptance remains open.
 
 ## Repository findings
 
 - Nova is a Kotlin Android app (`com.nova.browser`) with a single large `MainActivity` that owns the browser UI, tab list and most GeckoView delegates.
 - `MainActivity` creates one `GeckoRuntime` and a `GeckoSession` per tab. Two `GeckoView` instances support the split-pane UI. The runtime is shut down with the activity.
 - The tab model already distinguishes normal, private and Guest tabs. Guest sessions use Gecko private mode plus a fresh session context ID, and the previous Guest context is cleared at startup/exit. Guest and private tabs are excluded from normal tab persistence, password autofill and cloud sync.
-- Bookmarks, history, downloads, password vault, Shield, protected DNS and encrypted cloud sync are implemented in existing app services. Guest Mode currently displays an explicit Tor-unavailable explanation. No Orbot handoff or embedded Tor transport is enabled because app-wide VPN routing cannot isolate one tab.
-- The current production tab manager is tightly coupled to `GeckoSession`; switching it in one step would risk breaking permissions, downloads, extensions, translation, Shield, split-screen and Guest isolation.
+- Bookmarks, history, downloads, password vault, Shield, protected DNS and encrypted cloud sync are implemented in existing app services. Guest Mode now uses an embedded Tor service and GeckoView SOCKS5 extension bridge, with an explicit runtime-wide proxy isolation limitation documented below.
+- `BrowserTab` now holds an engine-neutral `BrowserEngine` adapter, while `MainActivity` still owns app-level delegates and feature routing. Remaining work is to reduce residual Gecko-specific ownership without breaking permissions, downloads, extensions, translation, Shield, split-screen and Guest isolation.
 
 ## Cefrium compatibility decision
 
@@ -46,7 +46,7 @@ The first combined-engine manifest merge exposed a conflict: GeckoView declares 
 2. `GeckoViewBrowserEngine` wraps one `GeckoSession` and one `GeckoView`, leaving the app-level `GeckoRuntime` owned by the host.
 3. `CefriumBrowserEngine` wraps a `CefriumBrowser` created with an explicit `CefriumProfile`; it reports URL/title/loading/back-forward state and forwards activity lifecycle events.
 4. A debug-only **Cefrium Engine Lab** is reachable from Settings in debug builds. It uses the isolated `nova-engine-probe` Cefrium profile and supports load/back/forward/reload. It is absent from release manifests.
-5. The production `MainActivity` remains on its existing GeckoView path. Phase 2 will migrate tab ownership to the shared interface after the Cefrium probe passes CI and device testing.
+5. Production `MainActivity` now owns engine-neutral tab lifecycle and selects Cefrium for eligible Normal tabs, with GeckoView fallback for unsupported features or runtime initialization failures. Private and Guest tabs remain GeckoView-only. The default Cefrium preference does not override Nova Shield or VPN capability requirements.
 
 ## Engine profile policy for later phases
 
@@ -54,23 +54,23 @@ The first combined-engine manifest merge exposed a conflict: GeckoView declares 
 - Private and Guest tabs are GeckoView-only. Private uses GeckoView private sessions; Guest uses Gecko private mode plus a dedicated temporary context ID.
 - The Normal, Private and Guest stores must never be merged. Cross-engine website data migration remains best-effort and must preserve the source profile until the destination session is verified.
 
-## Tor feasibility findings for Phase 4
+## Tor implementation and isolation boundary
 
-- Cefrium exposes a proxy on each CefriumProfile; the current adapter is scoped to Normal Cefrium profiles and must pass independent DNS/WebRTC/IP leak tests.
-- GeckoView has no supported public per-session proxy API. Runtime-level preference/configuration workarounds are not a supported or verified security boundary.
-- An app-wide Android VpnService captures the whole Nova package and cannot isolate one Guest tab from Normal/Private tabs.
-- Arti Android integration requires a custom JNI wrapper; it is not a drop-in stable Android library. Orbot's mature Android VPN mode is app/profile-level and does not meet Guest-only routing.
-- Guest-only Tor requires a dedicated transport and runtime/network boundary, then tests for DNS, UDP/WebRTC, redirects, proxy failure, circuit changes and Normal/Private non-interference. No Tor implementation is present.
+- Nova now bundles the embedded Tor Android service and configures a GeckoView WebExtension SOCKS5 proxy with remote DNS and WebRTC protection. Guest startup waits for a Tor circuit, valid SOCKS port and extension readiness; loss of the chain closes Guest Mode.
+- GeckoView has no supported public per-session proxy API. The extension proxy is runtime-wide, so the app suspends persistent Normal GeckoView sessions and refuses Guest startup while Private tabs are open. This is a mitigation, not yet a formally verified Guest-only boundary.
+- Cefrium exposes a proxy on each CefriumProfile; its adapter is scoped to Normal Cefrium profiles and must pass independent DNS/WebRTC/IP leak tests.
+- Physical-device tests must verify Guest Tor while Normal Cefrium tabs exist, that Private tabs are refused, and that Normal GeckoView sessions restore after Guest exit. Also test DNS, UDP/WebRTC, redirects, proxy failure, circuit changes and Normal/Private non-interference.
 
 References: [Arti Android integration](https://arti.torproject.org/integrating-arti/custom-wrappers/android/), [Arti status](https://arti.torproject.org/FAQs/).
 
-## Acceptance criteria
+## Acceptance criteria and current status
 
-- [ ] GitHub Actions resolves Cefrium 0.21.0 and completes unit tests + debug/release assembly with JDK 25 / Gradle 9.7.1 / AGP 9.4.0.
-- [ ] The debug Engine Lab launches and renders a normal HTTPS page on ARM64 Android.
-- [ ] Back, forward, reload, renderer recovery and activity pause/resume work in the Engine Lab.
-- [ ] The Cefrium profile used by the probe is distinct from the production profile.
-- [ ] Existing GeckoView regression suite remains green.
-- [ ] Real-device memory, APK size and stability are measured before release acceptance of Cefrium Normal mode.
+- [x] GitHub Actions resolves the pinned Cefrium SDK and completes unit tests and Android debug build on the merged `main` branch.
+- [x] Android lint and the Android emulator smoke workflow pass on the Phase 2 merge commit.
+- [x] MainActivity has production Cefrium tab creation, engine preference selection, profile isolation, and GeckoView fallback paths.
+- [x] Unit tests cover engine selection, feature capability routing, profile isolation and renderer recovery policy.
+- [ ] Run the full Cefrium navigation/lifecycle suite on physical ARM64 Android, including back, forward, reload, pause/resume and renderer recovery.
+- [ ] Measure memory, startup and per-ABI APK/AAB size on the target device before enabling Cefrium unconditionally for all Normal tabs.
+- [ ] Verify that Nova Shield and saved-password fallback do not silently weaken privacy or lose form data during engine routing.
 
-A successful build alone does not satisfy the device acceptance criteria.
+A successful build or emulator smoke test alone does not satisfy physical-device acceptance. Cefrium remains capability-gated: Nova must not disable Shield or bypass saved-login requirements merely to force a Chromium engine.

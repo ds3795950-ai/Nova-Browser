@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import org.torproject.jni.TorService
+import com.nova.browser.engine.BrowserEngineType
 
 /**
  * Owns the embedded Tor daemon for Guest Mode. Guest navigation is not released until Tor has
@@ -226,6 +227,15 @@ internal object TorGuestRoutingController {
         socksPort = 0
         appContext = null
     }
+}
+
+internal object GuestTorIsolationPolicy {
+    /** The GeckoView proxy is runtime-wide; Private tabs must not share it with Guest Tor. */
+    fun canStart(hasPrivateTabs: Boolean): Boolean = !hasPrivateTabs
+
+    /** Suspend persistent Gecko sessions while the shared Gecko proxy is routed through Tor. */
+    fun shouldSuspendNormalTab(isGuest: Boolean, isPrivate: Boolean, engine: BrowserEngineType): Boolean =
+        !isGuest && !isPrivate && engine == BrowserEngineType.GECKOVIEW
 }
 
 internal object GuestTorRoutingPolicy {

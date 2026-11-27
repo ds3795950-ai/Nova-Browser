@@ -18,4 +18,16 @@ class GuestTorRoutingPolicyTest {
         assertFalse(GuestTorRoutingPolicy.canEnterGuest(true, 9050, false))
         assertTrue(GuestTorRoutingPolicy.canEnterGuest(true, 9050, true))
     }
+
+    @Test fun privateTabsBlockGuestTorStartup() {
+        assertFalse(GuestTorIsolationPolicy.canStart(hasPrivateTabs = true))
+        assertTrue(GuestTorIsolationPolicy.canStart(hasPrivateTabs = false))
+    }
+
+    @Test fun guestTorSuspendsOnlyPersistentGeckoSessions() {
+        assertTrue(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, false, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
+        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, false, com.nova.browser.engine.BrowserEngineType.CEFRIUM))
+        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(false, true, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
+        assertFalse(GuestTorIsolationPolicy.shouldSuspendNormalTab(true, false, com.nova.browser.engine.BrowserEngineType.GECKOVIEW))
+    }
 }

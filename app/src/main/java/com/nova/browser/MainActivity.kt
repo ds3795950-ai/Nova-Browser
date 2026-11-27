@@ -1169,6 +1169,23 @@ class MainActivity : ComponentActivity() {
             toast("Guest Tor is already connecting")
             return
         }
+        if (!GuestTorIsolationPolicy.canStart(tabs.any { it.isPrivate })) {
+            toast("Close Private tabs before starting Guest Mode. Guest Tor uses GeckoView's shared network proxy.")
+            return
+        }
+        if (splitTabId != null) exitSplitScreen()
+        // GeckoView's proxy extension is runtime-wide rather than per-session. Close
+        // persistent Gecko sessions before enabling Guest Tor so their pages cannot
+        // continue making requests through the Guest circuit. Their URLs are restored
+        // after Guest exits; persistent Normal profile data remains untouched.
+        deactivateTabRuntime(currentTab())
+        tabs.filter { tab ->
+            GuestTorIsolationPolicy.shouldSuspendNormalTab(tab.isGuest, tab.isPrivate, tab.engineType) &&
+                tab.browserEngine != null
+        }.forEach { tab ->
+            closeTabRuntime(tab)
+            tab.needsReload = tab.lastUrl != HOME_URL
+        }
         tabSearchInputDialog?.dismiss()
         tabSearchInputDialog = null
         tabSearchResultsDialog?.dismiss()
@@ -1186,6 +1203,7 @@ class MainActivity : ComponentActivity() {
                 if (!prefs.edit().putBoolean("guest_context_used", true).commit()) {
                     if (tabs.any { it.isGuest }) closeGuestTabs()
                     TorGuestRoutingController.stop()
+                    if (tabs.isNotEmpty()) switchTab(activeIndex.coerceIn(tabs.indices))
                     pageStatus.text = "Guest Mode unavailable · could not save cleanup state"
                     toast("Guest Mode could not start safely because its cleanup marker could not be saved")
                     return@start
@@ -1194,6 +1212,7 @@ class MainActivity : ComponentActivity() {
                     .onSuccess { toast("Guest Mode started · Tor routing active") }
                     .onFailure {
                         TorGuestRoutingController.stop()
+                        if (tabs.isNotEmpty()) switchTab(activeIndex.coerceIn(tabs.indices))
                         toast("Guest Mode could not start: ${it.localizedMessage ?: "browser initialization failed"}")
                     }
             },
@@ -1204,6 +1223,7 @@ class MainActivity : ComponentActivity() {
                     toast("Tor connection lost. Closing Guest Mode to prevent direct traffic.")
                     closeGuestTabs()
                 } else {
+                    if (tabs.isNotEmpty()) switchTab(activeIndex.coerceIn(tabs.indices))
                     pageStatus.text = "Guest Mode unavailable · Tor required"
                     toast("Guest Mode blocked: Tor is unavailable. No direct connection was made. $reason")
                 }
