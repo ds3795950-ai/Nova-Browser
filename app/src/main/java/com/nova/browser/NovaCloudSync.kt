@@ -27,7 +27,9 @@ internal object CloudCrypto {
     private const val MAX_READ_PLAINTEXT_BYTES = 32 * 1024 * 1024
     private const val MAX_READ_CIPHERTEXT_BYTES = MAX_READ_PLAINTEXT_BYTES + 16
     private const val MAX_CIPHERTEXT_B64_CHARS = ((MAX_READ_CIPHERTEXT_BYTES + 2) / 3) * 4
-    internal const val MAX_HTTP_RESPONSE_BYTES = MAX_CIPHERTEXT_B64_CHARS + 1_048_576
+    // Legacy atomic bundles can contain two independently encrypted 32 MiB envelopes.
+    // Keep the per-envelope limits unchanged while allowing both Base64 payloads and JSON overhead.
+    internal const val MAX_HTTP_RESPONSE_BYTES = 2 * MAX_CIPHERTEXT_B64_CHARS + 2_097_152
     private fun utf8ByteCount(value: String, stopAfter: Int): Int {
         var total = 0
         var index = 0
