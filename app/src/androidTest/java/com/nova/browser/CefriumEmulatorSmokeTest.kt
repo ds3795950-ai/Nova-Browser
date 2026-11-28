@@ -53,8 +53,8 @@ class CefriumEmulatorSmokeTest {
         var sawSmokePageLoadStart = false
         var createDurationMs = 0L
         var loadDurationMs = 0L
-        var pssBeforeKb = 0
-        var pssAfterLoadKb = 0
+        var pssBeforeKb = 0L
+        var pssAfterLoadKb = 0L
         var nativeHeapAfterLoadKb = 0L
         var loadStartedAtMs = 0L
         val smokeUrlPrefix = "data:text/html;base64,"
