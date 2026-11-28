@@ -7456,7 +7456,9 @@ private fun showForgotPassword(prefillEmail: String = "") {
 
     override fun onResume() {
         super.onResume()
-        pipLeaveRequestId++
+        // Returning to the full app invalidates a delayed leave-hint probe; resuming
+        // inside PiP must not cancel the probe that is entering PiP.
+        if (!isInPictureInPictureMode) pipLeaveRequestId++
         resumePendingGeckoDataClearTab()
         applyGeckoImageBehavior { applied ->
             if (!applied) toast("Could not update GeckoView image-loading settings")
