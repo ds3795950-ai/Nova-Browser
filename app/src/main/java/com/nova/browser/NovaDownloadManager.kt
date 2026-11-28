@@ -59,6 +59,42 @@ class NovaDownloadManager(
 
     init { loadRecords() }
 
+    data class PublishedFile(val name: String, val mimeType: String, val uri: Uri, val size: Long, val modifiedAt: Long)
+
+    fun publishedFiles(): List<PublishedFile> {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val relativePath = Environment.DIRECTORY_DOWNLOADS + "/Nova/${storageNamespace}/"
+            val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME,
+                MediaStore.Downloads.MIME_TYPE, MediaStore.Downloads.SIZE, MediaStore.Downloads.DATE_MODIFIED)
+            return runCatching {
+                context.contentResolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection,
+                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.IS_PENDING} = 0",
+                    arrayOf(relativePath), "${MediaStore.Downloads.DATE_MODIFIED} DESC"
+                )?.use { cursor ->
+                    buildList {
+                        val idCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+                        val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME)
+                        val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.MIME_TYPE)
+                        val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.SIZE)
+                        val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.DATE_MODIFIED)
+                        while (cursor.moveToNext()) {
+                            val id = cursor.getLong(idCol)
+                            add(PublishedFile(cursor.getString(nameCol) ?: "Downloaded file",
+                                cursor.getString(mimeCol) ?: "application/octet-stream",
+                                Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString()),
+                                cursor.getLong(sizeCol), cursor.getLong(dateCol)))
+                        }
+                    }
+                } ?: emptyList()
+            }.getOrDefault(emptyList())
+        }
+        val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+        return directory.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() }?.map {
+            PublishedFile(it.name, "application/octet-stream", Uri.fromFile(it), it.length(), it.lastModified() / 1000L)
+        } ?: emptyList()
+    }
+
     fun setOnChangedListener(listener: ((List<Item>) -> Unit)?) { changed = listener }
 
     @Synchronized fun items(): List<Item> = records.values.toList().reversed()

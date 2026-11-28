@@ -4882,8 +4882,8 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.END
             setPadding(dp(8), dp(4), dp(8), dp(4))
             addView(Button(this@MainActivity).apply {
-                text = "Open Downloads"
-                setOnClickListener { openAndroidDownloads() }
+                text = "Browse Nova folder"
+                setOnClickListener { openNovaDownloadsFolder(manager) }
             })
             addView(Button(this@MainActivity).apply {
                 text = "Clear completed"
@@ -5365,10 +5365,25 @@ class MainActivity : ComponentActivity() {
         toast(if (requested) "Home-screen shortcut request sent" else "Could not create the home-screen shortcut")
     }
 
-    private fun openAndroidDownloads() {
-        val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
-        runCatching { startActivity(intent) }
-            .onFailure { toast("No Android Downloads app is available: ${it.localizedMessage ?: "Unknown error"}") }
+    private fun openNovaDownloadsFolder(manager: NovaDownloadManager) {
+        val files = manager.publishedFiles()
+        val labels = files.map { file -> "${file.name}\n${NovaDownloadManager.formatBytes(file.size)}" }.toTypedArray()
+        if (files.isEmpty()) {
+            AlertDialog.Builder(this).setTitle("Nova Downloads folder")
+                .setMessage("This engine's Nova Downloads folder is empty. Completed files saved by this engine will appear here.")
+                .setPositiveButton(getString(R.string.close), null).show()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Nova Downloads folder")
+            .setItems(labels) { _, which ->
+                val file = files.getOrNull(which) ?: return@setItems
+                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.mimeType).apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                runCatching { startActivity(intent) }
+                    .onFailure { toast("No app can open this file: ${it.localizedMessage ?: "Unknown error"}") }
+            }
+            .setNegativeButton(getString(R.string.close), null).show()
     }
 
 
