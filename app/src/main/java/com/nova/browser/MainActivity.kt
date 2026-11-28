@@ -2218,10 +2218,12 @@ class MainActivity : ComponentActivity() {
         if (tab.engineType != BrowserEngineType.CEFRIUM) return
         closeTabRuntime(tab)
         tab.engineType = BrowserEngineType.GECKOVIEW
+        tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
         tab.engineFallbackReason = reason
         activateTab(tab)
+        persistTabs()
         toast("Switched this tab to GeckoView: $reason")
     }
 
