@@ -28,7 +28,7 @@ Nova requests a six-digit code, verifies it with `type=email`, and stores the re
 - The sync passphrase is never uploaded. Optional periodic sync stores it only as AES-GCM ciphertext protected by a non-exportable Android Keystore key.
 - Each account is bound to its Supabase Auth user ID. Database RLS policies restrict reads, inserts, updates and deletes to `auth.uid() = user_id`.
 - New uploads package the encrypted browser snapshot and encrypted password vault into one compare-and-swap row in `nova_sync_state`. This avoids a partial backup if one of two independent table writes conflicts.
-- Older two-table backups remain readable: Nova falls back to `nova_encrypted_vault` only when the sync-state row is still in the legacy format. New writes use the atomic bundle format.
+- Older two-table backups remain readable: Nova reads and merges `nova_encrypted_vault` as a legacy compatibility input. New clients write the encrypted browser snapshot and password vault together in one `nova_sync_state` row using a single compare-and-swap, avoiding a partially updated backup. The legacy vault table is no longer written by new clients.
 - Included: bookmarks, normal browsing history (up to 500 restored entries), saved workspaces, selected browser settings and saved passwords.
 - Excluded: Private Mode and Guest Mode data. Downloads remain device-local.
 - Automatic sync is opt-in and scheduled every six hours when a network is available. Turning it off clears the locally stored auto-sync passphrase but does not delete the cloud backup.

@@ -8,6 +8,23 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NovaSyncMergeTest {
+    @Test fun newCloudBundleKeepsBrowserAndVaultInOneEnvelope() {
+        val browser = JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://nova.example")))
+        val vault = JSONObject().put("credentials", JSONArray().put(JSONObject().put("origin", "https://nova.example")))
+        val packed = NovaCloudBundle.pack(browser, vault)
+        val (restoredBrowser, restoredVault) = NovaCloudBundle.unpack(packed, null)
+        assertEquals(browser.toString(), restoredBrowser.toString())
+        assertEquals(vault.toString(), restoredVault.toString())
+    }
+
+    @Test fun legacyTwoTableBackupStillLoadsAlongsideAtomicBundleFormat() {
+        val browser = JSONObject().put("bookmarks", JSONArray())
+        val legacyVault = JSONObject().put("credentials", JSONArray())
+        val (restoredBrowser, restoredVault) = NovaCloudBundle.unpack(browser, legacyVault)
+        assertEquals(browser.toString(), restoredBrowser.toString())
+        assertEquals(legacyVault.toString(), restoredVault.toString())
+    }
+
     @Test fun bookmarkDeletionOnOneDeviceWinsOverOlderCopy() {
         val remote = JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://example.com").put("addedAt", 100)))
         val local = JSONObject().put("bookmarks", JSONArray()).put("bookmark_tombstones", JSONObject().put("https://example.com", 200))
