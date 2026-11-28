@@ -72,7 +72,11 @@ open class NovaVpnFirewallActivity : Activity() {
     }
 
     private fun renderStatus() {
-        status.text = NovaBrowserVpnController.statusText()
+        status.text = NovaBrowserVpnController.statusText() + "\n" +
+            NovaVpnHonestyPolicy.vpnStatusLabel(
+                NovaBrowserVpnController.isVpnEnabled(),
+                NovaBrowserVpnController.isVpnRoutingReady()
+            )
         locations.isEnabled = !NovaBrowserVpnController.isVpnEnabled()
     }
 
