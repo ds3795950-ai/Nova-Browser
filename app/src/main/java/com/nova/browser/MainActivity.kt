@@ -1271,6 +1271,12 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.bookmarks) to { showBookmarks() }
             if (!tab.isPrivate) actions += getString(R.string.history) to { showHistory() }
         if (!tab.isPrivate) actions += "Clear browsing data" to { showClearBrowsingData() }
+            if (!tab.isPrivate) actions += "Fire · clear tabs & site data" to { confirmFireClear() }
+            actions += (if (prefs.getBoolean("https_only_mode", false)) "HTTPS-Only · on" else "HTTPS-Only · off") to {
+                val next = !prefs.getBoolean("https_only_mode", false)
+                prefs.edit().putBoolean("https_only_mode", next).apply()
+                toast(if (next) "HTTPS-Only enabled" else "HTTPS-Only disabled")
+            }
             if (!tab.isPrivate) actions += getString(R.string.downloads) to { showDownloads() }
             actions += getString(if (tab.isLoading) R.string.stop_loading else R.string.reload_page) to { toggleStopReload() }
             actions += getString(R.string.find_in_page) to { showFindBar() }
@@ -3896,6 +3902,27 @@ class MainActivity : ComponentActivity() {
         addressSuggestionHandler.postDelayed(request, 350L)
     }
 
+
+    private fun httpsOnlyEnabled(): Boolean =
+        prefs.getBoolean("https_only_mode", false)
+
+    private fun applyHttpsOnlyPolicy(url: String): String? {
+        return when (NovaHttpsOnlyPolicy.decide(url, httpsOnlyEnabled())) {
+            NovaHttpsOnlyPolicy.Decision.ALLOW -> url
+            NovaHttpsOnlyPolicy.Decision.UPGRADE_TO_HTTPS -> {
+                val upgraded = NovaHttpsOnlyPolicy.upgradeToHttps(url)
+                if (upgraded != null) {
+                    toast("HTTPS-Only: upgraded to HTTPS")
+                    upgraded
+                } else null
+            }
+            NovaHttpsOnlyPolicy.Decision.BLOCK -> {
+                toast("HTTPS-Only blocked insecure navigation")
+                null
+            }
+        }
+    }
+
     private fun submitAddressBar() {
         val query = addressBar.text?.toString()?.trim().orEmpty()
         if (query.isEmpty()) return
@@ -3904,7 +3931,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun navigate(input: String) {
-        val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        val resolved = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        val target = applyHttpsOnlyPolicy(resolved) ?: return
         val tab = currentTab() ?: return
         if (target != HOME_URL && !selectEngineForNavigation(tab, target)) return
         prepareDesktopModeForNavigation(tab, target)
@@ -6867,6 +6895,46 @@ private fun showQuickSettings() {
         dialog.show()
     }
 
+
+    private fun confirmFireClear() {
+        if (currentTab()?.isPrivate == true) {
+            toast("Use Fire from a Normal tab")
+            return
+        }
+        if (denyGuestAccess("Fire")) return
+        AlertDialog.Builder(this)
+            .setTitle("Fire")
+            .setMessage("Close Normal tabs and clear history, cookies, cache, and Cefrium site data on this device. Saved passwords, Private tabs, and Guest tabs are kept. Downloads are not deleted.")
+            .setPositiveButton("Fire") { _, _ -> applyFireClear() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun applyFireClear() {
+        val selection = BrowsingDataSelection.fireDefaults()
+        if (selection.history) clearAllBrowsingHistory()
+        val flags = selection.geckoFlags()
+        if (flags != 0L) {
+            runCatching { runtime.storageController.clearData(flags) }
+                .onFailure { toast("Could not clear GeckoView data: ${it.localizedMessage ?: "Unknown error"}") }
+        }
+        if (selection.cefriumProfileData) {
+            runCatching { clearCefriumProfileData() }
+                .onFailure { toast("Could not clear Cefrium data: ${it.localizedMessage ?: "Unknown error"}") }
+        }
+        if (selection.closeNormalTabs) {
+            val normalIds = tabs.filter { !it.isPrivate && !it.isGuest }.map { it.id }
+            normalIds.asReversed().forEach { id ->
+                val index = tabs.indexOfFirst { it.id == id }
+                if (index >= 0) closeTabAt(index)
+            }
+            if (tabs.isEmpty()) createTab(false, HOME_URL)
+        }
+        persistTabs()
+        toast("Fire complete")
+    }
+
+
     private fun showClearBrowsingData() {
         if (currentTab()?.isPrivate == true) {
             toast("Clear owner browsing data from a Normal tab")
@@ -7624,6 +7692,23 @@ private fun showForgotPassword(prefillEmail: String = "") {
                 }
             }
         }
+    }
+
+
+    private fun requestUserPictureInPicture() {
+        val tab = currentTab() ?: return
+        val playing = tab.isFullscreenVideoPlaying
+        if (!BrowserPictureInPicturePolicy.shouldEnterUserInitiated(
+                apiLevel = Build.VERSION.SDK_INT,
+                activeTabIsCurrent = true,
+                videoIsPlaying = playing,
+                alreadyInPictureInPicture = isInPictureInPictureMode
+            )
+        ) {
+            toast("Play a video first, then try Pop out video")
+            return
+        }
+        enterBrowserPictureInPicture(tab, playing)
     }
 
     private fun enterBrowserPictureInPicture(tab: BrowserTab, videoIsPlaying: Boolean) {
