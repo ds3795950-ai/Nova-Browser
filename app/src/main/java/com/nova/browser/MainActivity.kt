@@ -100,6 +100,10 @@ import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.CefriumSitePermissionPolicy
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.NovaScriptAddonStore
+import com.nova.browser.engine.NovaAddonRuntimePolicy
+import com.nova.browser.engine.NovaAddonRequest
+import com.nova.browser.engine.NovaAddonPackageKind
+import com.nova.browser.engine.NovaAddonRuntimeMode
 
 /** Nova browser core. Normal tabs may use Cefrium; Private and Guest remain GeckoView-only. */
 private class NovaAddressAutoCompleteTextView(context: Context) : androidx.appcompat.widget.AppCompatAutoCompleteTextView(context) {
@@ -5481,6 +5485,7 @@ class MainActivity : ComponentActivity() {
                     }.setNegativeButton("Cancel",null).show()
             }
             .setPositiveButton("Add script add-on"){_,_->showAddNovaScriptAddon()}
+            .setNeutralButton("Install WebExtension"){_,_->installWebExtensionFromCefrium()}
             .setNegativeButton("Close",null).show()
     }
 
@@ -5525,9 +5530,52 @@ class MainActivity : ComponentActivity() {
         return failed.toList()
     }
 
+    private fun installWebExtensionFromCefrium() {
+        val tab = currentTab() ?: return
+        val profile = when {
+            tab.isGuest -> BrowserProfileKind.GUEST
+            tab.isPrivate -> BrowserProfileKind.PRIVATE
+            else -> BrowserProfileKind.NORMAL
+        }
+        val decision = NovaAddonRuntimePolicy.assess(
+            tab.engineType,
+            profile,
+            NovaAddonRequest(NovaAddonPackageKind.WEB_EXTENSION)
+        )
+        if (!decision.supported || decision.runtimeMode != NovaAddonRuntimeMode.GECKOVIEW_WEB_EXTENSION) {
+            toast(decision.explanation)
+            return
+        }
+        if (!decision.requiresEngineSwitch || decision.targetEngine != BrowserEngineType.GECKOVIEW) {
+            installExtensionPrompt()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Switch this tab to GeckoView?")
+            .setMessage(decision.explanation + "\n\nNova will keep the page address and reload it, but site data and login state are not transferred between engines.")
+            .setPositiveButton("Switch and continue") { _, _ ->
+                switchCurrentTabToGecko("Nova WebExtension installation")
+                installExtensionPrompt()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun installExtensionPrompt() {
-        if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
-            toast("Nova Add-ons cannot be installed in this engine yet")
+        val tab = currentTab() ?: return
+        val profile = when {
+            tab.isGuest -> BrowserProfileKind.GUEST
+            tab.isPrivate -> BrowserProfileKind.PRIVATE
+            else -> BrowserProfileKind.NORMAL
+        }
+        val decision = NovaAddonRuntimePolicy.assess(
+            tab.engineType,
+            profile,
+            NovaAddonRequest(NovaAddonPackageKind.WEB_EXTENSION)
+        )
+        if (!decision.supported || decision.runtimeMode != NovaAddonRuntimeMode.GECKOVIEW_WEB_EXTENSION ||
+            tab.engineType != BrowserEngineType.GECKOVIEW) {
+            toast(decision.explanation)
             return
         }
         val input = EditText(this).apply { hint = "https://…/package.xpi"; setSingleLine(true) }
