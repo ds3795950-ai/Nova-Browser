@@ -47,26 +47,29 @@ internal class NovaPdfPrintAdapter(
             callback.onWriteCancelled()
             return
         }
-        try {
-            FileInputStream(pdfFile).use { input ->
-                FileOutputStream(destination.fileDescriptor).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        if (cancellationSignal.isCanceled) {
-                            callback.onWriteCancelled()
-                            return
+        Thread({
+            try {
+                FileInputStream(pdfFile).use { input ->
+                    ParcelFileDescriptor.AutoCloseOutputStream(destination).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            if (cancellationSignal.isCanceled) {
+                                callback.onWriteCancelled()
+                                return@Thread
+                            }
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
                         }
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        output.write(buffer, 0, count)
+                        output.flush()
                     }
-                    output.flush()
                 }
+                if (cancellationSignal.isCanceled) callback.onWriteCancelled()
+                else callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+            } catch (failure: Exception) {
+                callback.onWriteFailed(failure.localizedMessage ?: "Could not write the PDF")
             }
-            callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
-        } catch (failure: Exception) {
-            callback.onWriteFailed(failure.localizedMessage ?: "Could not write the PDF")
-        }
+        }, "NovaPdfPrintWrite").start()
     }
 
     override fun onFinish() {

@@ -1280,7 +1280,10 @@ class MainActivity : ComponentActivity() {
             actions += getString(if (tab.isLoading) R.string.stop_loading else R.string.reload_page) to { toggleStopReload() }
             actions += getString(R.string.find_in_page) to { showFindBar() }
             actions += "Print / Save as PDF" to { printCurrentPage() }
-            if (!tab.isPrivate && !tab.isGuest && (tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://"))) {
+            val shortcutUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+            if (!tab.isPrivate && !tab.isGuest &&
+                (shortcutUrl.startsWith("https://") || shortcutUrl.startsWith("http://"))
+            ) {
                 actions += "Add to Home screen" to { addCurrentSiteToHomeScreen() }
             }
             actions += getString(if (tab.desktopSite) R.string.mobile_site else R.string.desktop_site) to { toggleDesktopSite() }
@@ -5380,6 +5383,10 @@ class MainActivity : ComponentActivity() {
             toast("Printing is disabled in Private and Guest Mode to avoid saving session content outside the profile")
             return
         }
+        if (tab.lastUrl == HOME_URL) {
+            toast("Open a webpage before printing")
+            return
+        }
         if (!canUseTabEngine(tab, "Print")) return
         val title = tab.title.trim().ifBlank { "Nova webpage" }.take(80)
         val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
@@ -5409,26 +5416,26 @@ class MainActivity : ComponentActivity() {
         }
         session.saveAsPdf().accept({ input ->
             val pdf = File(cacheDir, "nova-print-${UUID.randomUUID()}.pdf")
-            val saved = runCatching {
-                val copied = input?.let { source ->
+            Thread({
+                val saved = runCatching {
+                    val source = input ?: throw IllegalStateException("PDF stream is empty")
                     source.use { stream -> pdf.outputStream().use { output -> stream.copyTo(output) } }
-                    true
-                } ?: false
-                copied && pdf.isFile && pdf.length() > 0L
-            }.getOrDefault(false)
-            runOnUiThread {
-                if (!saved) {
-                    pdf.delete()
-                    toast("Nova could not create a PDF for this page")
-                    return@runOnUiThread
+                    pdf.isFile && pdf.length() > 0L
+                }.getOrDefault(false)
+                runOnUiThread {
+                    if (!saved) {
+                        pdf.delete()
+                        toast("Nova could not create a PDF for this page")
+                        return@runOnUiThread
+                    }
+                    runCatching {
+                        printManager.print(title, NovaPdfPrintAdapter(pdf), android.print.PrintAttributes.Builder().build())
+                    }.onFailure {
+                        pdf.delete()
+                        toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}")
+                    }
                 }
-                runCatching {
-                    printManager.print(title, NovaPdfPrintAdapter(pdf), android.print.PrintAttributes.Builder().build())
-                }.onFailure {
-                    pdf.delete()
-                    toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}")
-                }
-            }
+            }, "NovaPdfCopy").start()
         }, { error ->
             runOnUiThread { toast("This page could not be exported as PDF: ${error?.localizedMessage ?: "Unsupported page"}") }
         })

@@ -220,10 +220,35 @@ class NovaDownloadManager(
             val modified = connection.getHeaderField("Last-Modified") ?: if (restartedFromZero || offset == 0L) null else worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
             if (length > 0L) {
-                val availableBytes = runCatching { StatFs(part.parentFile!!.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-                val requiredBytes = length + 8L * 1024L * 1024L
-                if (availableBytes < requiredBytes) {
-                    throw IllegalStateException("Not enough free storage to finish this download")
+                val margin = 8L * 1024L * 1024L
+                val partialDirectory = part.parentFile ?: context.filesDir
+                val downloadsDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val partialAvailable = runCatching { StatFs(partialDirectory.absolutePath).availableBytes }.getOrDefault(0L)
+                val destinationAvailable = runCatching { StatFs(downloadsDirectory.absolutePath).availableBytes }.getOrDefault(0L)
+                val partialStore = runCatching { java.nio.file.Files.getFileStore(partialDirectory.toPath()) }.getOrNull()
+                val destinationStore = runCatching { java.nio.file.Files.getFileStore(downloadsDirectory.toPath()) }.getOrNull()
+                // If the store cannot be identified, assume both paths share storage and use the
+                // conservative combined requirement rather than risk a failed MediaStore copy.
+                val sameStore = if (partialStore != null && destinationStore != null) {
+                    partialStore == destinationStore
+                } else true
+                val partialBytes = part.length().coerceAtLeast(0L)
+                if (length > Long.MAX_VALUE - partialBytes) {
+                    throw IllegalStateException("The server declared an invalid download size")
+                }
+                val completedBytes = partialBytes + length
+                if (completedBytes > Long.MAX_VALUE - margin || length > Long.MAX_VALUE - margin) {
+                    throw IllegalStateException("The server declared an invalid download size")
+                }
+                val destinationRequired = completedBytes + margin
+                if (sameStore) {
+                    if (length > Long.MAX_VALUE - destinationRequired ||
+                        partialAvailable < length + destinationRequired
+                    ) {
+                        throw IllegalStateException("Not enough free storage to finish and publish this download")
+                    }
+                } else if (partialAvailable < length + margin || destinationAvailable < destinationRequired) {
+                    throw IllegalStateException("Not enough free storage to finish and publish this download")
                 }
             }
             val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 && validator != null
