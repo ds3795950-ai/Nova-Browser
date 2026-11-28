@@ -22,7 +22,6 @@ object BrowserEngineCapabilitySets {
         BrowserEngineCapability.TRANSLATION,
         BrowserEngineCapability.PASSWORD_AUTOFILL,
         BrowserEngineCapability.NOVA_SHIELD,
-        BrowserEngineCapability.EXTENSIONS
     )
 
     val CEFRIUM: Set<BrowserEngineCapability> = setOf(

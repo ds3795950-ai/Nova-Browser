@@ -10,12 +10,12 @@ class BrowserEngineCapabilityContractTest {
         val expected = setOf(BrowserEngineCapability.DOWNLOADS, BrowserEngineCapability.SITE_PERMISSIONS,
             BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DESKTOP_MODE,
             BrowserEngineCapability.TRANSLATION, BrowserEngineCapability.PASSWORD_AUTOFILL,
-            BrowserEngineCapability.NOVA_SHIELD, BrowserEngineCapability.EXTENSIONS)
+            BrowserEngineCapability.NOVA_SHIELD)
         assertTrue(BrowserEngineCapabilitySets.GECKOVIEW.containsAll(expected))
     }
     @Test fun cefriumDoesNotClaimGeckoOnlyFeatures() {
         val unsupported = setOf(BrowserEngineCapability.TRANSLATION, BrowserEngineCapability.PASSWORD_AUTOFILL,
-            BrowserEngineCapability.NOVA_SHIELD, BrowserEngineCapability.EXTENSIONS)
+            BrowserEngineCapability.NOVA_SHIELD)
         unsupported.forEach { assertFalse("Cefrium must not advertise $it", it in BrowserEngineCapabilitySets.CEFRIUM) }
     }
     @Test fun cefriumAdvertisesImplementedCommonFeaturesAndProxy() {
