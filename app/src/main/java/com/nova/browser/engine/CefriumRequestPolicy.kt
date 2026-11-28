@@ -23,6 +23,13 @@ class CefriumRequestPolicy(private val preferences: SharedPreferences) {
 
     fun dataSaverEnabled(): Boolean = preferences.getBoolean("nova_data_saver_enabled", false)
 
+    /** Uses the global image preference when a profile request has no page origin. */
+    fun imagesBlockedWithoutPageUrl(): Boolean = CefriumTrackingProtectionPolicy.shouldBlockImage(
+        isImage = true,
+        dataSaverEnabled = dataSaverEnabled(),
+        siteImagesAllowed = preferences.getBoolean("site_default_cefrium_images", true)
+    )
+
     fun shouldBlockTrackerWithoutTopLevel(url: String): Boolean =
         CefriumTrackingProtectionPolicy.shouldBlockRequestWithoutTopLevel(
             url, preferences.getBoolean("site_default_cefrium_ads", true)
@@ -53,10 +60,10 @@ internal class CefriumProfileResourceInterceptor(
     override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
         val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
         if (request.getType() == CefriumResourceType.IMAGE) {
-            // If Cefrium cannot provide the page origin for a worker request, apply only
-            // global Data Saver. Never mistake the image host for the embedding site.
+            // If Cefrium cannot provide the page origin, use global image preferences
+            // and Data Saver only; never apply a site override to an unknown origin.
             val blockImage = if (pageUrl.isNotBlank()) policy.imagesBlockedFor(pageUrl)
-                else policy.dataSaverEnabled()
+                else policy.imagesBlockedWithoutPageUrl()
             if (blockImage) return true
         }
         return if (pageUrl.isNotBlank()) policy.shouldBlockTracker(request.url, pageUrl)
