@@ -4968,7 +4968,7 @@ class MainActivity : ComponentActivity() {
         if (!route.available) { toast(route.reason); return }
         if (route.requiresSwitch) {
             AlertDialog.Builder(this).setTitle("Switch to GeckoView for translation?")
-                .setMessage("Nova on-device translation requires GeckoView. Switching reloads this page; cookies, site storage and login sessions are not transferred between engine profiles. Continue?")
+                .setMessage("Nova on-device translation requires GeckoView. Switching reloads this page in GeckoView's separate profile. Cookies, site storage and login sessions are not transferred, and Cefrium's per-site cookie rules will not apply after the switch. GeckoView's own tracking and cookie protections will apply. Continue?")
                 .setPositiveButton("Switch and continue") { _, _ ->
                     if (currentTab()?.id != tab.id) {
                         toast("The active tab changed; no engine was switched")
@@ -5976,7 +5976,7 @@ private fun showQuickSettings() {
             if (engine == BrowserEngineType.CEFRIUM) listOf(
                 Triple("popups", "Pop-ups and redirects", false),
                 Triple("autoplay", "Autoplay", false),
-                Triple("ads", "Ads and trackers", true),
+                Triple("ads", "Ads and tracker protection", true),
                 Triple("images", "Images", true),
                 Triple("cookies", "Cookies (browser requests only)", true),
                 Triple("sound", "Sound", true)
@@ -5991,11 +5991,12 @@ private fun showQuickSettings() {
         val cookieDefaults = if (engine == BrowserEngineType.GECKOVIEW) arrayOf("Cookies and site data", "Images") else emptyArray()
         val labels = definitions.map { (key, name, fallback) ->
             val enabled = prefs.getBoolean("site_default_${engine.name.lowercase()}_$key", fallback)
-            "$name · ${if (enabled) "Allowed" else "Blocked"}"
+            if (key == "ads" && engine == BrowserEngineType.CEFRIUM) "$name · ${if (enabled) "On" else "Off"}"
+            else "$name · ${if (enabled) "Allowed" else "Blocked"}"
         }.toTypedArray() + permissionDefaults + cookieDefaults
         val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
-            .apply { if (engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Cefrium 0.21 cookie rules apply to browser-owned requests only; service-worker requests are not covered.")) }
+            .apply { if (engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Nova's Cefrium cookie rule applies to browser-owned requests only; service-worker requests may use profile cookies.")) }
             .setItems(labels) { _, which ->
                 if (which == definitions.size) {
                     if (engine == BrowserEngineType.CEFRIUM) showDefaultCefriumPermissions() else showDefaultGeckoPermissions()
@@ -6169,7 +6170,7 @@ private fun showQuickSettings() {
             if (entry.engine == BrowserEngineType.CEFRIUM) listOf(
                 Triple("popups", "Pop-ups and redirects", false),
                 Triple("autoplay", "Autoplay", false),
-                Triple("ads", "Ads and trackers", true),
+                Triple("ads", "Ads and tracker protection", true),
                 Triple("images", "Images", true),
                 Triple("cookies", "Cookies (browser requests only)", true),
                 Triple("sound", "Sound", true)
@@ -6312,11 +6313,11 @@ private fun showQuickSettings() {
         val soundLabel = "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             val origin = originAtOpen
-            val adsLabel = "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked"
+            val adsLabel = "Ads and tracker protection · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "On" else "Off"
             val imagesLabel = "Images · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "images", true)) "Allowed" else "Blocked"
             val cookiesLabel = "Cookies (browser requests only) · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "cookies", true)) "Allowed" else "Blocked"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setView(cefriumCookieNotice("Cefrium 0.21 applies cookie rules to browser-owned requests only. Service-worker requests are not covered, so this is not complete cookie isolation."))
+                .setView(cefriumCookieNotice("Nova's Cefrium cookie rule applies to browser-owned requests only. Service-worker requests may use profile cookies, so this is not complete cookie isolation."))
                 .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, adsLabel, imagesLabel, cookiesLabel, "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {

@@ -21,6 +21,13 @@ class CefriumRequestPolicy(private val preferences: SharedPreferences) {
 
     fun browserCookiesAllowedFor(url: String): Boolean = siteSettingAllowed(url, "cookies", true)
 
+    fun dataSaverEnabled(): Boolean = preferences.getBoolean("nova_data_saver_enabled", false)
+
+    fun shouldBlockTrackerWithoutTopLevel(url: String): Boolean =
+        CefriumTrackingProtectionPolicy.shouldBlockRequestWithoutTopLevel(
+            url, preferences.getBoolean("site_default_cefrium_ads", true)
+        )
+
     fun shouldBlockTracker(url: String, topLevelUrl: String): Boolean =
         CefriumTrackingProtectionPolicy.shouldBlockRequest(
             url, topLevelUrl, siteSettingAllowed(topLevelUrl, "ads", true)
@@ -44,9 +51,15 @@ internal class CefriumProfileResourceInterceptor(
     private val policy: CefriumRequestPolicy
 ) : CefriumResourceInterceptor {
     override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
-        // Service-worker requests have no document/top-level URL. Use the resource URL
-        // for image preferences; do not guess a top-level site for tracker classification.
-        val resourceSite = request.topLevelUrl.ifBlank { request.documentUrl.ifBlank { request.url } }
-        return request.getType() == CefriumResourceType.IMAGE && policy.imagesBlockedFor(resourceSite)
+        val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
+        if (request.getType() == CefriumResourceType.IMAGE) {
+            // If Cefrium cannot provide the page origin for a worker request, apply only
+            // global Data Saver. Never mistake the image host for the embedding site.
+            val blockImage = if (pageUrl.isNotBlank()) policy.imagesBlockedFor(pageUrl)
+                else policy.dataSaverEnabled()
+            if (blockImage) return true
+        }
+        return if (pageUrl.isNotBlank()) policy.shouldBlockTracker(request.url, pageUrl)
+            else policy.shouldBlockTrackerWithoutTopLevel(request.url)
     }
 }

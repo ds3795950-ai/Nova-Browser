@@ -28,6 +28,17 @@ object CefriumTrackingProtectionPolicy {
         return requestTrackerSite != null
     }
 
+    /**
+     * Profile-owned requests (notably service-worker fetches) may have no top-level URL.
+     * Without that context, block only explicitly listed tracker hosts while protection
+     * is enabled; do not guess whether an arbitrary host is third-party.
+     */
+    fun shouldBlockRequestWithoutTopLevel(url: String, enabled: Boolean): Boolean =
+        enabled && isKnownTrackerHost(webHost(url))
+
+    private fun isKnownTrackerHost(host: String?): Boolean = host != null &&
+        trackerDomains.any { host == it || host.endsWith(".$it") }
+
     fun shouldBlockImage(isImage: Boolean, dataSaverEnabled: Boolean, siteImagesAllowed: Boolean): Boolean =
         isImage && (dataSaverEnabled || !siteImagesAllowed)
 

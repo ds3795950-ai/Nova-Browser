@@ -44,6 +44,18 @@ class CefriumTrackingProtectionPolicyTest {
         ))
     }
 
+    @Test fun profileRequestsWithoutPageContextBlockOnlyKnownTrackersWhenEnabled() {
+        assertTrue(CefriumTrackingProtectionPolicy.shouldBlockRequestWithoutTopLevel(
+            "https://www.google-analytics.com/collect", true
+        ))
+        assertFalse(CefriumTrackingProtectionPolicy.shouldBlockRequestWithoutTopLevel(
+            "https://cdn.example.net/app.js", true
+        ))
+        assertFalse(CefriumTrackingProtectionPolicy.shouldBlockRequestWithoutTopLevel(
+            "https://www.google-analytics.com/collect", false
+        ))
+    }
+
     @Test fun imagePolicyBlocksOnlyImagesForDataSaverOrSiteRule() {
         assertTrue(CefriumTrackingProtectionPolicy.shouldBlockImage(true, true, true))
         assertTrue(CefriumTrackingProtectionPolicy.shouldBlockImage(true, false, false))
