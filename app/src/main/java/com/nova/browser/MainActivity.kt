@@ -99,6 +99,8 @@ import com.nova.browser.engine.EngineSelectionPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.CefriumSitePermissionPolicy
 import com.nova.browser.engine.CefriumTrackingProtectionPolicy
+import com.nova.browser.engine.CefriumRequestPolicy
+import com.nova.browser.engine.CefriumProfileResourceInterceptor
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.NovaScriptAddonStore
 
@@ -1528,6 +1530,9 @@ class MainActivity : ComponentActivity() {
         check(!tab.isPrivate && !tab.isGuest) { "Private and Guest tabs must use GeckoView" }
         check(!guestTorReservesGeckoRuntime()) { "Normal Cefrium sessions are paused while Guest Tor owns the browser network context" }
         val profile = CefriumProfile.get(enginePreferences.cefriumProfileName())
+        val requestPolicy = CefriumRequestPolicy(prefs)
+        // Install before creating the tab browser; this profile hook retains only preferences.
+        profile.setResourceInterceptor(CefriumProfileResourceInterceptor(requestPolicy))
         val restoredNavigationState = tab.cefriumNavigationState?.let { CefriumTabStateCipher.decrypt(it, enginePreferences.cefriumProfileName()) }
         val engine = CefriumBrowserEngine(
             activity = this,
@@ -1564,14 +1569,7 @@ class MainActivity : ComponentActivity() {
             autoplayAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "autoplay", false) },
             adBlockingEnabledForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "ads", true) },
             soundAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "sound", true) },
-            imagesBlockedForUrl = { url ->
-                CefriumTrackingProtectionPolicy.shouldBlockImage(
-                    isImage = true,
-                    dataSaverEnabled = prefs.getBoolean("nova_data_saver_enabled", false),
-                    siteImagesAllowed = siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "images", true)
-                )
-            },
-            cookiesAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "cookies", true) },
+            requestPolicy = requestPolicy,
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread {
                     if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(tab.id, origin, permissions.toSet(), respond)
