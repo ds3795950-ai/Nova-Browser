@@ -47,8 +47,8 @@ Last reconciled: 2026-11-28 14:08 UTC. This document describes the current defau
 
 **Code exists; owner-controlled setup and live acceptance remain.**
 
-- Email OTP, encrypted local session storage, token refresh and sign-out are implemented. The Supabase connector available for this audit could inspect database/RLS state but could not read or update Auth email-template/SMTP settings.
-- Repository setup notes record that the Magic Link template still uses `{{ .ConfirmationURL }}` rather than numeric `{{ .Token }}`, and that custom SMTP is not configured. Treat these as the last recorded settings, not a fresh live dashboard verification. A project owner must configure the numeric OTP template and verified SMTP sender, then test a real inbox and expiry.
+- Email OTP, encrypted local session storage, token refresh and sign-out are implemented. Live Supabase Auth settings were read on 2026-11-28: email sign-in enabled, six-digit OTP, 600-second expiry, Magic Link template contains `{{ .Token }}`, and a custom SMTP host is configured on port 465 with sender name `Nova creator`. No SMTP hostname or credentials are included in repository docs.
+- Remaining acceptance is an actual send/verify/expiry test using a real inbox. The project settings are correctly configured, but delivery to a user's inbox has not been exercised in this session.
 - Production signing requires `NOVA_RELEASE_KEYSTORE_BASE64`, `NOVA_RELEASE_STORE_PASSWORD`, `NOVA_RELEASE_KEY_ALIAS` and `NOVA_RELEASE_KEY_PASSWORD`. Do not put these secrets in source.
 - The current dual-engine ARM64 test APK was previously measured at approximately 222 MB; the under-100-MB target is not met while both native engines are bundled.
 
