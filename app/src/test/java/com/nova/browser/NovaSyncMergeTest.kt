@@ -12,9 +12,23 @@ class NovaSyncMergeTest {
         val browser = JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://nova.example")))
         val vault = JSONObject().put("credentials", JSONArray().put(JSONObject().put("origin", "https://nova.example")))
         val packed = NovaCloudBundle.pack(browser, vault)
+        assertEquals(NovaCloudBundle.FORMAT, packed.getString("format"))
+        assertEquals(browser.toString(), packed.getJSONObject("browser").toString())
+        assertEquals(vault.toString(), packed.getJSONObject("vault").toString())
         val (restoredBrowser, restoredVault) = NovaCloudBundle.unpack(packed, null)
         assertEquals(browser.toString(), restoredBrowser.toString())
         assertEquals(vault.toString(), restoredVault.toString())
+    }
+
+    @Test fun incompleteAtomicBundleIsRejected() {
+        val incomplete = JSONObject().put("format", NovaCloudBundle.FORMAT)
+            .put("browser", JSONObject().put("bookmarks", JSONArray()))
+        try {
+            NovaCloudBundle.unpack(incomplete, null)
+            throw AssertionError("Incomplete bundle must not be accepted")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("incomplete"))
+        }
     }
 
     @Test fun legacyTwoTableBackupStillLoadsAlongsideAtomicBundleFormat() {
