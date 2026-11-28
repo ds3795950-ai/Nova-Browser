@@ -212,18 +212,18 @@ val prepare1VpnAssets by tasks.registering {
                     ? [{type: "socks", host: "127.0.0.1", port: torPort, socksVersion: 5, proxyDNS: true}, null]
                     : __novaFailClosedProxy;
                 }
-                var vpnEnabled = globalThis.__nova1VpnEnabled === true;
+                var isVpnEnabled = function() { return globalThis.__nova1VpnEnabled === true; };
                 var decision;
                 try { decision = m(details); }
-                catch (e) { return vpnEnabled ? __novaFailClosedProxy : {type: "direct"}; }
+                catch (e) { return isVpnEnabled() ? __novaFailClosedProxy : {type: "direct"}; }
                 var enforce = function(result) {
                   var chain = Array.isArray(result) ? result.slice() : [result];
                   var containsDirectFallback = !result || chain.length === 0 || !chain[0] ||
                     chain.some(function(proxy, index) {
                       return (proxy && proxy.type === "direct") || (!proxy && index !== chain.length - 1);
                     });
-                  if (vpnEnabled && containsDirectFallback) return __novaFailClosedProxy;
-                  if (vpnEnabled) {
+                  if (isVpnEnabled() && containsDirectFallback) return __novaFailClosedProxy;
+                  if (isVpnEnabled()) {
                     if (chain[chain.length - 1] !== null) chain.push(null);
                     return chain;
                   }
@@ -231,7 +231,7 @@ val prepare1VpnAssets by tasks.registering {
                 };
                 if (decision && typeof decision.then === "function") {
                   return decision.then(enforce, function() {
-                    return vpnEnabled ? __novaFailClosedProxy : {type: "direct"};
+                    return isVpnEnabled() ? __novaFailClosedProxy : {type: "direct"};
                   });
                 }
                 return enforce(decision);

@@ -95,6 +95,14 @@ object NovaBrowserVpnController {
                         extension.setMessageDelegate(object : WebExtension.MessageDelegate {
                             override fun onConnect(port: WebExtension.Port) {
                                 nativePort = port
+                                // A replacement bridge must not inherit the prior port's ready state.
+                                preferences?.edit()
+                                    ?.putBoolean("nova_vpn_routing_ready", false)
+                                    ?.putBoolean("nova_tor_guest_proxy_ready", false)
+                                    ?.putBoolean("nova_tor_guest_configured", false)
+                                    ?.apply()
+                                notifyStatusListeners()
+                                torRoutingStatusListener?.invoke()
                                 port.setDelegate(object : WebExtension.PortDelegate {
                                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
                                         if (nativePort !== port) return
@@ -131,12 +139,17 @@ object NovaBrowserVpnController {
                                                 torRoutingStatusListener?.invoke()
                                             }
                                             "error" -> {
+                                                val requestId = payload.optLong("configRequestId", -1L)
+                                                if (requestId > 0L && requestId != latestConfigRequestId) return
                                                 prefs.edit()
                                                     .putBoolean("nova_vpn_proxy_supported", false)
                                                     .putBoolean("nova_vpn_routing_ready", false)
+                                                    .putBoolean("nova_tor_guest_proxy_ready", false)
+                                                    .putBoolean("nova_tor_guest_configured", false)
                                                     .putString("nova_vpn_status", payload.optString("message", "1VPN proxy error"))
                                                     .apply()
                                                 notifyStatusListeners()
+                                                torRoutingStatusListener?.invoke()
                                             }
                                         }
                                     }
@@ -273,7 +286,9 @@ object NovaBrowserVpnController {
             acknowledgedRequestId = acknowledgedId,
             configured = prefs.getBoolean("nova_tor_guest_configured", false),
             torGuestMode = prefs.getBoolean("nova_tor_guest_mode", true),
-            routingReady = prefs.getBoolean("nova_vpn_routing_ready", false)
+            // Confirm only that the latest Tor-disable request was applied.
+            // VPN readiness is checked separately before normal navigation resumes.
+            routingReady = true
         )
     }
 
@@ -300,7 +315,8 @@ object NovaBrowserVpnController {
         if (VpnCredentialBootstrapPolicy.shouldStart(
                 vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
                 guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
-                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
             )) requestCredentialBootstrap()
     }
 
@@ -311,7 +327,8 @@ object NovaBrowserVpnController {
         if (VpnCredentialBootstrapPolicy.shouldStart(
                 vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
                 guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
-                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
             )) requestCredentialBootstrap()
     }
 
@@ -321,7 +338,8 @@ object NovaBrowserVpnController {
         if (!VpnCredentialBootstrapPolicy.shouldStart(
                 vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
                 guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
-                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
             )) return
         if (nativePort == null || credentialBootstrapSession != null) return
         Handler(Looper.getMainLooper()).postDelayed({
@@ -329,7 +347,8 @@ object NovaBrowserVpnController {
                 !VpnCredentialBootstrapPolicy.shouldStart(
                     vpnEnabled = isVpnEnabled(),
                     guestTorEnabled = preferences?.getBoolean("nova_tor_guest_enabled", false) == true,
-                    torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
+                    torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
                 )) return@postDelayed
             runCatching {
                 val session = GeckoSession()
