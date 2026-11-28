@@ -37,15 +37,9 @@ internal class CefriumProfileResourceInterceptor(
     private val policy: CefriumRequestPolicy
 ) : CefriumResourceInterceptor {
     override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
-        val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
-        if (request.getType() == CefriumResourceType.IMAGE && policy.imagesBlockedFor(pageUrl)) return true
-        return request.getType() != CefriumResourceType.MAIN_FRAME &&
-            policy.shouldBlockTracker(request.url, pageUrl)
+        // Service-worker requests have no document/top-level URL. Use the resource URL
+        // for image preferences; do not guess a top-level site for tracker classification.
+        val resourceSite = request.topLevelUrl.ifBlank { request.documentUrl.ifBlank { request.url } }
+        return request.getType() == CefriumResourceType.IMAGE && policy.imagesBlockedFor(resourceSite)
     }
-
-    override fun onCanSendCookie(url: String, name: String, value: String): Boolean =
-        policy.cookiesAllowedFor(url)
-
-    override fun onCanSaveCookie(url: String, name: String, value: String): Boolean =
-        policy.cookiesAllowedFor(url)
 }

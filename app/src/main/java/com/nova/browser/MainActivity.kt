@@ -81,6 +81,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import org.mozilla.geckoview.GeckoView
 import com.cefrium.Cefrium
+import com.cefrium.CefriumExperimental
 import com.cefrium.CefriumProfile
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumContextMenu
@@ -1517,6 +1518,7 @@ class MainActivity : ComponentActivity() {
         return session
     }
 
+    @OptIn(CefriumExperimental::class)
     private fun ensureCefriumEngine(tab: BrowserTab, existingBrowser: CefriumBrowser? = null): CefriumBrowserEngine {
         check(!GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
             "Normal and Private Cefrium engines are paused while Guest Tor owns the shared proxy"
