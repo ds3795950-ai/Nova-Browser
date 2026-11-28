@@ -4920,10 +4920,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cleanupGuestContextIfIdle() {
-        if (tabs.none { it.isGuest } && !guestTorStartPending && TorGuestRoutingController.blocksNormalGeckoSessions()) {
+        val guestTabCount = tabs.count { it.isGuest }
+        if (GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(guestTabCount) &&
+            !guestTorStartPending && TorGuestRoutingController.blocksNormalGeckoSessions()) {
             TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
         }
-        if (tabs.none { it.isGuest } && guestContextId.isNotBlank()) {
+        if (GuestTorRoutingPolicy.shouldClearGuestContextMarker(guestTabCount) && guestContextId.isNotBlank()) {
             if (prefs.getBoolean("guest_context_used", false)) queueGuestContextCleanup(guestContextId)
             guestContextId = "nova-guest-${UUID.randomUUID()}"
             prefs.edit().putString("guest_context_id", guestContextId).putBoolean("guest_context_used", false).commit()

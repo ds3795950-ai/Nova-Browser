@@ -348,6 +348,10 @@ internal object GuestTorIsolationPolicy {
 }
 
 internal object GuestTorRoutingPolicy {
+    fun shouldClearGuestContextMarker(guestTabCount: Int): Boolean = guestTabCount <= 0
+
+    fun shouldStopTorAfterGuestCreationFailure(guestTabCount: Int): Boolean = guestTabCount <= 0
+
     fun newlyCreatedGuestTabIds(existingGuestIds: Set<String>, currentGuestIds: List<String>): List<String> =
         currentGuestIds.filterNot { it in existingGuestIds }
 

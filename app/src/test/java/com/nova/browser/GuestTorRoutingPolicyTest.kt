@@ -95,6 +95,18 @@ class GuestTorRoutingPolicyTest {
         assertFalse(CrossEngineNavigationPolicy.canTransfer("PUT"))
     }
 
+    @Test fun guestCleanupMarkerIsPreservedWhileAnyGuestTabExists() {
+        assertTrue(GuestTorRoutingPolicy.shouldClearGuestContextMarker(0))
+        assertFalse(GuestTorRoutingPolicy.shouldClearGuestContextMarker(1))
+        assertFalse(GuestTorRoutingPolicy.shouldClearGuestContextMarker(3))
+    }
+
+    @Test fun failedAdditionalGuestTabDoesNotStopExistingGuestTorSession() {
+        assertTrue(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(0))
+        assertFalse(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(1))
+        assertFalse(GuestTorRoutingPolicy.shouldStopTorAfterGuestCreationFailure(2))
+    }
+
     @Test fun onlyLatestTorDisableAcknowledgementReleasesNormalSessionBarrier() {
         assertTrue(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false, true))
         assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 11L, 11L, true, false, true))
