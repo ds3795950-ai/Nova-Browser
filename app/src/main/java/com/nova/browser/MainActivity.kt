@@ -219,6 +219,7 @@ class MainActivity : ComponentActivity() {
     private var launchIntentHandled = false
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
+    private var pendingTranslationTabId: String? = null
     private val bookmarkRequestCode = 4101
     private val uploadRequestCode = 4102
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -3123,10 +3124,20 @@ class MainActivity : ComponentActivity() {
             }
             override fun onPageStop(session: GeckoSession, success: Boolean) {
                 tab.isLoading = false
-                if (currentTab() === tab) runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    if (success && !tab.isErrorPage) captureTabThumbnail(tab)
-                    setPageStatus(if (tab.isErrorPage) tab.securityStatus else if (success) tab.securityStatus.ifBlank { getString(R.string.ready_for_host, Uri.parse(tab.lastUrl).host ?: "Nova") } else getString(R.string.page_failed_to_load), if (tab.isErrorPage || !success) 5 else 4)
+                runOnUiThread {
+                    if (pendingTranslationTabId == tab.id) {
+                        pendingTranslationTabId = null
+                        if (success && !tab.isErrorPage && currentTab() === tab && tab.engineType == BrowserEngineType.GECKOVIEW) {
+                            showTranslationLanguagePicker(tab)
+                        } else if (!success && currentTab() === tab) {
+                            toast("The page could not finish loading for translation")
+                        }
+                    }
+                    if (currentTab() === tab) {
+                        progressBar.visibility = View.GONE
+                        if (success && !tab.isErrorPage) captureTabThumbnail(tab)
+                        setPageStatus(if (tab.isErrorPage) tab.securityStatus else if (success) tab.securityStatus.ifBlank { getString(R.string.ready_for_host, Uri.parse(tab.lastUrl).host ?: "Nova") } else getString(R.string.page_failed_to_load), if (tab.isErrorPage || !success) 5 else 4)
+                    }
                 }
             }
             override fun onSecurityChange(session: GeckoSession, securityInfo: GeckoSession.ProgressDelegate.SecurityInformation) {
@@ -4951,22 +4962,28 @@ class MainActivity : ComponentActivity() {
                         toast("The active tab changed; no engine was switched")
                         return@setPositiveButton
                     }
+                    pendingTranslationTabId = tab.id
                     switchCurrentTabToGecko(route.reason)
-                    if (tab.engineType == BrowserEngineType.GECKOVIEW) {
-                        toast("Page reopened in GeckoView. Tap Translate again after it finishes loading.")
-                    } else {
+                    if (tab.engineType != BrowserEngineType.GECKOVIEW) {
+                        pendingTranslationTabId = null
                         toast("Engine switch is blocked until protected routing is ready")
+                    } else {
+                        toast("Switching to GeckoView; translation options will open after the page reloads")
                     }
                 }.setNegativeButton("Cancel", null).show()
             return
         }
+        showTranslationLanguagePicker(tab)
+    }
+
+    private fun showTranslationLanguagePicker(tab: BrowserTab) {
+        if (currentTab() !== tab || tab.engineType != BrowserEngineType.GECKOVIEW) return
         val languages = arrayOf(
             "English" to "en", "Hindi" to "hi", "Bengali" to "bn",
             "Japanese" to "ja", "Chinese" to "zh", "Spanish" to "es", "French" to "fr",
             "German" to "de", "Arabic" to "ar", "Portuguese" to "pt", "Russian" to "ru"
         )
         var source = detectedPageLanguages[tab.id] ?: "en"
-        val sourceIndex = languages.indexOfFirst { it.second == source }.let { if (it >= 0) it else 0 }
         AlertDialog.Builder(this).setTitle("Translate from · detected ${source}")
             .setItems((listOf("Use detected ($source)") + languages.map { it.first }).toTypedArray()) { _, fromIndex ->
                 if (fromIndex > 0) source = languages[fromIndex - 1].second
