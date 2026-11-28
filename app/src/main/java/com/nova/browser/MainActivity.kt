@@ -270,6 +270,12 @@ class MainActivity : ComponentActivity() {
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
     private data class HomeShortcut(val title: String, val url: String)
 
+    private data class FireClearCompletion(
+        val operationId: String,
+        val succeeded: Boolean,
+        val message: String?
+    )
+
     private data class BrowserTab(
         var session: GeckoSession?,
         val isPrivate: Boolean,
@@ -7264,30 +7270,55 @@ private fun showQuickSettings() {
             toast("Close all Private and Guest tabs before using Fire. Their session data will not be touched.")
             return
         }
+        if (pendingFireClearOperationId != null) {
+            toast("Fire is already clearing browser data")
+            return
+        }
         val selection = BrowsingDataSelection.fireDefaults()
-        val flags = selection.geckoFlags()
-        // Fire closes every Normal tab after both stores finish, so do not reactivate
-        // the just-cleared page in between the two asynchronous deletion steps.
-        clearGeckoWebsiteData(flags, activeTabId = null) { geckoSucceeded, geckoMessage ->
-            if (!geckoSucceeded) {
-                toast("Fire stopped: GeckoView data was not confirmed cleared. ${geckoMessage.orEmpty()}")
-                return@clearGeckoWebsiteData
+        val operationId = java.util.UUID.randomUUID().toString()
+        pendingFireClearOperationId = operationId
+        pendingFireClearCompletion = null
+        // The completion is routed to whichever MainActivity is current when Gecko finishes.
+        clearGeckoWebsiteData(
+            selection.geckoFlags(),
+            activeTabId = null,
+            fireOperationId = operationId
+        ) { _, _ -> }
+    }
+
+    private fun consumePendingFireClearCompletion() {
+        val completion = pendingFireClearCompletion ?: return
+        if (pendingFireClearOperationId != completion.operationId) {
+            pendingFireClearCompletion = null
+            return
+        }
+        pendingFireClearCompletion = null
+        continueFireClearAfterGecko(completion)
+    }
+
+    private fun continueFireClearAfterGecko(completion: FireClearCompletion) {
+        if (pendingFireClearOperationId != completion.operationId) return
+        if (!completion.succeeded) {
+            pendingFireClearOperationId = null
+            toast("Fire stopped: GeckoView data was not confirmed cleared. ${completion.message.orEmpty()}")
+            return
+        }
+        val selection = BrowsingDataSelection.fireDefaults()
+        clearCefriumProfileDataNow(activeTabId = null) { cefriumSucceeded, cefriumMessage ->
+            if (pendingFireClearOperationId != completion.operationId) return@clearCefriumProfileDataNow
+            if (!cefriumSucceeded) {
+                pendingFireClearOperationId = null
+                toast("GeckoView data was cleared, but Cefrium data could not be confirmed: ${cefriumMessage.orEmpty()}")
+                return@clearCefriumProfileDataNow
             }
-            clearCefriumProfileDataNow(activeTabId = null) { cefriumSucceeded, cefriumMessage ->
-                if (!cefriumSucceeded) {
-                    toast("GeckoView data was cleared, but Cefrium data could not be confirmed: ${cefriumMessage.orEmpty()}")
-                    return@clearCefriumProfileDataNow
-                }
-                if (selection.closeNormalTabs) closeNormalTabsForFire()
-                if (selection.history) clearAllBrowsingHistory()
-                if (tabs.isEmpty()) {
-                    if (!createTab(false, HOME_URL)) {
-                        ensureHomeTabRecord()
-                        persistTabs()
-                    }
-                }
-                toast("Fire complete · Normal tabs, history and GeckoView site data cleared. ${cefriumMessage ?: "Cefrium profile refreshed"}")
+            if (selection.closeNormalTabs) closeNormalTabsForFire()
+            if (selection.history) clearAllBrowsingHistory()
+            if (tabs.isEmpty() && !createTab(false, HOME_URL)) {
+                ensureHomeTabRecord()
+                persistTabs()
             }
+            pendingFireClearOperationId = null
+            toast("Fire complete · Normal tabs, history and GeckoView site data cleared. ${cefriumMessage ?: "Cefrium profile refreshed"}")
         }
     }
 
@@ -7433,15 +7464,23 @@ private fun showQuickSettings() {
         retryPendingExternalLink()
     }
 
-    private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
+    private fun clearGeckoWebsiteData(
+        flags: Long,
+        activeTabId: String?,
+        fireOperationId: String? = null,
+        onFinished: (Boolean, String?) -> Unit
+    ) {
         if (pendingGeckoDataClearActive) {
-            onFinished(false, "A GeckoView data deletion is already in progress")
+            if (fireOperationId != null) dispatchFireClearCompletion(FireClearCompletion(fireOperationId, false, "A GeckoView data deletion is already in progress"))
+            else onFinished(false, "A GeckoView data deletion is already in progress")
             return
         }
         // GeckoView clearData(flags) is runtime-wide; it cannot scope the request to Normal.
         // Do not run it while excluded Guest/Private contexts exist, or their data would be erased.
         if (tabs.any { it.isGuest || it.isPrivate }) {
-            onFinished(false, "GeckoView cannot clear only Normal data while Guest or Private sessions are open. Keep those sessions open and try again later; their data has not been touched.")
+            val message = "GeckoView cannot clear only Normal data while Guest or Private sessions are open. Keep those sessions open and try again later; their data has not been touched."
+            if (fireOperationId != null) dispatchFireClearCompletion(FireClearCompletion(fireOperationId, false, message))
+            else onFinished(false, message)
             return
         }
         if (splitTabId != null) exitSplitScreen()
@@ -7466,20 +7505,24 @@ private fun showQuickSettings() {
                 pendingGeckoDataClearTabIds.removeAll(affectedIds)
                 pendingGeckoDataClearActive = false
                 pendingGeckoDataClearResumeTabId = activeTabId
-                val target = currentActivityReference?.get()
-                if (target != null && !target.isFinishing && !target.isDestroyed) {
-                    target.runOnUiThread {
-                        if (target.isFinishing || target.isDestroyed) return@runOnUiThread
-                        target.resumePendingGeckoDataClearTab()
-                        if (target === this) onFinished(succeeded, message)
-                        else target.toast(message ?: if (succeeded) "Selected GeckoView tab resumed after data deletion" else "GeckoView data clear failed: ${message ?: "Unknown error"}")
-                    }
+                if (fireOperationId != null) {
+                    dispatchFireClearCompletion(FireClearCompletion(fireOperationId, succeeded, message))
                 } else {
-                    // If completion beats Activity recreation, onResume consumes this retained tab ID.
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        resumePendingGeckoDataClearTab()
-                        onFinished(succeeded, message)
+                    val target = currentActivityReference?.get()
+                    if (target != null && !target.isFinishing && !target.isDestroyed) {
+                        target.runOnUiThread {
+                            if (target.isFinishing || target.isDestroyed) return@runOnUiThread
+                            target.resumePendingGeckoDataClearTab()
+                            if (target === this) onFinished(succeeded, message)
+                            else target.toast(message ?: if (succeeded) "Selected GeckoView tab resumed after data deletion" else "GeckoView data clear failed: ${message ?: "Unknown error"}")
+                        }
+                    } else {
+                        // If completion beats Activity recreation, onResume consumes this retained tab ID.
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            resumePendingGeckoDataClearTab()
+                            onFinished(succeeded, message)
+                        }
                     }
                 }
             }
@@ -7490,6 +7533,26 @@ private fun showQuickSettings() {
                 { error -> finish(false, error?.localizedMessage) }
             )
         }.onFailure { finish(false, it.localizedMessage) }
+    }
+
+    private fun dispatchFireClearCompletion(completion: FireClearCompletion) {
+        if (pendingFireClearOperationId != completion.operationId) return
+        val dispatcher = currentActivityReference?.get()
+        if (dispatcher == null || dispatcher.isFinishing || dispatcher.isDestroyed) {
+            pendingFireClearCompletion = completion
+            return
+        }
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            // Resolve the Activity at execution time, not dispatch time: recreation can
+            // happen while this completion is waiting in the main-thread queue.
+            val target = currentActivityReference?.get()
+            if (target == null || target.isFinishing || target.isDestroyed) {
+                pendingFireClearCompletion = completion
+                return@post
+            }
+            target.resumePendingGeckoDataClearTab()
+            target.continueFireClearAfterGecko(completion)
+        }
     }
 
     private fun retryRetiredCefriumProfileDeletes() {
@@ -8163,6 +8226,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
             bottomToolbar.visibility = View.GONE
         } else if (isFullscreen) {
             setBrowserFullscreen(true, tabs.firstOrNull { it.id == fullscreenTabId })
+        } else {
+            setBrowserFullscreen(false, currentTab())
         }
     }
 
@@ -8187,6 +8252,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         // inside PiP must not cancel the probe that is entering PiP.
         if (!isInPictureInPictureMode) pipLeaveRequestId++
         resumePendingGeckoDataClearTab()
+        consumePendingFireClearCompletion()
         applyGeckoImageBehavior { applied ->
             if (!applied) toast("Could not update GeckoView image-loading settings")
         }
@@ -8369,6 +8435,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private var retainedAiPageUrl: Map<String, String>? = null
         private val pendingGeckoDataClearTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         @Volatile private var pendingGeckoDataClearActive = false
+        @Volatile private var pendingFireClearOperationId: String? = null
+        @Volatile private var pendingFireClearCompletion: FireClearCompletion? = null
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
         private const val PWA_MANIFEST_LINK_SCRIPT = """
             (() => {

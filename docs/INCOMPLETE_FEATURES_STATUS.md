@@ -7,7 +7,7 @@ Branch: `feature/complete-incomplete-features` (replacement work based on curren
 | Item | Implementation / boundary |
 |------|----------------------------|
 | HTTPS-Only | Address-bar, restored-tab and split navigation upgrades; Cefrium safe GET link requests upgrade; GeckoView HTTP page requests fail closed because its callback does not expose a safe method/body replay contract. Malformed HTTP input fails closed. Local/private IPv4 and IPv6 exceptions are configurable in policy. |
-| Fire clear | Refuses to run while Private or Guest tabs are open; waits for GeckoView async deletion and Cefrium profile rotation/deletion result; only then closes Normal tabs without adding them to recently-closed history and clears history. |
+| Fire clear | Refuses to run while Private or Guest tabs are open; retains a process-scoped completion so GeckoView async deletion resumes the Cefrium, Normal-tab and history cleanup sequence in a recreated Activity; only then closes Normal tabs without adding them to recently-closed history and clears history. |
 | Picture-in-Picture | Automatic fullscreen path remains gated; explicit “Pop out video” action is reachable from the overflow menu and probes active inline video on Cefrium. GeckoView explicit pop-out is clearly reported as unsupported. |
 | Print / Save as PDF | Uses the existing engine-specific PR #34 path: Cefrium's current engine adapter or GeckoView's session PDF export. Private/Guest printing is blocked; no temporary default WebView is created. |
 | Per-site dark mode | Persists per-host mode and applies/removes CSS on Cefrium page completion and immediately on mode changes. GeckoView is explicitly reported as unsupported until it exposes a safe shared script API. |
