@@ -49,8 +49,10 @@ class GeckoViewMajorWebsiteSmokeTest {
     private fun waitForPage(
         scenario: ActivityScenario<MainActivity>,
         engine: GeckoViewBrowserEngine,
+        expectedUrl: String,
         timeoutSeconds: Long
     ): Boolean {
+        val expectedHost = Uri.parse(expectedUrl).host?.removePrefix("www.")
         val deadline = SystemClock.uptimeMillis() + timeoutSeconds * 1000
         while (SystemClock.uptimeMillis() < deadline) {
             var loading = true
@@ -61,7 +63,10 @@ class GeckoViewMajorWebsiteSmokeTest {
                 url = engine.state.url
                 error = engine.state.error
             }
-            if (!loading && url?.startsWith("https://") == true && error == null) return true
+            val currentHost = url?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+            val hostMatches = currentHost != null && expectedHost != null &&
+                (currentHost == expectedHost || currentHost.endsWith(".$expectedHost"))
+            if (!loading && hostMatches && error == null) return true
             SystemClock.sleep(100)
         }
         return false
@@ -85,7 +90,7 @@ class GeckoViewMajorWebsiteSmokeTest {
                 scenario.onActivity { activeEngine.loadUrl(url) }
                 assertTrue(
                     "GeckoView did not finish loading $url",
-                    waitForPage(scenario, activeEngine, 35)
+                    waitForPage(scenario, activeEngine, url, 35)
                 )
                 var finalUrl: String? = null
                 scenario.onActivity { finalUrl = activeEngine.state.url }
