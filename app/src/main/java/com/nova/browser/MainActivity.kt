@@ -68,7 +68,6 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.WebExtensionController
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
@@ -101,11 +100,6 @@ import com.nova.browser.engine.BrowserProfileKind
 import com.nova.browser.engine.EngineSelectionRequest
 import com.nova.browser.engine.EngineSelectionPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
-import com.nova.browser.engine.NovaScriptAddonStore
-import com.nova.browser.engine.NovaAddonRuntimePolicy
-import com.nova.browser.engine.NovaAddonRequest
-import com.nova.browser.engine.NovaAddonPackageKind
-import com.nova.browser.engine.NovaAddonRuntimeMode
 import com.nova.browser.engine.CefriumSitePermissionPolicy
 import com.nova.browser.engine.CefriumRequestPolicy
 import com.nova.browser.engine.CefriumProfileResourceInterceptor
@@ -265,7 +259,6 @@ class MainActivity : ComponentActivity() {
     private var lastFontScale = 1f
     private var searchEngine = "Google"
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
-    private val novaScriptAddonStore by lazy { NovaScriptAddonStore(this) }
     private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
     private data class HomeShortcut(val title: String, val url: String)
@@ -1281,7 +1274,6 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.share_page) to { sharePage() }
             actions += getString(R.string.nova_shield) to { showShieldSettings() }
             actions += getString(R.string.ai_assistants) to { showAiAssistant() }
-            actions += "Nova Add-ons" to { showExtensions() }
             if (!tab.isPrivate && !tab.isGuest) actions += "Nova Hub" to {
                 startActivity(Intent(this, NovaPhase2HubActivity::class.java).apply {
                     val hubUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
@@ -1546,7 +1538,6 @@ class MainActivity : ComponentActivity() {
             activity = this,
             profile = profile,
             initialNavigationState = restoredNavigationState,
-            initialNovaAddons = novaScriptAddonStore.enabled(),
             listener = BrowserEngineListener { state -> runOnUiThread { applyCefriumState(tab, state) } },
             onDownloadCompleted = { download ->
                 runOnUiThread {
@@ -2218,27 +2209,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun switchCurrentTabToGecko(reason: String): Boolean {
-        val tab = currentTab() ?: return false
+    private fun switchCurrentTabToGecko(reason: String) {
+        val tab = currentTab() ?: return
         if (pendingGeckoDataClearActive) {
             toast("Wait for GeckoView data cleanup to finish before switching engines")
-            return false
+            return
         }
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
-            )) return false
-        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return false
-        if (tab.engineType != BrowserEngineType.CEFRIUM) return false
+            )) return
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return
+        if (tab.engineType != BrowserEngineType.CEFRIUM) return
         closeTabRuntime(tab)
         tab.engineType = BrowserEngineType.GECKOVIEW
-        tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
         tab.engineFallbackReason = reason
         activateTab(tab)
-        persistTabs()
         toast("Switched this tab to GeckoView: $reason")
-        return true
     }
 
     /**
@@ -5519,195 +5507,6 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread { toast(getString(R.string.vault_locked)) }
             }
         })
-    }
-
-    private fun showExtensions() {
-        if (denyGuestAccess("Nova Add-ons")) return
-        if (currentTab()?.engineType == BrowserEngineType.CEFRIUM) { showCefriumNovaAddons(); return }
-        if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
-            toast("Nova Add-ons are not available in this engine yet")
-            return
-        }
-        val controller = runtime.getWebExtensionController()
-        controller.list().accept({ extensions ->
-            runOnUiThread {
-                val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.BRIDGE_ID }
-                val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}")
-                    // A dialog message hides the list on Android, so the note lives in its own row.
-                    .setItems(rows + "ⓘ About extension support") { _, which ->
-                        if (which >= installed.size) {
-                            AlertDialog.Builder(this)
-                                .setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
-                                .setPositiveButton("OK", null).show()
-                            return@setItems
-                        }
-                        val extension = installed[which]
-                        val actions = if (extension.metaData.enabled) arrayOf("Disable", "Uninstall") else arrayOf("Enable", "Uninstall")
-                        AlertDialog.Builder(this).setTitle(extension.metaData.name ?: extension.id)
-                            .setItems(actions) { _, action ->
-                                when (actions[action]) {
-                                    "Disable" -> controller.disable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Nova Add-on disabled") }, { toast("Could not disable add-on: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Enable" -> controller.enable(extension, WebExtensionController.EnableSource.USER).accept({ toast("Nova Add-on enabled") }, { toast("Could not enable add-on: ${it?.localizedMessage ?: "Unknown error"}") })
-                                    "Uninstall" -> AlertDialog.Builder(this).setMessage("Remove this Nova Add-on and its data?")
-                                        .setPositiveButton("Remove") { _, _ -> controller.uninstall(extension).accept({ toast("Nova Add-on removed") }, { toast("Could not remove add-on: ${it?.localizedMessage ?: "Unknown error"}") }) }
-                                        .setNegativeButton("Cancel", null).show()
-                                }
-                            }.setNegativeButton("Close", null).show()
-                    }
-                    .setPositiveButton("Install Nova Add-on") { _, _ -> installExtensionPrompt() }
-                    .setNegativeButton("Close", null).show()
-            }
-        }, { error -> runOnUiThread { toast("Could not list Nova Add-ons: ${error?.localizedMessage ?: "Unknown error"}") } })
-    }
-
-
-    private fun showCefriumNovaAddons() {
-        val addons=novaScriptAddonStore.list()
-        val rows = addons.map {
-            "${it.name} · ${when { it.damaged -> "Needs repair"; it.enabled -> "Enabled"; else -> "Disabled" }}"
-        }.toTypedArray()
-        AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
-            text = "Nova Add-ons · ${addons.size}\n\nNova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView."
-            setPadding(dp(24), dp(16), dp(24), dp(8))
-            textSize = 14f
-        }).setItems(rows) { _,which ->
-                val addon = addons[which]
-                if (addon.damaged) {
-                    AlertDialog.Builder(this).setTitle("Damaged Nova Add-on")
-                        .setMessage("Its script file or allowed-origin rules are missing or invalid. Remove this broken entry, then reinstall the script.")
-                        .setPositiveButton("Remove entry") { _, _ ->
-                            runCatching { novaScriptAddonStore.removeDamaged(addon.id) }
-                                .onSuccess { showCefriumNovaAddons(); toast("Damaged add-on entry removed") }
-                                .onFailure { toast("Could not remove damaged entry: ${it.message}") }
-                        }.setNegativeButton("Cancel", null).show()
-                    return@setItems
-                }
-                val actions=if(addon.enabled)arrayOf("Disable","Remove")else arrayOf("Enable","Remove")
-                AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
-                    text = "${addon.name}\n\nAllowed websites:\n${addon.allowedOriginRules.sorted().joinToString("\n")}"
-                    setPadding(dp(24), dp(16), dp(24), dp(8))
-                    textSize = 14f
-                }).setItems(actions) { _,action ->
-                        when(actions[action]) {
-                            "Enable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,true)}
-                                .onSuccess{val failed=refreshCefriumNovaAddons();if(failed.isEmpty())toast("Nova Add-on enabled") else toast("Enabled in Nova, but registration failed for: ${failed.joinToString()}")}
-                                .onFailure{toast("Could not enable add-on: ${it.message}")}
-                            "Disable" -> runCatching{novaScriptAddonStore.setEnabled(addon.id,false)}
-                                .onSuccess{val failed=refreshCefriumNovaAddons();if(failed.isEmpty())toast("Nova Add-on disabled") else toast("Disabled in Nova, but remaining add-ons failed to register: ${failed.joinToString()}")}
-                                .onFailure{toast("Could not disable add-on: ${it.message}")}
-                            "Remove" -> AlertDialog.Builder(this).setMessage("Remove ${addon.name} and its local script?")
-                                .setPositiveButton("Remove"){_,_->runCatching{novaScriptAddonStore.remove(addon.id)}
-                                    .onSuccess{val failed=refreshCefriumNovaAddons();if(failed.isEmpty())toast("Nova Add-on removed") else toast("Removed from Nova, but remaining add-ons failed to register: ${failed.joinToString()}")}
-                                    .onFailure{toast("Could not remove add-on: ${it.message}")}}
-                                .setNegativeButton("Cancel",null).show()
-                        }
-                    }.setNegativeButton("Cancel",null).show()
-            }
-            .setPositiveButton("Add script add-on"){_,_->showAddNovaScriptAddon()}
-            .setNeutralButton("Install WebExtension"){_,_->installWebExtensionFromCefrium()}
-            .setNegativeButton("Close",null).show()
-    }
-
-    private fun showAddNovaScriptAddon() {
-        val name=EditText(this).apply{hint="Add-on name";isSingleLine=true}
-        val origins=EditText(this).apply{hint="https://example.com, https://*.example.org";minLines=2;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE}
-        val script=EditText(this).apply{hint="// JavaScript to run at document start";minLines=8;gravity=Gravity.TOP;typeface=Typeface.MONOSPACE;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS}
-        val content=LinearLayout(this).apply{
-            orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(8),dp(18),dp(8))
-            addView(TextView(this@MainActivity).apply{text="Name";textSize=12f});addView(name)
-            addView(TextView(this@MainActivity).apply{text="Allowed website origins (comma-separated)";textSize=12f});addView(origins)
-            addView(TextView(this@MainActivity).apply{text="JavaScript";textSize=12f});addView(script,LinearLayout.LayoutParams(-1,dp(190)))
-        }
-        AlertDialog.Builder(this).setTitle("Create Nova Script Add-on")
-            .setMessage("Only HTTPS origins are accepted (HTTP is allowed for localhost). Scripts run in the page's main JavaScript world, including matching frames, and can access page content.")
-            .setView(content).setPositiveButton("Install"){_,_->
-                runCatching{novaScriptAddonStore.add(name.text.toString(),origins.text.toString(),script.text.toString())}
-                    .onSuccess{val failed=refreshCefriumNovaAddons();if(failed.isEmpty())toast("Nova Script Add-on saved and enabled") else toast("Add-on saved, but registration failed for: ${failed.joinToString()}")}
-                    .onFailure{toast("Could not install add-on: ${it.message ?: "Check the name, origins and script size"}")}
-            }.setNegativeButton("Cancel",null).show()
-    }
-
-    private fun refreshCefriumNovaAddons(): List<String> {
-        val active = novaScriptAddonStore.enabled()
-        val failed = linkedSetOf<String>()
-        tabs.filter { it.engineType == BrowserEngineType.CEFRIUM }.forEach { tab ->
-            val engine = tab.browserEngine as? CefriumBrowserEngine ?: return@forEach
-            val registrationFailures = runCatching { engine.setNovaScriptAddons(active) }
-                .getOrElse { error ->
-                    failed.add("tab:${tab.id}")
-                    failed.addAll(active.map { it.id })
-                    android.util.Log.w("NovaBrowser", "Could not refresh Nova add-ons for tab ${tab.id}", error)
-                    return@forEach
-                }
-            if (registrationFailures.isNotEmpty()) {
-                failed.addAll(registrationFailures)
-                return@forEach
-            }
-            if (tab.lastUrl != HOME_URL) runCatching { engine.reload() }
-                .onFailure { error -> toast("Add-ons registered, but this tab could not reload: ${error.message}") }
-        }
-        return failed.toList()
-    }
-
-    private fun installWebExtensionFromCefrium() {
-        val tab = currentTab() ?: return
-        val profile = when {
-            tab.isGuest -> BrowserProfileKind.GUEST
-            tab.isPrivate -> BrowserProfileKind.PRIVATE
-            else -> BrowserProfileKind.NORMAL
-        }
-        val decision = NovaAddonRuntimePolicy.assess(
-            tab.engineType,
-            profile,
-            NovaAddonRequest(NovaAddonPackageKind.WEB_EXTENSION)
-        )
-        if (!decision.supported || decision.runtimeMode != NovaAddonRuntimeMode.GECKOVIEW_WEB_EXTENSION) {
-            toast(decision.explanation)
-            return
-        }
-        if (!decision.requiresEngineSwitch || decision.targetEngine != BrowserEngineType.GECKOVIEW) {
-            installExtensionPrompt()
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Switch this tab to GeckoView?")
-            .setMessage(decision.explanation + "\n\nNova will keep the page address and reload it, but site data and login state are not transferred between engines.")
-            .setPositiveButton("Switch and continue") { _, _ ->
-                if (switchCurrentTabToGecko("Nova WebExtension installation")) {
-                    installExtensionPrompt()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun installExtensionPrompt() {
-        val tab = currentTab() ?: return
-        val profile = when {
-            tab.isGuest -> BrowserProfileKind.GUEST
-            tab.isPrivate -> BrowserProfileKind.PRIVATE
-            else -> BrowserProfileKind.NORMAL
-        }
-        val decision = NovaAddonRuntimePolicy.assess(
-            tab.engineType,
-            profile,
-            NovaAddonRequest(NovaAddonPackageKind.WEB_EXTENSION)
-        )
-        if (!decision.supported || decision.runtimeMode != NovaAddonRuntimeMode.GECKOVIEW_WEB_EXTENSION ||
-            tab.engineType != BrowserEngineType.GECKOVIEW) {
-            toast(decision.explanation)
-            return
-        }
-        val input = EditText(this).apply { hint = "https://…/package.xpi"; setSingleLine(true) }
-        AlertDialog.Builder(this).setTitle("Install Nova Add-on")
-            .setMessage("Enter a direct HTTPS .xpi package URL. Nova checks package compatibility and requests approval before granting permissions.")
-            .setView(input).setPositiveButton("Install") { _, _ ->
-                val url = input.text.toString().trim()
-                if (!url.startsWith("https://") || !url.substringBefore('?').endsWith(".xpi", true)) { toast("Use a direct HTTPS add-on package URL"); return@setPositiveButton }
-                runtime.getWebExtensionController().install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
-                    .accept({ toast("Nova Add-on installed: ${it?.metaData?.name ?: it?.id ?: "Add-on"}") }, { toast("Nova Add-on installation failed: ${it?.localizedMessage ?: "Unknown error"}") })
-            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun showPasswordVault() {
