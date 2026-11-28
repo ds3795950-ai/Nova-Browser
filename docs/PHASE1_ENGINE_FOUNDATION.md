@@ -57,7 +57,7 @@ The first combined-engine manifest merge exposed a conflict: GeckoView declares 
 ## Tor implementation and isolation boundary
 
 - Nova now bundles the embedded Tor Android service and configures a GeckoView WebExtension SOCKS5 proxy with remote DNS and WebRTC protection. Guest startup waits for a Tor circuit, valid SOCKS port and extension readiness; loss of the chain closes Guest Mode.
-- GeckoView has no supported public per-session proxy API. The extension proxy is runtime-wide, so the app suspends every persistent Normal engine session, refuses Guest startup while Private tabs are open, and blocks non-Guest tab creation/switching throughout Tor startup, active use and shutdown. Normal sessions resume only after the extension acknowledges `torGuestMode=false`. This is a mitigation, not yet a formally verified Guest-only boundary.
+- GeckoView has no supported public per-session proxy API. The extension proxy is runtime-wide, so the app suspends every persistent Normal engine session, refuses Guest startup while Private tabs are open, and blocks non-Guest tab creation/switching throughout Tor startup, active use and shutdown. Normal sessions resume only after the extension acknowledges the latest `torGuestMode=false` request. If the bridge cannot acknowledge a reset, Nova keeps the runtime barrier and tells the user to close and reopen Nova; it does not silently release sessions onto an unverified route. This is a mitigation, not a formally verified Guest-only boundary.
 - Cefrium exposes a proxy on each CefriumProfile; its adapter is scoped to Normal Cefrium profiles and must pass independent DNS/WebRTC/IP leak tests.
 - Physical-device tests must verify Guest Tor while Normal Cefrium tabs exist, that Private tabs are refused, and that Normal GeckoView sessions restore after Guest exit. Also test DNS, UDP/WebRTC, redirects, proxy failure, circuit changes and Normal/Private non-interference.
 
@@ -65,8 +65,8 @@ References: [Arti Android integration](https://arti.torproject.org/integrating-a
 
 ## Acceptance criteria and current status
 
-- [x] GitHub Actions resolves the pinned Cefrium SDK and completes unit tests and Android debug build on the merged `main` branch.
-- [x] Android lint and the Android emulator smoke workflow pass on the Phase 2 merge commit.
+- [ ] Verify unit tests and Android debug build for the latest PR #25 head before merge; the current hardening changes are not yet on `main`.
+- [ ] Verify Android lint and Android emulator smoke for the same PR #25 head before merge.
 - [x] MainActivity has production Cefrium tab creation, engine preference selection, profile isolation, and GeckoView fallback paths.
 - [x] Unit tests cover engine selection, feature capability routing, profile isolation and renderer recovery policy.
 - [ ] Run the full Cefrium navigation/lifecycle suite on physical ARM64 Android, including back, forward, reload, pause/resume and renderer recovery.
