@@ -2309,6 +2309,20 @@ class MainActivity : ComponentActivity() {
 
     private fun switchTabToGeckoForThreatProtection(tab: BrowserTab) {
         if (tab.isPrivate || tab.isGuest || tab.engineType != BrowserEngineType.CEFRIUM) return
+        if (pendingGeckoDataClearActive) {
+            toast("Wait for GeckoView data cleanup to finish before switching engines")
+            return
+        }
+        if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
+                NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
+            )) {
+            toast("Wait for protected routing to be ready before switching engines")
+            return
+        }
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
+            toast("GeckoView is reserved for Guest Mode right now")
+            return
+        }
         closeTabRuntime(tab)
         tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
         tab.engineType = BrowserEngineType.GECKOVIEW
