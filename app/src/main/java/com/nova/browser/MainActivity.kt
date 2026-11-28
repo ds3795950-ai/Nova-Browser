@@ -288,7 +288,8 @@ class MainActivity : ComponentActivity() {
         var trackingPermission: GeckoSession.PermissionDelegate.ContentPermission? = null,
         var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList(),
         var rendererRecoveryAttempts: Int = 0,
-        var mediaSession: org.mozilla.geckoview.MediaSession? = null
+        var mediaSession: org.mozilla.geckoview.MediaSession? = null,
+        var mediaPlaybackActive: Boolean = false
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -2991,7 +2992,19 @@ class MainActivity : ComponentActivity() {
                 mediaSession.muteAudio(!siteSettingAllowed(BrowserEngineType.GECKOVIEW, tab.lastUrl, "sound", true))
             }
             override fun onDeactivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
-                if (tab.mediaSession === mediaSession) tab.mediaSession = null
+                if (tab.mediaSession === mediaSession) {
+                    tab.mediaSession = null
+                    tab.mediaPlaybackActive = false
+                }
+            }
+            override fun onPlay(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+                if (tab.mediaSession === mediaSession) tab.mediaPlaybackActive = true
+            }
+            override fun onPause(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+                if (tab.mediaSession === mediaSession) tab.mediaPlaybackActive = false
+            }
+            override fun onStop(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
+                if (tab.mediaSession === mediaSession) tab.mediaPlaybackActive = false
             }
         }
 
@@ -7274,13 +7287,13 @@ private fun showForgotPassword(prefillEmail: String = "") {
         applyFoldAwareLayout(separatingFold)
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        val activeFullscreenTab = fullscreenTabId?.let { id -> currentTab()?.id == id } == true
+    private fun enterBrowserPictureInPicture(tab: BrowserTab, videoIsPlaying: Boolean) {
+        val activeFullscreenTab = fullscreenTabId == tab.id && currentTab()?.id == tab.id
         if (!BrowserPictureInPicturePolicy.shouldEnter(
                 apiLevel = Build.VERSION.SDK_INT,
                 isFullscreen = isFullscreen,
                 fullscreenTabIsActive = activeFullscreenTab,
+                videoIsPlaying = videoIsPlaying,
                 alreadyInPictureInPicture = isInPictureInPictureMode
             )) return
         runCatching {
@@ -7290,6 +7303,25 @@ private fun showForgotPassword(prefillEmail: String = "") {
             enterPictureInPictureMode(params)
         }.onFailure {
             android.util.Log.w("NovaBrowser", "Could not enter Picture-in-Picture", it)
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val tab = fullscreenTabId?.let { id -> currentTab()?.takeIf { it.id == id } } ?: return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isFullscreen || isInPictureInPictureMode) return
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            val engine = tab.browserEngine as? CefriumBrowserEngine ?: return
+            val script = "(() => { const video = document.fullscreenElement; return !!(video instanceof HTMLVideoElement && !video.paused && video.readyState >= 2); })()"
+            engine.evaluateJavaScript(script) { raw ->
+                val playing = raw?.trim()?.trim('"') == "true"
+                runOnUiThread { enterBrowserPictureInPicture(tab, playing) }
+            }
+        } else {
+            enterBrowserPictureInPicture(
+                tab,
+                tab.mediaSession?.isActive() == true && tab.mediaPlaybackActive
+            )
         }
     }
 

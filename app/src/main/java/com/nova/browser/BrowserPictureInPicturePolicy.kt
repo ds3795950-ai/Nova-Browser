@@ -6,6 +6,8 @@ internal object BrowserPictureInPicturePolicy {
         apiLevel: Int,
         isFullscreen: Boolean,
         fullscreenTabIsActive: Boolean,
+        videoIsPlaying: Boolean,
         alreadyInPictureInPicture: Boolean
-    ): Boolean = apiLevel >= 26 && isFullscreen && fullscreenTabIsActive && !alreadyInPictureInPicture
+    ): Boolean = apiLevel >= 26 && isFullscreen && fullscreenTabIsActive &&
+        videoIsPlaying && !alreadyInPictureInPicture
 }
