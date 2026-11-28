@@ -57,7 +57,7 @@ Last reconciled: 2026-11-28 14:08 UTC. This document describes the current defau
 - Main: Android build, unit tests, lint and Android 16 emulator smoke passed on `b2caaaf`.
 - PR #31: previous head `2b383d0` passed build/unit tests, lint and emulator smoke. Latest head `444afff` fixes the final reviewed worker-image fallback issue; fresh checks are still running.
 - PR #32: CI is running for the atomic sync change; CodeRabbit review is in progress.
-- BrowserStack home/search, settings and Guest Tor workflows were dispatched on 2026-11-28. Their results must be checked before reporting any real-device run as passed. BrowserStack UI tests do not prove network privacy.
+- BrowserStack credentials parsed successfully, but the Home/Search App Automate upload returned HTTP 403 `BROWSERSTACK_TESTING_TIME_LIMIT_EXHAUSTED`. The Settings and Guest Tor workflows were cancelled after the same quota block was confirmed. No BrowserStack device session ran; this is a provider quota limitation, not a Nova test pass. BrowserStack UI tests do not prove network privacy.
 - The Realme RMX5313 physical-device run has not been performed in this session.
 - Before calling Nova release-ready: complete current PR checks; test on the target ARM64 phone; verify VPN/Tor IP/DNS/WebRTC/IPv6 behavior; complete two-device sync and live OTP checks; configure production signing; review APK size and release artifact.
 
