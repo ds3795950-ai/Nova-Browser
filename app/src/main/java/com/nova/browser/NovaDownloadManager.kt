@@ -64,13 +64,20 @@ class NovaDownloadManager(
     fun publishedFiles(): List<PublishedFile> {
         if (Build.VERSION.SDK_INT >= 29) {
             val relativePath = Environment.DIRECTORY_DOWNLOADS + "/Nova/${storageNamespace}/"
+            val legacyCefriumPath = Environment.DIRECTORY_DOWNLOADS + "/Nova/"
             val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME,
                 MediaStore.Downloads.MIME_TYPE, MediaStore.Downloads.SIZE, MediaStore.Downloads.DATE_MODIFIED)
+            val selection = if (storageNamespace == "cefrium") {
+                "(${MediaStore.Downloads.RELATIVE_PATH} = ? OR ${MediaStore.Downloads.RELATIVE_PATH} = ?) AND ${MediaStore.Downloads.IS_PENDING} = 0"
+            } else {
+                "${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.IS_PENDING} = 0"
+            }
+            val selectionArgs = if (storageNamespace == "cefrium") arrayOf(relativePath, legacyCefriumPath) else arrayOf(relativePath)
             return runCatching {
                 context.contentResolver.query(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection,
-                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.IS_PENDING} = 0",
-                    arrayOf(relativePath), "${MediaStore.Downloads.DATE_MODIFIED} DESC"
+                    selection,
+                    selectionArgs, "${MediaStore.Downloads.DATE_MODIFIED} DESC"
                 )?.use { cursor ->
                     buildList {
                         val idCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID)

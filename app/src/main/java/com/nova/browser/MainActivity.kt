@@ -5238,15 +5238,25 @@ class MainActivity : ComponentActivity() {
         // PWA manifest metadata is an enhancement only: unsupported engines or pages without
         // a valid same-origin manifest still get a regular Nova website shortcut.
         val fallbackTitle = tab.title.trim().ifBlank { host }.take(40)
+        // PWA metadata uses HttpURLConnection, outside the browser engine's proxy.
+        // Do not start those direct requests while Guest Tor or 1VPN is requested.
+        if (!pwaMetadataNetworkAllowed(tab)) {
+            pinWebsiteShortcut(uri, host, url, fallbackTitle, null)
+            return
+        }
         val engine = tab.browserEngine as? CefriumBrowserEngine
         if (tab.engineType == BrowserEngineType.CEFRIUM && engine != null) {
             runCatching { engine.evaluateJavaScript(PWA_MANIFEST_LINK_SCRIPT) { raw ->
+                if (!pwaMetadataNetworkAllowed(tab)) {
+                    runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
+                    return@evaluateJavaScript
+                }
                 val manifestUrl = parsePwaManifestUrl(raw, uri)
                 if (manifestUrl == null) {
                     runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
                 } else {
                     Thread {
-                        val metadata = fetchPwaShortcutMetadata(manifestUrl, uri)
+                        val metadata = fetchPwaShortcutMetadata(manifestUrl, uri) { pwaMetadataNetworkAllowed(tab) }
                         runOnUiThread {
                             val launchUri = metadata.first
                             val title = metadata.second.ifBlank { fallbackTitle }
@@ -5260,6 +5270,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun pwaMetadataNetworkAllowed(tab: BrowserTab): Boolean =
+        !isFinishing && !isDestroyed && !tab.isPrivate && !tab.isGuest &&
+            !guestTorReservesGeckoRuntime() && !NovaBrowserVpnController.isVpnEnabled()
+
+    private fun isSamePwaOrigin(candidate: java.net.URL, page: java.net.URL): Boolean {
+        fun effectivePort(url: java.net.URL): Int = if (url.port == -1) url.defaultPort else url.port
+        return candidate.protocol.equals(page.protocol, ignoreCase = true) &&
+            candidate.host.equals(page.host, ignoreCase = true) &&
+            effectivePort(candidate) == effectivePort(page)
+    }
+
     private fun parsePwaManifestUrl(raw: String?, pageUri: Uri): java.net.URL? {
         if (raw.isNullOrBlank()) return null
         return runCatching {
@@ -5269,18 +5290,24 @@ class MainActivity : ComponentActivity() {
             if (href.isBlank()) return null
             val page = java.net.URL(pageUri.toString())
             val manifest = java.net.URL(page, href)
-            manifest.takeIf { it.protocol in setOf("http", "https") && it.host.equals(page.host, true) && it.port == page.port }
+            manifest.takeIf { it.protocol in setOf("http", "https") && isSamePwaOrigin(it, page) }
         }.getOrNull()
     }
 
-    private fun readPwaResource(url: java.net.URL, maxBytes: Int, acceptPrefix: String? = null): ByteArray? {
+    private fun readPwaResource(
+        url: java.net.URL,
+        maxBytes: Int,
+        acceptPrefix: String? = null,
+        networkAllowed: () -> Boolean
+    ): ByteArray? {
+        if (!networkAllowed()) return null
         val connection = (url.openConnection() as java.net.HttpURLConnection).apply {
             connectTimeout = 5000
             readTimeout = 5000
             instanceFollowRedirects = false
         }
         return try {
-            if (connection.responseCode !in 200..299) return null
+            if (connection.responseCode !in 200..299 || !networkAllowed()) return null
             if (acceptPrefix != null && !connection.contentType.orEmpty().startsWith(acceptPrefix)) return null
             val declared = connection.getHeaderFieldLong("Content-Length", -1L)
             if (declared > maxBytes) return null
@@ -5306,17 +5333,19 @@ class MainActivity : ComponentActivity() {
 
     private fun fetchPwaShortcutMetadata(
         manifestUrl: java.net.URL,
-        pageUri: Uri
+        pageUri: Uri,
+        networkAllowed: () -> Boolean
     ): Triple<Uri, String, Bitmap?> {
         val fallback = Triple(Uri.parse(pageUri.toString()), "", null)
         return runCatching {
-            val bytes = readPwaResource(manifestUrl, 256 * 1024)
+            if (!networkAllowed()) return@runCatching fallback
+            val bytes = readPwaResource(manifestUrl, 256 * 1024, networkAllowed = networkAllowed)
                 ?: return@runCatching fallback
             val manifest = JSONObject(String(bytes, Charsets.UTF_8))
             val page = java.net.URL(pageUri.toString())
             fun sameOrigin(value: String): java.net.URL? = runCatching {
                 java.net.URL(manifestUrl, value).takeIf {
-                    it.protocol in setOf("http", "https") && it.host.equals(page.host, true) && it.port == page.port
+                    it.protocol in setOf("http", "https") && isSamePwaOrigin(it, page)
                 }
             }.getOrNull()
             val requestedStart = manifest.optString("start_url").takeIf { it.isNotBlank() }?.let(::sameOrigin) ?: page
@@ -5331,7 +5360,8 @@ class MainActivity : ComponentActivity() {
                 }.sortedByDescending { (_, sizes) -> if (sizes.contains("192")) 2 else if (sizes == "any") 1 else 0 }
                 for ((src, _) in candidates) {
                     val iconUrl = sameOrigin(src) ?: continue
-                    val iconBytes = readPwaResource(iconUrl, 512 * 1024, "image/") ?: continue
+                    if (!networkAllowed()) break
+                    val iconBytes = readPwaResource(iconUrl, 512 * 1024, "image/", networkAllowed) ?: continue
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, bounds)
                     if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 8192 || bounds.outHeight > 8192) continue
@@ -5366,24 +5396,29 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openNovaDownloadsFolder(manager: NovaDownloadManager) {
-        val files = manager.publishedFiles()
-        val labels = files.map { file -> "${file.name}\n${NovaDownloadManager.formatBytes(file.size)}" }.toTypedArray()
-        if (files.isEmpty()) {
-            AlertDialog.Builder(this).setTitle("Nova Downloads folder")
-                .setMessage("This engine's Nova Downloads folder is empty. Completed files saved by this engine will appear here.")
-                .setPositiveButton(getString(R.string.close), null).show()
-            return
-        }
-        AlertDialog.Builder(this).setTitle("Nova Downloads folder")
-            .setItems(labels) { _, which ->
-                val file = files.getOrNull(which) ?: return@setItems
-                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.mimeType).apply {
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        Thread({
+            val files = manager.publishedFiles()
+            val labels = files.map { file -> "${file.name}\n${NovaDownloadManager.formatBytes(file.size)}" }.toTypedArray()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (files.isEmpty()) {
+                    AlertDialog.Builder(this).setTitle("Nova Downloads folder")
+                        .setMessage("This engine's Nova Downloads folder is empty. Completed files saved by this engine will appear here.")
+                        .setPositiveButton(getString(R.string.close), null).show()
+                    return@runOnUiThread
                 }
-                runCatching { startActivity(intent) }
-                    .onFailure { toast("No app can open this file: ${it.localizedMessage ?: "Unknown error"}") }
+                AlertDialog.Builder(this).setTitle("Nova Downloads folder")
+                    .setItems(labels) { _, which ->
+                        val file = files.getOrNull(which) ?: return@setItems
+                        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.mimeType).apply {
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        runCatching { startActivity(intent) }
+                            .onFailure { toast("No app can open this file: ${it.localizedMessage ?: "Unknown error"}") }
+                    }
+                    .setNegativeButton(getString(R.string.close), null).show()
             }
-            .setNegativeButton(getString(R.string.close), null).show()
+        }, "NovaDownloadsBrowse").start()
     }
 
 
@@ -5411,11 +5446,11 @@ class MainActivity : ComponentActivity() {
                 return
             }
             runCatching {
-                printManager.print(
+                checkNotNull(printManager.print(
                     title,
                     engine.createPrintDocumentAdapter(title),
                     android.print.PrintAttributes.Builder().build()
-                )
+                )) { "Android could not start the print dialog" }
             }.onFailure { toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}") }
             return
         }
@@ -5439,7 +5474,9 @@ class MainActivity : ComponentActivity() {
                         return@runOnUiThread
                     }
                     runCatching {
-                        printManager.print(title, NovaPdfPrintAdapter(pdf), android.print.PrintAttributes.Builder().build())
+                        checkNotNull(printManager.print(title, NovaPdfPrintAdapter(pdf), android.print.PrintAttributes.Builder().build())) {
+                            "Android could not start the print dialog"
+                        }
                     }.onFailure {
                         pdf.delete()
                         toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}")
