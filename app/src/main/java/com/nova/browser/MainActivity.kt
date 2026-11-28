@@ -5240,14 +5240,14 @@ class MainActivity : ComponentActivity() {
         val fallbackTitle = tab.title.trim().ifBlank { host }.take(40)
         // PWA metadata uses HttpURLConnection, outside the browser engine's proxy.
         // Do not start those direct requests while Guest Tor or 1VPN is requested.
-        if (!pwaMetadataNetworkAllowed(tab)) {
+        if (!pwaMetadataNetworkAllowed(tab, url)) {
             pinWebsiteShortcut(uri, host, url, fallbackTitle, null)
             return
         }
         val engine = tab.browserEngine as? CefriumBrowserEngine
         if (tab.engineType == BrowserEngineType.CEFRIUM && engine != null) {
             runCatching { engine.evaluateJavaScript(PWA_MANIFEST_LINK_SCRIPT) { raw ->
-                if (!pwaMetadataNetworkAllowed(tab)) {
+                if (!pwaMetadataNetworkAllowed(tab, url)) {
                     runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
                     return@evaluateJavaScript
                 }
@@ -5256,7 +5256,7 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
                 } else {
                     Thread {
-                        val metadata = fetchPwaShortcutMetadata(manifestUrl, uri) { pwaMetadataNetworkAllowed(tab) }
+                        val metadata = fetchPwaShortcutMetadata(manifestUrl, uri) { pwaMetadataNetworkAllowed(tab, url) }
                         runOnUiThread {
                             val launchUri = metadata.first
                             val title = metadata.second.ifBlank { fallbackTitle }
@@ -5270,9 +5270,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun pwaMetadataNetworkAllowed(tab: BrowserTab): Boolean =
-        !isFinishing && !isDestroyed && !tab.isPrivate && !tab.isGuest &&
+    private fun pwaMetadataNetworkAllowed(tab: BrowserTab, expectedUrl: String): Boolean {
+        val currentPageUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+        return !isFinishing && !isDestroyed && tabs.any { it.id == tab.id } &&
+            currentPageUrl == expectedUrl && tab.engineType == BrowserEngineType.CEFRIUM &&
+            tab.browserEngine is CefriumBrowserEngine && !tab.isPrivate && !tab.isGuest &&
             !guestTorReservesGeckoRuntime() && !NovaBrowserVpnController.isVpnEnabled()
+    }
 
     private fun isSamePwaOrigin(candidate: java.net.URL, page: java.net.URL): Boolean {
         fun effectivePort(url: java.net.URL): Int = if (url.port == -1) url.defaultPort else url.port
@@ -5316,6 +5320,7 @@ class MainActivity : ComponentActivity() {
                 val buffer = ByteArray(8192)
                 var total = 0
                 while (true) {
+                    if (!networkAllowed()) return null
                     val count = input.read(buffer)
                     if (count < 0) break
                     total += count
