@@ -5005,13 +5005,14 @@ class MainActivity : ComponentActivity() {
                         return@setPositiveButton
                     }
                     val previousEngineChoice = tab.explicitEngineChoice
+                    val wasCefrium = tab.engineType == BrowserEngineType.CEFRIUM
                     tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
                     pendingTranslationTabId = tab.id
                     switchCurrentTabToGecko(route.reason)
-                    if (tab.engineType != BrowserEngineType.GECKOVIEW) {
+                    if (!wasCefrium || tab.engineType != BrowserEngineType.GECKOVIEW) {
                         tab.explicitEngineChoice = previousEngineChoice
                         pendingTranslationTabId = null
-                        toast("Engine switch is blocked while GeckoView cleanup or protected routing is active")
+                        toast("Engine switch is blocked or no longer needed; no translation switch was saved")
                     } else {
                         persistTabs()
                         toast("Switching to GeckoView; translation options will open after the page reloads")
