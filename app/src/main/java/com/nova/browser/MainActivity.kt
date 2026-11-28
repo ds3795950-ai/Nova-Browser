@@ -6121,6 +6121,20 @@ private fun showQuickSettings() {
         })
     }
 
+    private fun cefriumCookieNotice(message: String): TextView {
+        val density = resources.displayMetrics.density
+        return TextView(this).apply {
+            text = message
+            textSize = 13f
+            setPadding(
+                (20 * density).toInt(),
+                (12 * density).toInt(),
+                (20 * density).toInt(),
+                (8 * density).toInt()
+            )
+        }
+    }
+
     private fun showDefaultSiteSettings(engine: BrowserEngineType) {
         val definitions = listOf(Triple("javascript", "JavaScript", true)) +
             if (engine == BrowserEngineType.CEFRIUM) listOf(
@@ -6145,7 +6159,7 @@ private fun showQuickSettings() {
         }.toTypedArray() + permissionDefaults + cookieDefaults
         val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
-            .apply { if (engine == BrowserEngineType.CEFRIUM) setMessage("Cefrium 0.21 cookie rules apply to browser-owned requests only; service-worker requests are not covered.") }
+            .apply { if (engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Cefrium 0.21 cookie rules apply to browser-owned requests only; service-worker requests are not covered.")) }
             .setItems(labels) { _, which ->
                 if (which == definitions.size) {
                     if (engine == BrowserEngineType.CEFRIUM) showDefaultCefriumPermissions() else showDefaultGeckoPermissions()
@@ -6346,7 +6360,7 @@ private fun showQuickSettings() {
         val labels = definitions.map(::label).toTypedArray() + permissionAction +
             arrayOf("Reset this site's settings", "Clear this site's data")
         AlertDialog.Builder(this).setTitle("$host · $engineLabel")
-            .apply { if (entry.engine == BrowserEngineType.CEFRIUM) setMessage("Cookie rules apply to browser-owned requests only; service-worker requests are not covered by Cefrium 0.21.") }
+            .apply { if (entry.engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Cookie rules apply to browser-owned requests only; service-worker requests are not covered by Cefrium 0.21.")) }
             .setItems(labels) { _, which ->
                 when {
                     which < definitions.size -> {
@@ -6466,7 +6480,7 @@ private fun showQuickSettings() {
             val imagesLabel = "Images · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "images", true)) "Allowed" else "Blocked"
             val cookiesLabel = "Cookies (browser requests only) · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "cookies", true)) "Allowed" else "Blocked"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setMessage("Cefrium 0.21 applies cookie rules to browser-owned requests only. Service-worker requests are not covered, so this is not complete cookie isolation.")
+                .setView(cefriumCookieNotice("Cefrium 0.21 applies cookie rules to browser-owned requests only. Service-worker requests are not covered, so this is not complete cookie isolation."))
                 .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, adsLabel, imagesLabel, cookiesLabel, "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {
