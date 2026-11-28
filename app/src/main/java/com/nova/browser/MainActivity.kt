@@ -1272,6 +1272,8 @@ class MainActivity : ComponentActivity() {
             if (!tab.isPrivate) actions += getString(R.string.history) to { showHistory() }
         if (!tab.isPrivate) actions += "Clear browsing data" to { showClearBrowsingData() }
             if (!tab.isPrivate) actions += "Fire · clear tabs & site data" to { confirmFireClear() }
+            actions += "Print / Save as PDF" to { printCurrentPage() }
+            actions += "Site dark mode" to { cycleSiteDarkMode() }
             actions += (if (prefs.getBoolean("https_only_mode", false)) "HTTPS-Only · on" else "HTTPS-Only · off") to {
                 val next = !prefs.getBoolean("https_only_mode", false)
                 prefs.edit().putBoolean("https_only_mode", next).apply()
@@ -3902,6 +3904,50 @@ class MainActivity : ComponentActivity() {
         addressSuggestionHandler.postDelayed(request, 350L)
     }
 
+
+
+    private fun printCurrentPage() {
+        val tab = currentTab() ?: return
+        val url = tab.lastUrl
+        if (!NovaPrintPolicy.canRequestPrint(url)) {
+            toast("Nothing to print on this page")
+            return
+        }
+        if (denyGuestAccess("Print")) return
+        val jobName = NovaPrintPolicy.jobName(tab.title, url)
+        // System print panel; Save as PDF is offered by the Android print UI when available.
+        val webView = android.webkit.WebView(this)
+        webView.webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageFinished(view: android.webkit.WebView?, finishedUrl: String?) {
+                val adapter = view?.createPrintDocumentAdapter(jobName) ?: return
+                val printManager = getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
+                printManager.print(jobName, adapter, android.print.PrintAttributes.Builder().build())
+            }
+        }
+        webView.loadUrl(url)
+        toast("Opening print / Save as PDF…")
+    }
+
+    private fun cycleSiteDarkMode() {
+        val tab = currentTab() ?: return
+        val host = runCatching { java.net.URI(tab.lastUrl).host }.getOrNull()
+        if (host.isNullOrBlank()) { toast("No site host"); return }
+        val key = "site_dark_mode_$host"
+        val current = NovaSiteDarkMode.fromStored(prefs.getString(key, NovaSiteDarkMode.DEFAULT.stored))
+        val next = when (current) {
+            NovaSiteDarkMode.DEFAULT -> NovaSiteDarkMode.FORCE_DARK
+            NovaSiteDarkMode.FORCE_DARK -> NovaSiteDarkMode.FORCE_LIGHT
+            NovaSiteDarkMode.FORCE_LIGHT -> NovaSiteDarkMode.DEFAULT
+        }
+        prefs.edit().putString(key, next.stored).apply()
+        val js = NovaSiteDarkModePolicy.cssFor(next)
+        if (js != null) {
+            // Best-effort: Gecko/Cefrium may not expose evaluateJS on the shared interface yet.
+            toast("Site appearance: ${next.name.lowercase().replace('_',' ')} (reload may be required)")
+        } else {
+            toast("Site appearance: default")
+        }
+    }
 
     private fun httpsOnlyEnabled(): Boolean =
         prefs.getBoolean("https_only_mode", false)
