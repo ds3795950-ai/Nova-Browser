@@ -5270,36 +5270,45 @@ class MainActivity : ComponentActivity() {
         }.getOrNull()
     }
 
+    private fun readPwaResource(url: java.net.URL, maxBytes: Int, acceptPrefix: String? = null): ByteArray? {
+        val connection = (url.openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 5000
+            readTimeout = 5000
+            instanceFollowRedirects = false
+        }
+        return try {
+            if (connection.responseCode !in 200..299) return null
+            if (acceptPrefix != null && !connection.contentType.orEmpty().startsWith(acceptPrefix)) return null
+            val declared = connection.getHeaderFieldLong("Content-Length", -1L)
+            if (declared > maxBytes) return null
+            connection.inputStream.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > maxBytes) return null
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun fetchPwaShortcutMetadata(
         manifestUrl: java.net.URL,
         pageUri: Uri
     ): Triple<Uri, String, Bitmap?> {
-        val fallback = Uri.parse(pageUri.toString()) to "" to null
+        val fallback = Triple(Uri.parse(pageUri.toString()), "", null)
         return runCatching {
-            val connection = (manifestUrl.openConnection() as java.net.HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 5000
-                instanceFollowRedirects = false
-                setRequestProperty("Accept", "application/manifest+json, application/json")
-            }
-            val bytes = connection.use { conn ->
-                if (conn.responseCode !in 200..299) throw IllegalStateException("Manifest request failed")
-                val declared = conn.getHeaderFieldLong("Content-Length", -1L)
-                if (declared > 256 * 1024) throw IllegalStateException("Manifest is too large")
-                conn.inputStream.use { input ->
-                    val output = java.io.ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var total = 0
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        if (total > 256 * 1024) throw IllegalStateException("Manifest is too large")
-                        output.write(buffer, 0, count)
-                    }
-                    output.toByteArray()
-                }
-            }
+            val bytes = readPwaResource(manifestUrl, 256 * 1024)
+                ?: return@runCatching fallback
             val manifest = JSONObject(String(bytes, Charsets.UTF_8))
             val page = java.net.URL(pageUri.toString())
             fun sameOrigin(value: String): java.net.URL? = runCatching {
@@ -5319,31 +5328,7 @@ class MainActivity : ComponentActivity() {
                 }.sortedByDescending { (_, sizes) -> if (sizes.contains("192")) 2 else if (sizes == "any") 1 else 0 }
                 for ((src, _) in candidates) {
                     val iconUrl = sameOrigin(src) ?: continue
-                    val iconBytes = runCatching {
-                        val iconConnection = (iconUrl.openConnection() as java.net.HttpURLConnection).apply {
-                            connectTimeout = 4000
-                            readTimeout = 4000
-                            instanceFollowRedirects = false
-                        }
-                        iconConnection.use { conn ->
-                            if (conn.responseCode !in 200..299 || !conn.contentType.orEmpty().startsWith("image/")) return@use null
-                            val declared = conn.getHeaderFieldLong("Content-Length", -1L)
-                            if (declared > 512 * 1024) return@use null
-                            conn.inputStream.use { input ->
-                                val output = java.io.ByteArrayOutputStream()
-                                val buffer = ByteArray(8192)
-                                var total = 0
-                                while (true) {
-                                    val count = input.read(buffer)
-                                    if (count < 0) break
-                                    total += count
-                                    if (total > 512 * 1024) return@use null
-                                    output.write(buffer, 0, count)
-                                }
-                                output.toByteArray()
-                            }
-                        }
-                    }.getOrNull() ?: continue
+                    val iconBytes = readPwaResource(iconUrl, 512 * 1024, "image/") ?: continue
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, bounds)
                     if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 8192 || bounds.outHeight > 8192) continue
