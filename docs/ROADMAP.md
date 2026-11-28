@@ -37,7 +37,7 @@ Last reconciled: 2026-11-28 14:08 UTC. This document describes the current defau
 
 **Implemented in source; edge-case and multi-device acceptance remain open.**
 
-- Downloads use engine-specific storage namespaces and include interrupted-download recovery. Partial-file reconciliation, process-death recovery, resume responses and engine-switch behavior still need extended Android tests.
+- Downloads use engine-specific storage namespaces and include interrupted-download recovery. PR #32 adds an Android instrumentation regression test that restores RUNNING/FINALIZING records as INTERRUPTED while preserving user-paused records. Full network resume, partial-file reconciliation, MediaStore finalization and engine-switch behavior still need device acceptance.
 - Cloud sync uses client-side encrypted payloads, per-engine profile separation, merge/tombstone handling and compare-and-swap conflict detection. Private and Guest data is excluded.
 - PR #32 fixes a partial-write hazard: new clients now bundle the browser snapshot and password vault into one `nova_sync_state` row and perform one CAS write. Legacy `nova_encrypted_vault` data remains readable and is merged, but new clients no longer write the legacy table.
 - Live Supabase project check (2026-11-28): project is `ACTIVE_HEALTHY`, Postgres 17.11.0.019. Both sync tables have RLS enabled; authenticated SELECT/INSERT/UPDATE/DELETE privileges are present with owner-scoped policies and UPDATE `WITH CHECK`; anon SELECT is denied. Security and performance advisors returned no lints. Each table has one updated-at trigger. Both tables currently contain zero rows, so no real account backup has yet been proven.
