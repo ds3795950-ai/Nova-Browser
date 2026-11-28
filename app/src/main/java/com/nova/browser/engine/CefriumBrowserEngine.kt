@@ -132,11 +132,7 @@ class CefriumBrowserEngine(
         browser.setResourceInterceptor(object : CefriumResourceInterceptor {
             override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
                 val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
-                if (CefriumTrackingProtectionPolicy.shouldBlockImage(
-                        request.getType() == CefriumResourceType.IMAGE,
-                        imagesBlockedForUrl(pageUrl),
-                        siteImagesAllowed = true
-                    )) return true
+                if (request.getType() == CefriumResourceType.IMAGE && imagesBlockedForUrl(pageUrl)) return true
                 return request.getType() != CefriumResourceType.MAIN_FRAME &&
                     CefriumTrackingProtectionPolicy.shouldBlockRequest(
                         request.url, pageUrl, adBlockingEnabledForUrl(pageUrl)

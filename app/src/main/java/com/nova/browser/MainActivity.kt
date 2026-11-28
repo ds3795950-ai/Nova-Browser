@@ -6398,8 +6398,11 @@ private fun showQuickSettings() {
         val soundLabel = "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             val origin = originAtOpen
+            val adsLabel = "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked"
+            val imagesLabel = "Images · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "images", true)) "Allowed" else "Blocked"
+            val cookiesLabel = "Cookies for this site · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "cookies", true)) "Allowed" else "Blocked"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
+                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, adsLabel, imagesLabel, cookiesLabel, "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {
                         toggleJavaScriptForCurrentSite(tab, originAtOpen, engineAtOpen)
@@ -6410,8 +6413,12 @@ private fun showQuickSettings() {
                     } else if (which == 3) {
                         toggleSiteSetting(tab, "ads", true, originAtOpen, engineAtOpen)
                     } else if (which == 4) {
-                        toggleSiteSetting(tab, "sound", true, originAtOpen, engineAtOpen)
+                        toggleSiteSetting(tab, "images", true, originAtOpen, engineAtOpen)
                     } else if (which == 5) {
+                        toggleSiteSetting(tab, "cookies", true, originAtOpen, engineAtOpen)
+                    } else if (which == 6) {
+                        toggleSiteSetting(tab, "sound", true, originAtOpen, engineAtOpen)
+                    } else if (which == 7) {
                         AlertDialog.Builder(this).setMessage("Clear cookies, local storage and service workers for $host? Other sites are not affected.")
                             .setPositiveButton("Clear site data") { _, _ ->
                                 if (!ensureOriginUnchanged()) return@setPositiveButton
@@ -6421,7 +6428,7 @@ private fun showQuickSettings() {
                                     }
                                 }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
                             }.setNegativeButton("Cancel", null).show()
-                    } else if (which == 6) showCefriumSitePermissionSettings(origin)
+                    } else if (which == 8) showCefriumSitePermissionSettings(origin)
                 }.setNegativeButton("Close", null).show()
             return
         }
