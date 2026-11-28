@@ -20,9 +20,15 @@ class BrowserEngineCapabilityContractTest {
     }
     @Test fun cefriumAdvertisesImplementedCommonFeaturesAndProxy() {
         val expected = setOf(BrowserEngineCapability.DOWNLOADS, BrowserEngineCapability.SITE_PERMISSIONS,
-            BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DESKTOP_MODE, BrowserEngineCapability.VPN_PROXY)
+            BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DESKTOP_MODE, BrowserEngineCapability.VPN_PROXY,
+            BrowserEngineCapability.PASSWORD_FILL)
         assertTrue(BrowserEngineCapabilitySets.CEFRIUM.containsAll(expected))
     }
+    @Test fun cefriumAdvertisesOnlyExplicitUserInitiatedPasswordFill() {
+        assertTrue(BrowserEngineCapability.PASSWORD_FILL in BrowserEngineCapabilitySets.CEFRIUM)
+        assertFalse(BrowserEngineCapability.PASSWORD_AUTOFILL in BrowserEngineCapabilitySets.CEFRIUM)
+    }
+
     @Test fun privateAndGuestRemainOnGeckoForSavedLoginAutofill() {
         listOf(BrowserProfileKind.PRIVATE, BrowserProfileKind.GUEST).forEach { profile ->
             val route = BrowserEngineCapabilityPolicy.resolve(BrowserEngineType.GECKOVIEW, profile,

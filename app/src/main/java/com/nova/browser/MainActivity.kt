@@ -378,7 +378,7 @@ class MainActivity : ComponentActivity() {
             override fun onLoginSave(login: Autocomplete.LoginEntry) {
                 if (currentTab()?.let { it.isPrivate || it.isGuest } == true) return
                 runCatching { passwordVault.save(login) }
-                    .onSuccess { runOnUiThread { switchCefriumTabsForSavedLogins() } }
+                    .onSuccess { runOnUiThread { toast("Login saved securely in Nova Password Manager") } }
                     .onFailure { runOnUiThread { toast("Could not save login securely: ${it?.localizedMessage ?: "Unknown error"}") } }
             }
         })
@@ -1281,6 +1281,9 @@ class MainActivity : ComponentActivity() {
             actions += "Search tabs" to { showTabSearch() }
             actions += "Nova Add-ons" to { showExtensions() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
+            if (tab?.engineType == BrowserEngineType.CEFRIUM) {
+                actions += "Fill saved login" to { fillSavedLoginForCurrentCefriumTab() }
+            }
             actions += "Site Settings" to { showSiteSettingsHub() }
             actions += getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
             actions += getString(R.string.protected_dns) to { showProtectedDnsSettings() }
@@ -1902,11 +1905,6 @@ class MainActivity : ComponentActivity() {
         val uri = Uri.parse(url)
         val scheme = uri.scheme?.lowercase()
         if (url != HOME_URL && url != "about:blank" && scheme !in setOf("http", "https")) return "This page type is not supported by Cefrium"
-        val host = uri.host ?: return null
-        val hasSavedLogin = runCatching {
-            passwordVault.all().any { Uri.parse(it.origin).host.equals(host, ignoreCase = true) }
-        }.getOrDefault(false)
-        if (hasSavedLogin) return "Saved-password autofill for this site requires GeckoView"
         return null
     }
 
@@ -2299,23 +2297,6 @@ class MainActivity : ComponentActivity() {
         currentTab()?.let { if (it in changed) activateTab(it) }
         if (splitTabId != null && changed.any { it.id == splitTabId }) restoreSplitPane()
         toast("Cefrium tabs switched to GeckoView: $reason")
-    }
-
-    private fun switchCefriumTabsForSavedLogins() {
-        val savedHosts = runCatching { passwordVault.all().mapNotNull { Uri.parse(it.origin).host?.lowercase() }.toSet() }.getOrDefault(emptySet())
-        val changed = tabs.filter { tab ->
-            tab.engineType == BrowserEngineType.CEFRIUM && Uri.parse(tab.lastUrl).host?.lowercase() in savedHosts
-        }
-        if (changed.isEmpty()) return
-        changed.forEach { tab ->
-            closeTabRuntime(tab)
-            tab.engineType = BrowserEngineType.GECKOVIEW
-            tab.cefriumNavigationState = null
-            tab.needsReload = tab.lastUrl != HOME_URL
-            tab.engineFallbackReason = "Saved-password autofill requires GeckoView"
-        }
-        currentTab()?.let { if (it in changed) activateTab(it) }
-        if (splitTabId != null && changed.any { it.id == splitTabId }) restoreSplitPane()
     }
 
     private fun cefriumOriginForUrl(url: String): String? {
@@ -5524,6 +5505,72 @@ class MainActivity : ComponentActivity() {
                 runtime.getWebExtensionController().install(url, WebExtensionController.INSTALLATION_METHOD_MANAGER)
                     .accept({ toast("Nova Add-on installed: ${it?.metaData?.name ?: it?.id ?: "Add-on"}") }, { toast("Nova Add-on installation failed: ${it?.localizedMessage ?: "Unknown error"}") })
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    /** User-triggered Cefrium password fill; credentials never auto-fill on navigation. */
+    private fun fillSavedLoginForCurrentCefriumTab() {
+        val tab = currentTab() ?: return
+        if (tab.engineType != BrowserEngineType.CEFRIUM || tab.isPrivate || tab.isGuest) {
+            toast("Saved-login filling is available only in Normal Cefrium tabs")
+            return
+        }
+        val expectedOrigin = cefriumOriginForUrl(tab.lastUrl)
+        if (expectedOrigin == null) { toast("Open a secure website first"); return }
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        if (!keyguard.isDeviceSecure) {
+            AlertDialog.Builder(this).setTitle(getString(R.string.vault_device_lock_required))
+                .setMessage(getString(R.string.vault_device_lock_message))
+                .setPositiveButton(android.R.string.ok, null).show()
+            return
+        }
+        val prompt = android.hardware.biometrics.BiometricPrompt.Builder(this)
+            .setTitle(getString(R.string.unlock_password_vault))
+            .setSubtitle(getString(R.string.verify_identity))
+            .setDescription("Verify before filling a saved login into this website")
+            .setDeviceCredentialAllowed(true)
+            .build()
+        prompt.authenticate(android.os.CancellationSignal(), mainExecutor, object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                runOnUiThread {
+                    val active = tabs.firstOrNull { it.id == tab.id }
+                    if (active == null || currentTab()?.id != tab.id || active.engineType != BrowserEngineType.CEFRIUM ||
+                        cefriumOriginForUrl(active.lastUrl) != expectedOrigin) {
+                        toast("The active page changed; no login was filled")
+                        return@runOnUiThread
+                    }
+                    val matches = runCatching { passwordVault.all().filter {
+                        CefriumPasswordAutofillPolicy.isAllowed(active.lastUrl, it.origin, it.formActionOrigin)
+                    } }.getOrElse {
+                        toast("Could not read Nova Password Manager: ${it.localizedMessage ?: "Unknown error"}")
+                        return@runOnUiThread
+                    }
+                    if (matches.isEmpty()) { toast("No saved login matches this exact website"); return@runOnUiThread }
+                    val labels = matches.map { it.username.ifBlank { "Saved login" } }.toTypedArray()
+                    AlertDialog.Builder(this@MainActivity).setTitle("Choose saved login · ${Uri.parse(active.lastUrl).host}")
+                        .setItems(labels) { _, which ->
+                            val stillActive = tabs.firstOrNull { it.id == tab.id }
+                            if (stillActive == null || currentTab()?.id != tab.id ||
+                                cefriumOriginForUrl(stillActive.lastUrl) != expectedOrigin) {
+                                toast("The active page changed; no login was filled")
+                                return@setItems
+                            }
+                            val login = matches[which]
+                            if (!CefriumPasswordAutofillPolicy.isAllowed(stillActive.lastUrl, login.origin, login.formActionOrigin)) {
+                                toast("Saved login origin did not match this page")
+                                return@setItems
+                            }
+                            val engine = stillActive.browserEngine as? CefriumBrowserEngine
+                            if (engine == null) { toast("The browser tab is not ready"); return@setItems }
+                            engine.fillSavedLogin(expectedOrigin, login.username, login.password, login.formActionOrigin) { success, message ->
+                                runOnUiThread { if (!isFinishing && !isDestroyed) toast(message) }
+                            }
+                        }.setNegativeButton(android.R.string.cancel, null).show()
+                }
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                runOnUiThread { toast(getString(R.string.vault_locked)) }
+            }
+        })
     }
 
     private fun showPasswordVault() {

@@ -31,6 +31,7 @@ enum class BrowserEngineCapability {
     VPN_PROXY,
     TRANSLATION,
     PASSWORD_AUTOFILL,
+    PASSWORD_FILL,
     NOVA_SHIELD,
     FIND_IN_PAGE,
     FULLSCREEN,

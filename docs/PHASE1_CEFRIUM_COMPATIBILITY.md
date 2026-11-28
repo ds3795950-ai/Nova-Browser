@@ -10,7 +10,7 @@ Branch: feature/phase-1-dual-engine-foundation
 | Private | GeckoView | Ephemeral Gecko private session |
 | Guest | GeckoView | Existing isolated Guest context |
 
-If Nova Shield or saved-password autofill is required, Cefrium is considered incompatible and GeckoView is used instead. Guest is always GeckoView.
+Full Nova Shield tracking/cookie protections and automatic password-autofill integration remain GeckoView-dependent. Cefrium supports explicit, biometric-gated saved-login filling for Normal tabs only; credentials are filled only into a same-origin password form and are never auto-filled on navigation. Guest is always GeckoView.
 
 ## Phase 1 feature status
 
@@ -19,6 +19,7 @@ If Nova Shield or saved-password autofill is required, Cefrium is considered inc
 | Protected DNS | Implemented through strict Cefrium Secure DNS |
 | Desktop Site | Implemented through desktop UA and viewport handling |
 | Reader Mode | Implemented through sanitized article extraction |
+| Saved login fill | Explicit user-triggered, biometric-gated, exact-origin fill; automatic save/autofill prompts remain GeckoView-only |
 | Private browsing | Uses GeckoView private sessions; Cefrium is never selected |
 | 1VPN browser proxy | Implemented in code — extension credentials are relayed to Cefrium in memory; device/network acceptance pending |
 

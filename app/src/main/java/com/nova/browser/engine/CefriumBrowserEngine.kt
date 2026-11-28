@@ -25,6 +25,7 @@ import com.cefrium.CefriumNavigationClient
 import com.cefrium.CefriumProfile
 import com.cefrium.CefriumContextMenu
 import com.nova.browser.DownloadProtocol
+import com.nova.browser.CefriumPasswordAutofillPolicy
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -79,7 +80,8 @@ class CefriumBrowserEngine(
         BrowserEngineCapability.CONTEXT_MENU,
         BrowserEngineCapability.HTTP_AUTH,
         BrowserEngineCapability.EXTERNAL_NAVIGATION,
-        BrowserEngineCapability.SITE_DATA
+        BrowserEngineCapability.SITE_DATA,
+        BrowserEngineCapability.PASSWORD_FILL
     )
     private val browser = existingBrowser ?: CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
@@ -323,6 +325,64 @@ class CefriumBrowserEngine(
     fun evaluateJavaScript(script: String, onResult: (String?) -> Unit) {
         checkOpen()
         browser.evaluateJavaScript(script, ValueCallback { value -> onResult(value) })
+    }
+
+    /**
+     * Fill a saved login only after an explicit user action and only into a same-origin form.
+     * No credential is stored in page state, logged, or sent to a cross-origin form action.
+     */
+    fun fillSavedLogin(
+        expectedOrigin: String,
+        username: String,
+        password: String,
+        formActionOrigin: String?,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        checkOpen()
+        if (!CefriumPasswordAutofillPolicy.isAllowed(browser.getUrl().orEmpty(), expectedOrigin, formActionOrigin)) {
+            onResult(false, "The page or saved form action no longer matches this login")
+            return
+        }
+        val originLiteral = JSONObject.quote(expectedOrigin)
+        val usernameLiteral = JSONObject.quote(username)
+        val passwordLiteral = JSONObject.quote(password)
+        val script = """
+            (() => {
+              const expectedOrigin = $originLiteral;
+              if (location.origin !== expectedOrigin) return JSON.stringify({ok:false, reason:'origin-changed'});
+              const forms = Array.from(document.forms);
+              const form = forms.find(candidate => {
+                try {
+                  const action = new URL(candidate.getAttribute('action') || location.href, location.href);
+                  return action.origin === expectedOrigin && !!candidate.querySelector('input[type="password"]');
+                } catch (_) { return false; }
+              });
+              if (!form) return JSON.stringify({ok:false, reason:'same-origin-password-form-not-found'});
+              const passwordField = form.querySelector('input[type="password"]');
+              if (!passwordField || passwordField.disabled || passwordField.readOnly)
+                return JSON.stringify({ok:false, reason:'password-field-unavailable'});
+              const usernameField = form.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[id*="user" i], input[name*="email" i], input[id*="email" i]');
+              const setValue = (field, value) => {
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(field, value); else field.value = value;
+                field.dispatchEvent(new Event('input', {bubbles:true}));
+                field.dispatchEvent(new Event('change', {bubbles:true}));
+              };
+              if (usernameField && !usernameField.disabled && !usernameField.readOnly) setValue(usernameField, $usernameLiteral);
+              setValue(passwordField, $passwordLiteral);
+              return JSON.stringify({ok:true});
+            })()
+        """.trimIndent()
+        browser.evaluateJavaScript(script, ValueCallback { raw ->
+            val result = runCatching { JSONTokener(raw ?: "{}").nextValue() as? JSONObject }.getOrNull()
+            val success = result?.optBoolean("ok") == true
+            val reason = result?.optString("reason").orEmpty()
+            onResult(success, if (success) "Saved login filled" else when (reason) {
+                "origin-changed" -> "The page changed origin; login was not filled"
+                "password-field-unavailable" -> "The password field is not available"
+                else -> "No same-origin password form was found"
+            })
+        })
     }
 
     /** Loads HTML with an explicit origin for deterministic local compatibility tests and Reader Mode. */
