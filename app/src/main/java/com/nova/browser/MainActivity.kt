@@ -1003,9 +1003,11 @@ class MainActivity : ComponentActivity() {
             }
             faviconFrame.addView(faviconFallback, android.widget.FrameLayout.LayoutParams(-1, -1))
             faviconFrame.addView(faviconImage, android.widget.FrameLayout.LayoutParams(-1, -1))
-            val vpnRouteReady = !NovaBrowserVpnController.isVpnEnabled() ||
-                NovaBrowserVpnController.isVpnRoutingReady()
-            if (vpnRouteReady && currentTab()?.let { !it.isPrivate && !it.isGuest } == true) {
+            // HttpURLConnection favicons bypass GeckoView's browser proxy. Do not issue
+            // direct favicon requests while 1VPN is enabled or Guest owns the runtime.
+            val faviconNetworkAllowed = !NovaBrowserVpnController.isVpnEnabled() &&
+                !TorGuestRoutingController.blocksNormalGeckoSessions()
+            if (faviconNetworkAllowed && currentTab()?.let { !it.isPrivate && !it.isGuest } == true) {
                 ShortcutFaviconLoader.load(this, shortcut.url) { bitmap ->
                     if (bitmap != null && faviconImage.tag == shortcut.url && !isDestroyed) {
                         faviconImage.setImageBitmap(bitmap)

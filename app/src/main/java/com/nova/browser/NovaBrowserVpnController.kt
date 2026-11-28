@@ -23,10 +23,9 @@ internal object TorGuestConfigAckPolicy {
         disableRequestId: Long,
         acknowledgedRequestId: Long,
         configured: Boolean,
-        torGuestMode: Boolean,
-        routingReady: Boolean
+        torGuestMode: Boolean
     ): Boolean = latestRequestId > 0L && disableRequestId == latestRequestId &&
-        acknowledgedRequestId == disableRequestId && configured && !torGuestMode && routingReady
+        acknowledgedRequestId == disableRequestId && configured && !torGuestMode
 }
 
 /** Pure fail-closed decision for browser navigation while 1VPN is requested. */
@@ -285,10 +284,7 @@ object NovaBrowserVpnController {
             disableRequestId = requestId,
             acknowledgedRequestId = acknowledgedId,
             configured = prefs.getBoolean("nova_tor_guest_configured", false),
-            torGuestMode = prefs.getBoolean("nova_tor_guest_mode", true),
-            // Confirm only that the latest Tor-disable request was applied.
-            // VPN readiness is checked separately before normal navigation resumes.
-            routingReady = true
+            torGuestMode = prefs.getBoolean("nova_tor_guest_mode", true)
         )
     }
 

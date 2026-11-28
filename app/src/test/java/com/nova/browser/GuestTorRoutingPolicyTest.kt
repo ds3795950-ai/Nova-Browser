@@ -108,11 +108,14 @@ class GuestTorRoutingPolicyTest {
     }
 
     @Test fun onlyLatestTorDisableAcknowledgementReleasesNormalSessionBarrier() {
-        assertTrue(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false, true))
-        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 11L, 11L, true, false, true))
-        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 11L, true, false, true))
-        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, false, false, true))
-        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, true, true))
-        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false, false))
+        // Tor reset acknowledgement is independent of 1VPN readiness; normal navigation
+        // remains separately gated by BrowserVpnNavigationPolicy.
+        assertTrue(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, false))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 11L, 11L, true, false))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 11L, true, false))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, false, false))
+        assertFalse(TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(12L, 12L, 12L, true, true))
+        assertTrue(BrowserVpnNavigationPolicy.shouldBlockNavigation(true, false))
+        assertFalse(BrowserVpnNavigationPolicy.shouldBlockNavigation(true, true))
     }
 }
