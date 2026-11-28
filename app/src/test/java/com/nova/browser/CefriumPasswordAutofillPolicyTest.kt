@@ -1,5 +1,6 @@
 package com.nova.browser
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,6 +43,10 @@ class CefriumPasswordAutofillPolicyTest {
         assertFalse(CefriumPasswordAutofillPolicy.isAllowed(
             "https://example.com:0", "https://example.com", null
         ))
+    }
+
+    @Test fun normalizesDefaultHttpsPortForPageScriptOriginComparison() {
+        assertEquals("https://example.com", CefriumPasswordAutofillPolicy.normalizedOrigin("https://example.com:443"))
     }
 
     @Test fun credentialBearingOrNonWebOriginsAreRejected() {

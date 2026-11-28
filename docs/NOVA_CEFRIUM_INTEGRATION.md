@@ -22,3 +22,10 @@ Cefrium 0.21.0 requires JDK 25, Gradle 9.7.1, Android Gradle Plugin 9.4 and comp
 ## Verification
 
 The project CI runs JVM tests, debug/release assembly, lint, and an Android 16 x86_64 emulator smoke suite that creates a Cefrium surface, loads a local page, and exercises Reader Mode. Emulator tests do not replace testing on physical ARM hardware. A physical-device check is still required for video/fullscreen, file chooser, camera/microphone/location prompts, popup navigation, downloads, split-pane view reparenting and memory pressure.
+
+
+## Request filtering and capability boundaries
+
+Cefrium 0.21 supports a conservative cross-site tracker-domain filter, Data Saver image blocking, and per-origin cookie send/store rules for browser-owned requests. Its profile-level resource interceptor covers service-worker image requests, but the SDK does not invoke cookie callbacks for profile-level service-worker requests. Nova labels Cefrium cookie controls as browser-request-only; they are not complete cookie isolation or third-party cookie partitioning.
+
+Explicit saved-login fill is HTTPS-only and requires user authentication plus exact-origin/same-origin-form validation. Automatic password detection and save prompts remain GeckoView-only. When a Normal Cefrium tab requests page translation, Nova offers a GeckoView switch and resumes the translation picker after reload; cookies and site storage are not transferred. Cefrium's Nova Script Add-ons are distinct from the full Nova WebExtensions API, which remains GeckoView-only.

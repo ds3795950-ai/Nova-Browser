@@ -33,7 +33,7 @@ object BrowserEngineCapabilitySets {
         BrowserEngineCapability.VPN_PROXY,
         BrowserEngineCapability.PASSWORD_FILL,
         BrowserEngineCapability.IMAGE_BLOCKING,
-        BrowserEngineCapability.SITE_COOKIE_CONTROLS,
+        BrowserEngineCapability.BROWSER_COOKIE_FILTERING,
         BrowserEngineCapability.TRACKER_BLOCKING,
         BrowserEngineCapability.SCRIPT_ADDONS
     )

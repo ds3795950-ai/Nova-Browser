@@ -86,7 +86,7 @@ class CefriumBrowserEngine(
         BrowserEngineCapability.SITE_DATA,
         BrowserEngineCapability.PASSWORD_FILL,
         BrowserEngineCapability.IMAGE_BLOCKING,
-        BrowserEngineCapability.SITE_COOKIE_CONTROLS,
+        BrowserEngineCapability.BROWSER_COOKIE_FILTERING,
         BrowserEngineCapability.TRACKER_BLOCKING,
         BrowserEngineCapability.SCRIPT_ADDONS
     )
@@ -118,11 +118,13 @@ class CefriumBrowserEngine(
                     )
             }
 
+            // Cefrium invokes these cookie callbacks for browser-owned requests only.
+            // Profile-level service-worker requests do not invoke them in SDK 0.21.
             override fun onCanSendCookie(url: String, name: String, value: String): Boolean =
-                requestPolicy?.cookiesAllowedFor(url) ?: true
+                requestPolicy?.browserCookiesAllowedFor(url) ?: true
 
             override fun onCanSaveCookie(url: String, name: String, value: String): Boolean =
-                requestPolicy?.cookiesAllowedFor(url) ?: true
+                requestPolicy?.browserCookiesAllowedFor(url) ?: true
         }
 
     init {
@@ -368,11 +370,14 @@ class CefriumBrowserEngine(
         onResult: (Boolean, String) -> Unit
     ) {
         checkOpen()
-        if (!CefriumPasswordAutofillPolicy.isAllowed(browser.getUrl().orEmpty(), expectedOrigin, formActionOrigin)) {
+        val normalizedExpectedOrigin = CefriumPasswordAutofillPolicy.normalizedOrigin(expectedOrigin)
+        if (normalizedExpectedOrigin == null || !CefriumPasswordAutofillPolicy.isAllowed(
+                browser.getUrl().orEmpty(), normalizedExpectedOrigin, formActionOrigin
+            )) {
             onResult(false, "The page or saved form action no longer matches this login")
             return
         }
-        val originLiteral = JSONObject.quote(expectedOrigin)
+        val originLiteral = JSONObject.quote(normalizedExpectedOrigin)
         val usernameLiteral = JSONObject.quote(username)
         val passwordLiteral = JSONObject.quote(password)
         val script = """
@@ -390,14 +395,16 @@ class CefriumBrowserEngine(
                 );
                 return fields.find(field => hasAutocomplete(field, 'current-password')) || fields[0] || null;
               };
-              const findUsernameField = (form, passwordField) =>
-                Array.from(form.elements).find(control =>
+              const findUsernameField = (form, passwordField) => {
+                const editableFields = Array.from(form.elements).filter(control =>
                   control.form === form && control instanceof HTMLInputElement &&
-                  control !== passwordField && control.type !== 'password' &&
-                  !control.disabled && !control.readOnly &&
-                  (hasAutocomplete(control, 'username') || control.type === 'email' ||
-                    /user|email/i.test((control.name || '') + ' ' + (control.id || '')))
-                ) || null;
+                  ['text', 'email', 'search', 'tel'].includes(control.type) &&
+                  !control.disabled && !control.readOnly
+                );
+                return editableFields.find(field => hasAutocomplete(field, 'username')) ||
+                  editableFields.find(field => field.type === 'email') ||
+                  editableFields.find(field => /user|email/i.test((field.name || '') + ' ' + (field.id || ''))) || null;
+              };
               const forms = Array.from(document.forms);
               const form = forms.find(candidate => {
                 try {

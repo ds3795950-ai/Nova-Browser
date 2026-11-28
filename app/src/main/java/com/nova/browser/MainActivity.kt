@@ -2217,6 +2217,10 @@ class MainActivity : ComponentActivity() {
 
     private fun switchCurrentTabToGecko(reason: String) {
         val tab = currentTab() ?: return
+        if (pendingGeckoDataClearActive) {
+            toast("Wait for GeckoView data cleanup to finish before switching engines")
+            return
+        }
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
             )) return
@@ -4961,11 +4965,14 @@ class MainActivity : ComponentActivity() {
                         toast("The active tab changed; no engine was switched")
                         return@setPositiveButton
                     }
+                    val previousEngineChoice = tab.explicitEngineChoice
+                    tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
                     pendingTranslationTabId = tab.id
                     switchCurrentTabToGecko(route.reason)
                     if (tab.engineType != BrowserEngineType.GECKOVIEW) {
+                        tab.explicitEngineChoice = previousEngineChoice
                         pendingTranslationTabId = null
-                        toast("Engine switch is blocked until protected routing is ready")
+                        toast("Engine switch is blocked while GeckoView cleanup or protected routing is active")
                     } else {
                         toast("Switching to GeckoView; translation options will open after the page reloads")
                     }
@@ -6121,7 +6128,7 @@ private fun showQuickSettings() {
                 Triple("autoplay", "Autoplay", false),
                 Triple("ads", "Ads and trackers", true),
                 Triple("images", "Images", true),
-                Triple("cookies", "Cookies for this site", true),
+                Triple("cookies", "Cookies (browser requests only)", true),
                 Triple("sound", "Sound", true)
             ) else listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -6138,6 +6145,7 @@ private fun showQuickSettings() {
         }.toTypedArray() + permissionDefaults + cookieDefaults
         val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
+            .apply { if (engine == BrowserEngineType.CEFRIUM) setMessage("Cefrium 0.21 cookie rules apply to browser-owned requests only; service-worker requests are not covered.") }
             .setItems(labels) { _, which ->
                 if (which == definitions.size) {
                     if (engine == BrowserEngineType.CEFRIUM) showDefaultCefriumPermissions() else showDefaultGeckoPermissions()
@@ -6171,7 +6179,7 @@ private fun showQuickSettings() {
                             }
                         }
                         "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(siteSettingAllowed(engine, active.lastUrl, "ads", true))
-                        "images", "cookies" -> Unit // Resource interceptor reads the updated per-site preference on every request.
+                        "images", "cookies" -> Unit // Browser request interceptor reads preferences; service-worker cookie hooks are unavailable in Cefrium 0.21.
                         "sound" -> {
                             val effective = siteSettingAllowed(engine, active.lastUrl, "sound", true)
                             if (engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!effective) else active.mediaSession?.muteAudio(!effective)
@@ -6313,7 +6321,7 @@ private fun showQuickSettings() {
                 Triple("autoplay", "Autoplay", false),
                 Triple("ads", "Ads and trackers", true),
                 Triple("images", "Images", true),
-                Triple("cookies", "Cookies for this site", true),
+                Triple("cookies", "Cookies (browser requests only)", true),
                 Triple("sound", "Sound", true)
             ) else listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -6338,6 +6346,7 @@ private fun showQuickSettings() {
         val labels = definitions.map(::label).toTypedArray() + permissionAction +
             arrayOf("Reset this site's settings", "Clear this site's data")
         AlertDialog.Builder(this).setTitle("$host · $engineLabel")
+            .apply { if (entry.engine == BrowserEngineType.CEFRIUM) setMessage("Cookie rules apply to browser-owned requests only; service-worker requests are not covered by Cefrium 0.21.") }
             .setItems(labels) { _, which ->
                 when {
                     which < definitions.size -> {
@@ -6363,7 +6372,7 @@ private fun showQuickSettings() {
                                         .forEach { runtime.storageController.setPermission(it, if (next) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
                                 }
                                 "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
-                                "images", "cookies" -> Unit // Enforced by CefriumResourceInterceptor on the next request.
+                                "images", "cookies" -> Unit // Browser-owned requests only; service-worker cookie callbacks are not invoked by Cefrium 0.21.
                                 "sound" -> if (entry.engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next) else active.mediaSession?.muteAudio(!next)
                             }
                             active.browserEngine?.reload()
@@ -6455,8 +6464,9 @@ private fun showQuickSettings() {
             val origin = originAtOpen
             val adsLabel = "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked"
             val imagesLabel = "Images · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "images", true)) "Allowed" else "Blocked"
-            val cookiesLabel = "Cookies for this site · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "cookies", true)) "Allowed" else "Blocked"
+            val cookiesLabel = "Cookies (browser requests only) · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "cookies", true)) "Allowed" else "Blocked"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
+                .setMessage("Cefrium 0.21 applies cookie rules to browser-owned requests only. Service-worker requests are not covered, so this is not complete cookie isolation.")
                 .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, adsLabel, imagesLabel, cookiesLabel, "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {

@@ -10,7 +10,7 @@ Branch: feature/phase-1-dual-engine-foundation
 | Private | GeckoView | Ephemeral Gecko private session |
 | Guest | GeckoView | Existing isolated Guest context |
 
-If Nova Shield or saved-password autofill is required, Cefrium is considered incompatible and GeckoView is used instead. Guest is always GeckoView.
+If full Nova Shield or automatic password save/autofill is required, GeckoView is used. Cefrium supports explicit, device-authenticated saved-login filling on HTTPS Normal tabs. Guest is always GeckoView.
 
 ## Phase 1 feature status
 
@@ -45,3 +45,13 @@ The build-time patch intentionally checks the upstream extension's auth callback
 - Verify Private storage is separate from Normal and clears after the final Private browser closes.
 - Verify Guest remains GeckoView and its storage lifecycle is unchanged.
 - Complete real-device acceptance for the Cefrium 1VPN adapter: proxy authentication, fail-closed behavior, WebRTC and DNS/IP leak checks.
+
+
+## Cefrium 0.21 request-filter boundaries
+
+- Data Saver blocks image requests in browser tabs and profile-level service-worker image requests.
+- The curated tracker-domain filter applies when a browser request has a known top-level page URL; it is not full Enhanced Tracking Protection.
+- Per-origin cookie send/store rules apply to browser-owned requests only. Cefrium 0.21 does not invoke cookie callbacks for profile-level service-worker requests, so this must not be described as complete cookie isolation. The Site controls UI labels the limitation explicitly.
+- Explicit saved-login fill is HTTPS-only, exact-origin, user-triggered and protected by device credential/biometric verification. Automatic password detection and save prompts remain GeckoView-only.
+- Nova's capability policy routes page translation to GeckoView and asks before switching; the page reloads and site data is not transferred.
+- Cefrium supports Nova Script Add-ons, not the full Nova WebExtensions API.

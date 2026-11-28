@@ -7,7 +7,10 @@ import com.cefrium.CefriumExperimental
 import com.cefrium.CefriumResourceInterceptor
 import com.cefrium.CefriumResourceType
 
-/** Preference-only Cefrium request policy safe to retain for the lifetime of a shared profile. */
+/** Preference-only Cefrium request policy safe to retain for the lifetime of a shared profile.
+ * Cookie filtering is browser-request-only; Cefrium 0.21 does not call cookie hooks for
+ * profile-level service-worker requests.
+ */
 class CefriumRequestPolicy(private val preferences: SharedPreferences) {
     fun imagesBlockedFor(url: String): Boolean =
         CefriumTrackingProtectionPolicy.shouldBlockImage(
@@ -16,7 +19,7 @@ class CefriumRequestPolicy(private val preferences: SharedPreferences) {
             siteImagesAllowed = siteSettingAllowed(url, "images", true)
         )
 
-    fun cookiesAllowedFor(url: String): Boolean = siteSettingAllowed(url, "cookies", true)
+    fun browserCookiesAllowedFor(url: String): Boolean = siteSettingAllowed(url, "cookies", true)
 
     fun shouldBlockTracker(url: String, topLevelUrl: String): Boolean =
         CefriumTrackingProtectionPolicy.shouldBlockRequest(

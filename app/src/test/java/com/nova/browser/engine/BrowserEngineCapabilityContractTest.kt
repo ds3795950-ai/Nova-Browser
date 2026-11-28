@@ -22,7 +22,7 @@ class BrowserEngineCapabilityContractTest {
         val expected = setOf(BrowserEngineCapability.DOWNLOADS, BrowserEngineCapability.SITE_PERMISSIONS,
             BrowserEngineCapability.READER_MODE, BrowserEngineCapability.DESKTOP_MODE, BrowserEngineCapability.VPN_PROXY,
             BrowserEngineCapability.PASSWORD_FILL, BrowserEngineCapability.IMAGE_BLOCKING,
-            BrowserEngineCapability.SITE_COOKIE_CONTROLS, BrowserEngineCapability.TRACKER_BLOCKING,
+            BrowserEngineCapability.BROWSER_COOKIE_FILTERING, BrowserEngineCapability.TRACKER_BLOCKING,
             BrowserEngineCapability.SCRIPT_ADDONS)
         assertTrue(BrowserEngineCapabilitySets.CEFRIUM.containsAll(expected))
     }
@@ -33,7 +33,7 @@ class BrowserEngineCapabilityContractTest {
 
     @Test fun cefriumAdvertisesRequestLevelImageCookieAndTrackerControls() {
         assertTrue(BrowserEngineCapability.IMAGE_BLOCKING in BrowserEngineCapabilitySets.CEFRIUM)
-        assertTrue(BrowserEngineCapability.SITE_COOKIE_CONTROLS in BrowserEngineCapabilitySets.CEFRIUM)
+        assertTrue(BrowserEngineCapability.BROWSER_COOKIE_FILTERING in BrowserEngineCapabilitySets.CEFRIUM)
         assertTrue(BrowserEngineCapability.TRACKER_BLOCKING in BrowserEngineCapabilitySets.CEFRIUM)
     }
 
