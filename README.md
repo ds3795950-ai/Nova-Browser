@@ -1,36 +1,34 @@
 # Nova Browser
 
-Nova is an Android/Kotlin browser. **GeckoView remains the production engine** while Phase 1 adds Cefrium 0.21.0 behind an isolated engine adapter and a debug-only engine lab. Normal-mode engine selection is not enabled yet.
+Nova is an Android/Kotlin browser built around an engine-neutral tab manager, with GeckoView and Cefrium 0.21.0 adapters.
 
-This repository is a fresh reconstruction. The previous repository/account could not be accessed, and no source backup was available; this is not a recovered copy.
+## Current architecture
 
-## Current browser-core slice
-
-- Address and search bar with Google, Bing, DuckDuckGo and Brave Search
-- Back, forward, reload and home controls
-- Multiple normal and private GeckoView sessions
-- Tab switcher and close-current-tab action
-- Local bookmarks and normal-session browsing history
-- Private tabs are excluded from the normal history and bookmark store
-- Android share sheet and a basic settings panel
-- GitHub Actions unit-test, debug-build and APK-artifact workflow
+- **Normal tabs:** Cefrium is the preferred engine for eligible sites. Nova falls back to GeckoView when Nova Shield is active, 1VPN is enabled, saved-password autofill is required, a page type is unsupported, or Cefrium cannot initialize.
+- **Private and Guest tabs:** GeckoView-only, with separate ephemeral contexts.
+- **Engine isolation:** GeckoView and Cefrium use independent profiles. Nova does not copy cookies, cache, local storage, passwords, permissions or session state between engines.
+- **Guest Mode:** Uses the embedded Tor Android service and a GeckoView SOCKS5/WebExtension bridge with remote DNS and WebRTC protection. GeckoView's proxy is runtime-wide, not a supported per-tab proxy API; Nova blocks conflicting GeckoView sessions while Guest routing starts, runs and shuts down. This is not a claim of Tor Browser equivalence or formally audited per-tab isolation.
+- **1VPN:** The bundled 1VPN extension provides a browser proxy, not Android VpnService or a full-device VPN. It currently protects GeckoView traffic; Nova falls back from Cefrium while 1VPN is enabled.
+- **Privacy and sync:** Nova Shield, protected DNS, encrypted cloud sync and authentication are implemented in app services. Private and Guest data are excluded from normal sync/history.
 
 ## Build
 
-Requires JDK 25, Gradle 9.7.1, Android SDK Platform 37 and Android Gradle Plugin 9.4.0. Cefrium 0.21.0 requires this toolchain.
+Requires JDK 25, Gradle 9.7.1, Android Gradle Plugin 9.4.0 and Android SDK Platform 37. Cefrium 0.21.0 is pinned to the same toolchain.
 
 ```bash
 gradle testDebugUnitTest
 gradle assembleDebug
 ```
 
-The CI workflow publishes the debug APK as a short-lived workflow artifact after a successful build.
+The Android CI workflow runs unit tests and builds debug APK artifacts. Lint and Android 16 emulator smoke tests run separately. ABI-specific APKs are produced; Cefrium's native libraries add substantial size and memory cost, so check the artifact for the target ABI before distribution.
 
-## Security notes
+## Release readiness
 
-- The live MainActivity still uses GeckoView. Cefrium is currently available through the debug-only Engine Lab; the production tab manager has not been migrated.
-- Guest Mode, Nova Shield, encrypted cloud sync and authentication have existing GeckoView implementations. Embedded Tor routing is not implemented; the existing Orbot handoff is not proof of per-tab Tor enforcement.
-- Do not put API keys, Supabase service-role keys, signing secrets or user credentials in source control.
-- Private-mode behavior still requires device-level verification before being described as production-ready.
+- GitHub build, unit-test, lint and emulator checks are necessary but do not replace physical-device acceptance.
+- Physical ARM64 testing is still required for startup, memory use, renderer recovery, Cefrium navigation/lifecycle, 1VPN proxy failures, DNS/WebRTC/IP leakage and Guest Tor isolation.
+- Guest Tor's runtime-wide GeckoView proxy limitation must remain visible; do not describe it as formally audited Guest-only isolation.
+- A signed release APK is produced only when the required release-signing secrets are configured. Otherwise, use the debug artifact for testing only.
 
-See [docs/PRODUCT_DECISIONS.md](docs/PRODUCT_DECISIONS.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+Do not commit API keys, Supabase service-role keys, signing secrets or user credentials.
+
+See [docs/PRODUCT_DECISIONS.md](docs/PRODUCT_DECISIONS.md), [docs/ROADMAP.md](docs/ROADMAP.md), [docs/PHASE1_ENGINE_FOUNDATION.md](docs/PHASE1_ENGINE_FOUNDATION.md) and [docs/PRIVACY_AND_COMPATIBILITY.md](docs/PRIVACY_AND_COMPATIBILITY.md).
