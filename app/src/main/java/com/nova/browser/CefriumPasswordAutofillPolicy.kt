@@ -1,6 +1,6 @@
 package com.nova.browser
 
-import android.net.Uri
+import java.net.URI
 
 /** Origin-bound guard for explicit saved-login filling in Cefrium Normal tabs. */
 object CefriumPasswordAutofillPolicy {
@@ -12,19 +12,16 @@ object CefriumPasswordAutofillPolicy {
         return normalizedOrigin(formActionOrigin) == current
     }
 
+    /** Pure-JVM parser so the origin boundary can be regression-tested without Android stubs. */
     fun normalizedOrigin(value: String?): String? {
         if (value.isNullOrBlank()) return null
-        val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return null
+        val uri = runCatching { URI(value.trim()) }.getOrNull() ?: return null
         val scheme = uri.scheme?.lowercase() ?: return null
         val host = uri.host?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
-        if (scheme !in setOf("http", "https") || uri.encodedUserInfo != null) return null
+        // Never place a saved password into a clear-text HTTP page or a credential-bearing URL.
+        if (scheme != "https" || uri.rawUserInfo != null) return null
         val port = uri.port
-        val normalizedPort = when {
-            port <= 0 -> ""
-            scheme == "https" && port == 443 -> ""
-            scheme == "http" && port == 80 -> ""
-            else -> ":$port"
-        }
+        val normalizedPort = when { port <= 0 || port == 443 -> ""; else -> ":$port" }
         return "$scheme://$host$normalizedPort"
     }
 }

@@ -23,7 +23,10 @@ class CefriumPasswordAutofillPolicyTest {
         ))
     }
 
-    @Test fun schemeDowngradeIsRejected() {
+    @Test fun clearTextHttpOriginsAreRejected() {
+        assertFalse(CefriumPasswordAutofillPolicy.isAllowed(
+            "http://example.com", "http://example.com", null
+        ))
         assertFalse(CefriumPasswordAutofillPolicy.isAllowed(
             "https://example.com", "http://example.com", null
         ))
