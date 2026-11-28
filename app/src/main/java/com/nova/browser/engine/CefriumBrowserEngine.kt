@@ -106,6 +106,24 @@ class CefriumBrowserEngine(
     override val state: BrowserEngineState
         get() = currentState
 
+    private fun createNovaResourceInterceptor(): CefriumResourceInterceptor =
+        object : CefriumResourceInterceptor {
+            override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
+                val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
+                if (request.getType() == CefriumResourceType.IMAGE && imagesBlockedForUrl(pageUrl)) return true
+                return request.getType() != CefriumResourceType.MAIN_FRAME &&
+                    CefriumTrackingProtectionPolicy.shouldBlockRequest(
+                        request.url, pageUrl, adBlockingEnabledForUrl(pageUrl)
+                    )
+            }
+
+            override fun onCanSendCookie(url: String, name: String, value: String): Boolean =
+                cookiesAllowedForUrl(url)
+
+            override fun onCanSaveCookie(url: String, name: String, value: String): Boolean =
+                cookiesAllowedForUrl(url)
+        }
+
     init {
         // Restore the encrypted per-tab navigation stack before any new navigation.
         if (initialNavigationState != null && initialNavigationState.isNotEmpty()) {
@@ -129,22 +147,10 @@ class CefriumBrowserEngine(
         browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl().orEmpty()))
         // Cefrium 0.21 exposes request interception on the network thread. Keep these
         // callbacks fast and preference-only: no disk, UI, or network work is allowed here.
-        browser.setResourceInterceptor(object : CefriumResourceInterceptor {
-            override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
-                val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
-                if (request.getType() == CefriumResourceType.IMAGE && imagesBlockedForUrl(pageUrl)) return true
-                return request.getType() != CefriumResourceType.MAIN_FRAME &&
-                    CefriumTrackingProtectionPolicy.shouldBlockRequest(
-                        request.url, pageUrl, adBlockingEnabledForUrl(pageUrl)
-                    )
-            }
-
-            override fun onCanSendCookie(url: String, name: String, value: String): Boolean =
-                cookiesAllowedForUrl(url)
-
-            override fun onCanSaveCookie(url: String, name: String, value: String): Boolean =
-                cookiesAllowedForUrl(url)
-        })
+        val resourceInterceptor = createNovaResourceInterceptor()
+        browser.setResourceInterceptor(resourceInterceptor)
+        // Service-worker fetches have no owning CefriumBrowser; the profile hook covers them.
+        profile.setResourceInterceptor(resourceInterceptor)
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
