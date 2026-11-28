@@ -5,6 +5,7 @@ import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileNotFoundException
 import java.util.UUID
 
 data class NovaScriptAddon(
@@ -23,8 +24,11 @@ class NovaScriptAddonStore(context:android.content.Context) {
     @Synchronized fun list(): List<NovaScriptAddon> = runCatching { readIndexLenient() }.getOrDefault(emptyList())
 
     private fun readIndexLenient(): List<NovaScriptAddon> {
-        if (!index.exists()) return emptyList()
-        val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { JSONArray(it.readText()) }
+        val rows = try {
+            AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { JSONArray(it.readText()) }
+        } catch (error: FileNotFoundException) {
+            return emptyList()
+        }
         return buildList {
             for (i in 0 until rows.length()) {
                 val row = rows.optJSONObject(i) ?: continue
@@ -51,8 +55,11 @@ class NovaScriptAddonStore(context:android.content.Context) {
 
     /** Mutations must not replace a corrupt index with an incomplete, empty list. */
     private fun readIndexStrict(): List<NovaScriptAddon> {
-        if (!index.exists()) return emptyList()
-        val rows = AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader -> JSONArray(reader.readText()) }
+        val rows = try {
+            AtomicFile(index).openRead().bufferedReader(Charsets.UTF_8).use { reader -> JSONArray(reader.readText()) }
+        } catch (error: FileNotFoundException) {
+            return emptyList()
+        }
         return buildList {
             for (i in 0 until rows.length()) {
                 val row = rows.optJSONObject(i) ?: throw IllegalStateException("Add-on index contains an invalid entry")

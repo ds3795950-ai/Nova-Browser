@@ -2,12 +2,12 @@
 
 ## Current engine boundary
 
-Nova currently has two distinct add-on mechanisms:
+Nova has two distinct add-on mechanisms:
 
-- **GeckoView WebExtensions**: packages are installed through GeckoView's native WebExtension API. The Gecko runtime remains authoritative for manifest parsing, permission prompts, API support, and install failures.
-- **Cefrium Nova Script Add-ons**: locally stored JavaScript is registered as a document-start script against explicit origin rules. This is not a WebExtensions runtime.
+- **GeckoView WebExtensions**: packages use GeckoView's native WebExtension API. GeckoView remains authoritative for manifest parsing, permission prompts, API support, and installation failures.
+- **Cefrium Nova Script Add-ons**: locally stored JavaScript runs as a document-start script against explicit origin rules. This is not a WebExtensions runtime.
 
-The compatibility policy in `NovaAddonRuntimePolicy` prevents the UI from treating these mechanisms as interchangeable.
+The compatibility policy prevents the UI from treating these mechanisms as interchangeable.
 
 ## Routing rules
 
@@ -16,9 +16,9 @@ The compatibility policy in `NovaAddonRuntimePolicy` prevents the UI from treati
 | WebExtension | Native Gecko install and manifest validation | Request explicit switch to GeckoView | GeckoView only |
 | Nova Script | Not supported | Origin-scoped document-start script only | Not supported |
 
-Cefrium Nova Script Add-ons do not receive background workers, extension storage, tab control, dynamic scripting, request interception, cookie access, or native messaging. If a package declares any of those features, the compatibility policy rejects it instead of silently installing a partial implementation.
+Cefrium Nova Script Add-ons do not receive background workers, extension storage, tab control, dynamic scripting, request interception, cookie access, or native messaging. Packages requesting those features are rejected rather than silently receiving partial support.
 
-## Security and UX requirements for the next integration step
+## Security and UX requirements
 
 1. Inspect package manifests before installation and show requested permissions.
 2. Treat host permissions as a separate, user-visible grant; never infer them from a script body.
@@ -27,6 +27,6 @@ Cefrium Nova Script Add-ons do not receive background workers, extension storage
 5. On engine switching, explain that cookies, site data, login state, and in-page state are not migrated automatically.
 6. Display unsupported APIs and install errors; never label a content-script shim as full WebExtensions compatibility.
 
-## Scope of this change
+## Scope
 
-This commit adds the engine-neutral compatibility contract and unit tests. It does not claim full WebExtensions parity, implement an extension background runtime for Cefrium, or add a package marketplace/importer UI. Those require separate runtime, permission, storage, lifecycle, and security work.
+This change adds the engine-neutral compatibility contract and unit tests. It does not claim full WebExtensions parity, implement a Cefrium background runtime, or add a package marketplace/importer UI.
