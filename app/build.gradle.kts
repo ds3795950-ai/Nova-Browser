@@ -397,7 +397,7 @@ val prepare1VpnAssets by tasks.registering {
         """.trimIndent()
         check(background.contains("(function()") && background.contains("globalThis.__novaProxyConfigResolve = resolve") &&
             background.contains("__novaProxyConfigPromise") && background.contains("__novaFailClosedProxy") &&
-            background.contains("result.type === \"direct\"") &&
+            background.contains("containsDirectFallback") && background.contains("proxy.type === \"direct\"") &&
             novaBridge.contains("globalThis.__novaProxyConfigResolve") && novaBridge.contains("__novaTrafficGateReady") &&
             novaBridge.contains("__novaVpnConfigReady") && novaBridge.contains("configureQueue") &&
             novaBridge.contains("nativeGeneration") && novaBridge.contains("applied.value === false") &&
