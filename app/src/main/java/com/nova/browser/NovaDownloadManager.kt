@@ -223,10 +223,11 @@ class NovaDownloadManager(
                 val margin = 8L * 1024L * 1024L
                 val partialDirectory = part.parentFile ?: context.filesDir
                 val downloadsDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val destinationDirectory = downloadsDirectory.takeIf { it.exists() } ?: Environment.getExternalStorageDirectory()
                 val partialAvailable = runCatching { StatFs(partialDirectory.absolutePath).availableBytes }.getOrDefault(0L)
-                val destinationAvailable = runCatching { StatFs(downloadsDirectory.absolutePath).availableBytes }.getOrDefault(0L)
+                val destinationAvailable = runCatching { StatFs(destinationDirectory.absolutePath).availableBytes }.getOrDefault(0L)
                 val partialStore = runCatching { java.nio.file.Files.getFileStore(partialDirectory.toPath()) }.getOrNull()
-                val destinationStore = runCatching { java.nio.file.Files.getFileStore(downloadsDirectory.toPath()) }.getOrNull()
+                val destinationStore = runCatching { java.nio.file.Files.getFileStore(destinationDirectory.toPath()) }.getOrNull()
                 // If the store cannot be identified, assume both paths share storage and use the
                 // conservative combined requirement rather than risk a failed MediaStore copy.
                 val sameStore = if (partialStore != null && destinationStore != null) {
