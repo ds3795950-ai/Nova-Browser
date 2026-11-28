@@ -145,6 +145,7 @@ class MainActivity : ComponentActivity() {
     private var findInput: EditText? = null
     private var isFullscreen = false
     private var fullscreenTabId: String? = null
+    private var pipLeaveRequestId: Long = 0L
     private var splitTabId: String? = null
     private val collapsedGroups = mutableSetOf<String>()
     private var pendingFilePrompt: FilePrompt? = null
@@ -429,7 +430,10 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if (tabs.isEmpty()) {
-                            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+                            if (!createTab(false, HOME_URL)) {
+                                ensureHomeTabRecord()
+                                persistTabs()
+                            }
                         } else {
                             switchTab(activeIndex)
                         }
@@ -999,7 +1003,9 @@ class MainActivity : ComponentActivity() {
             }
             faviconFrame.addView(faviconFallback, android.widget.FrameLayout.LayoutParams(-1, -1))
             faviconFrame.addView(faviconImage, android.widget.FrameLayout.LayoutParams(-1, -1))
-            if (currentTab()?.let { !it.isPrivate && !it.isGuest } == true) {
+            val vpnRouteReady = !NovaBrowserVpnController.isVpnEnabled() ||
+                NovaBrowserVpnController.isVpnRoutingReady()
+            if (vpnRouteReady && currentTab()?.let { !it.isPrivate && !it.isGuest } == true) {
                 ShortcutFaviconLoader.load(this, shortcut.url) { bitmap ->
                     if (bitmap != null && faviconImage.tag == shortcut.url && !isDestroyed) {
                         faviconImage.setImageBitmap(bitmap)
@@ -2199,6 +2205,14 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (TorGuestRoutingController.blocksNormalGeckoSessions()) {
+            // If the combined 1VPN route drops while Guest owns GeckoView, close Guest's
+            // live renderer too; the extension gate alone is not enough for existing pages.
+            if (NovaBrowserVpnController.isVpnEnabled() && !NovaBrowserVpnController.isVpnRoutingReady()) {
+                tabs.filter { it.isGuest && (it.browserEngine != null || it.session != null) }.forEach { tab ->
+                    closeTabRuntime(tab)
+                    tab.needsReload = tab.lastUrl != HOME_URL
+                }
+            }
             val activeGuestTab = currentTab()?.takeIf { it.isGuest }
             if (activeGuestTab != null && TorGuestRoutingController.isReady() &&
                 (!NovaBrowserVpnController.isVpnEnabled() || NovaBrowserVpnController.isVpnRoutingReady()) &&
@@ -4076,7 +4090,10 @@ class MainActivity : ComponentActivity() {
             activeIndex = 0
             // VPN or data-clear gates may reject engine creation. Keep a runtime-free
             // home tab so the browser remains recoverable when the gate is lifted.
-            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+            if (!createTab(false, HOME_URL)) {
+                ensureHomeTabRecord()
+                persistTabs()
+            }
             return
         }
         persistTabs()
@@ -4933,7 +4950,10 @@ class MainActivity : ComponentActivity() {
     private fun restoreAfterGuestTorStop() {
         if (isFinishing || isDestroyed) return
         if (tabs.isEmpty()) {
-            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+            if (!createTab(false, HOME_URL)) {
+                ensureHomeTabRecord()
+                persistTabs()
+            }
             retryPendingExternalLink()
             return
         }
@@ -6814,7 +6834,10 @@ private fun showQuickSettings() {
                 }
                 cleanupGuestContextIfIdle()
                 if (tabs.isEmpty()) {
-                    if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+                    if (!createTab(false, HOME_URL)) {
+                        ensureHomeTabRecord()
+                        persistTabs()
+                    }
                 } else {
                     activeIndex = tabs.indexOfFirst { it.id == activeId }.takeIf { it >= 0 } ?: tabs.lastIndex
                     switchTab(activeIndex)
@@ -7292,22 +7315,19 @@ private fun showForgotPassword(prefillEmail: String = "") {
     """.trimIndent()
 
     private fun checkFullscreenVideoPlayback(tab: BrowserTab, onResult: (Boolean) -> Unit) {
+        // The pinned GeckoView API does not expose a supported evaluateJS call here.
+        // Keep PiP playback detection on Cefrium until a GeckoView-supported playback
+        // signal is available; never call an API that prevents the app from compiling.
+        if (tab.engineType != BrowserEngineType.CEFRIUM) {
+            onResult(false)
+            return
+        }
         val callback: (String?) -> Unit = { raw ->
             onResult(raw?.trim()?.trim('"') == "true")
         }
         runCatching {
-            if (tab.engineType == BrowserEngineType.CEFRIUM) {
-                val engine = tab.browserEngine as? CefriumBrowserEngine
-                if (engine == null) onResult(false) else engine.evaluateJavaScript(fullscreenVideoProbeScript, callback)
-            } else {
-                val session = tab.session
-                if (session == null) onResult(false) else {
-                    session.evaluateJS(fullscreenVideoProbeScript)?.accept(
-                        { value -> callback(value) },
-                        { onResult(false) }
-                    ) ?: onResult(false)
-                }
-            }
+            val engine = tab.browserEngine as? CefriumBrowserEngine
+            if (engine == null) onResult(false) else engine.evaluateJavaScript(fullscreenVideoProbeScript, callback)
         }.onFailure { onResult(false) }
     }
 
@@ -7344,16 +7364,16 @@ private fun showForgotPassword(prefillEmail: String = "") {
         super.onUserLeaveHint()
         val tab = fullscreenTabId?.let { id -> currentTab()?.takeIf { it.id == id } } ?: return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isFullscreen || isInPictureInPictureMode) return
-        if (tab.isFullscreenVideoPlaying) {
-            enterBrowserPictureInPicture(tab, true)
-        } else {
-            // Query again at the moment the user leaves: playback may have started
-            // after the initial fullscreen callback.
-            checkFullscreenVideoPlayback(tab) { playing ->
-                runOnUiThread {
-                    tab.isFullscreenVideoPlaying = playing
-                    if (playing) enterBrowserPictureInPicture(tab, true)
-                }
+        val requestId = ++pipLeaveRequestId
+        val requestedTabId = tab.id
+        // Always query current playback: the cached fullscreen flag can be stale after pause/end.
+        checkFullscreenVideoPlayback(tab) { playing ->
+            runOnUiThread {
+                if (requestId != pipLeaveRequestId || !isFullscreen ||
+                    fullscreenTabId != requestedTabId || currentTab()?.id != requestedTabId ||
+                    isInPictureInPictureMode) return@runOnUiThread
+                tab.isFullscreenVideoPlaying = playing
+                if (playing) enterBrowserPictureInPicture(tab, true)
             }
         }
     }
@@ -7389,6 +7409,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
 
     override fun onResume() {
         super.onResume()
+        pipLeaveRequestId++
         resumePendingGeckoDataClearTab()
         applyGeckoImageBehavior { applied ->
             if (!applied) toast("Could not update GeckoView image-loading settings")

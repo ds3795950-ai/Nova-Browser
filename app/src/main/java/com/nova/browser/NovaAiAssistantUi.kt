@@ -68,6 +68,14 @@ private object NovaAiModelCatalog {
 /** Extracts assistant text and source links from the Perplexity Agent API response envelope. */
 internal object NovaAiResponsePolicy {
     fun extractAgentText(response: JSONObject): String {
+        val status = response.optString("status")
+        if (status.isNotBlank() && status != "completed") {
+            error("Perplexity Agent run did not complete: $status")
+        }
+        if (response.optBoolean("incomplete", false) ||
+            (response.has("incomplete_details") && !response.isNull("incomplete_details"))) {
+            error("Perplexity Agent returned an incomplete answer; retry the request")
+        }
         val output = response.optJSONArray("output") ?: return ""
         val answer = mutableListOf<String>()
         val sources = linkedSetOf<String>()
@@ -824,8 +832,10 @@ internal class NovaAiAssistantUi(
     private fun summarise() {
         status.text = "Preparing page summary…"
         val requestGeneration = conversationGeneration
+        val requestProvider = provider
         requestPageText { page ->
-            if (requestGeneration != conversationGeneration || dialog?.isShowing != true) return@requestPageText
+            if (requestGeneration != conversationGeneration || requestProvider != provider ||
+                dialog?.isShowing != true) return@requestPageText
             if (page.isNullOrBlank()) {
                 status.text = "No readable page found"
                 notify("Could not read the current webpage")

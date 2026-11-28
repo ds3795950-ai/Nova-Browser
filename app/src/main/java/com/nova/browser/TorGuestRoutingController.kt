@@ -148,7 +148,7 @@ internal object TorGuestRoutingController {
                     { runCatching { previous() }; runCatching { onStopped() } }
                 }
             }
-            checkStopReadiness()
+            requestStopReset()
             return
         }
         this.onStopped = onStopped
@@ -162,17 +162,26 @@ internal object TorGuestRoutingController {
         NovaBrowserVpnController.setTorRoutingStatusListener {
             mainHandler.post { checkStopReadiness() }
         }
-        NovaBrowserVpnController.setTorGuestRouting(false, 0)
+        requestStopReset()
+    }
+
+    /**
+     * Retry the disable request with a fresh request ID. A timed-out STOPPING state
+     * remains fail-closed, but a later stop() call can recover without restarting Nova.
+     */
+    private fun requestStopReset() {
+        stopTimeout?.let(mainHandler::removeCallbacks)
+        stopPoll?.let(mainHandler::removeCallbacks)
+        stopPoll = null
         stopTimeout = Runnable {
             stopTimeout = null
             stopPoll?.let(mainHandler::removeCallbacks)
             stopPoll = null
-            lastError = "Recovery required: close and reopen Nova to reset the shared GeckoView proxy safely"
-            // Never release Normal sessions without a matching reset acknowledgement. The UI
-            // exposes the recovery action instead of leaving the user with a silent spinner.
+            lastError = "Recovery required: retry Guest routing reset; Normal sessions remain paused until confirmation"
             NovaBrowserVpnController.notifyStatusChanged()
         }
         mainHandler.postDelayed(stopTimeout!!, 15_000L)
+        NovaBrowserVpnController.setTorGuestRouting(false, 0)
         checkStopReadiness()
     }
 
