@@ -209,7 +209,7 @@ val prepare1VpnAssets by tasks.registering {
                 if (globalThis.__novaTorGuestMode === true) {
                   var torPort = Number(globalThis.__novaTorSocksPort);
                   return Number.isInteger(torPort) && torPort > 0 && torPort <= 65535
-                    ? {type: "socks", host: "127.0.0.1", port: torPort, socksVersion: 5, proxyDNS: true}
+                    ? [{type: "socks", host: "127.0.0.1", port: torPort, socksVersion: 5, proxyDNS: true}, null]
                     : __novaFailClosedProxy;
                 }
                 var vpnEnabled = globalThis.__nova1VpnEnabled === true;
@@ -217,12 +217,17 @@ val prepare1VpnAssets by tasks.registering {
                 try { decision = m(details); }
                 catch (e) { return vpnEnabled ? __novaFailClosedProxy : {type: "direct"}; }
                 var enforce = function(result) {
-                  var chain = Array.isArray(result) ? result : [result];
-                  var containsDirectFallback = !result || chain.some(function(proxy) {
-                    return !proxy || proxy.type === "direct";
-                  });
+                  var chain = Array.isArray(result) ? result.slice() : [result];
+                  var containsDirectFallback = !result || chain.length === 0 || !chain[0] ||
+                    chain.some(function(proxy, index) {
+                      return (proxy && proxy.type === "direct") || (!proxy && index !== chain.length - 1);
+                    });
                   if (vpnEnabled && containsDirectFallback) return __novaFailClosedProxy;
-                  return result || (vpnEnabled ? __novaFailClosedProxy : {type: "direct"});
+                  if (vpnEnabled) {
+                    if (chain[chain.length - 1] !== null) chain.push(null);
+                    return chain;
+                  }
+                  return result || {type: "direct"};
                 };
                 if (decision && typeof decision.then === "function") {
                   return decision.then(enforce, function() {

@@ -318,11 +318,15 @@ class MainActivity : ComponentActivity() {
         }
         enginePreferences = BrowserEnginePreferenceStore(prefs)
         launchIntentHandled = savedInstanceState?.getBoolean("nova_launch_intent_handled") == true
-        if (savedInstanceState != null) {
-            pendingExternalLink = prefs.getString("pending_external_link_url", null)
-            pendingExternalLinkGuest = if (prefs.contains("pending_external_link_guest")) {
-                prefs.getBoolean("pending_external_link_guest", false)
-            } else null
+        pendingExternalLink = prefs.getString("pending_external_link_url", null)?.takeIf {
+            it.startsWith("https://", true) || it.startsWith("http://", true)
+        }
+        pendingExternalLinkGuest = if (pendingExternalLink != null && prefs.contains("pending_external_link_guest")) {
+            prefs.getBoolean("pending_external_link_guest", false)
+        } else null
+        if (pendingExternalLink == null) {
+            prefs.edit().remove("pending_external_link_token")
+                .remove("pending_external_link_url").remove("pending_external_link_guest").apply()
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -2059,8 +2063,13 @@ class MainActivity : ComponentActivity() {
         aiPageText.remove(tab.id)
         aiPageUrl.remove(tab.id)
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
-            (tab.browserEngine as? CefriumBrowserEngine)?.serializeNavigationState()?.let { rawState ->
-                tab.cefriumNavigationState = CefriumTabStateCipher.encrypt(rawState, enginePreferences.cefriumProfileName())
+            // A paused navigation has already replaced lastUrl and cleared the old
+            // snapshot. Do not serialize the still-live old page over that destination.
+            val pendingDestination = tab.needsReload && tab.cefriumNavigationState == null
+            if (!pendingDestination) {
+                (tab.browserEngine as? CefriumBrowserEngine)?.serializeNavigationState()?.let { rawState ->
+                    tab.cefriumNavigationState = CefriumTabStateCipher.encrypt(rawState, enginePreferences.cefriumProfileName())
+                }
             }
         }
         val engine = tab.browserEngine
@@ -2184,9 +2193,18 @@ class MainActivity : ComponentActivity() {
      */
     private fun applyVpnRoutingReadiness() {
         if (!::browserPane.isInitialized) return
-        if (guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()) {
-            // This retry is policy-gated: Guest-owned links remain Guest-only and cannot
-            // fall through to a Normal/Private tab while Tor owns the shared runtime.
+        if (guestTorStartPending) {
+            retryPendingExternalLink()
+            return
+        }
+        if (TorGuestRoutingController.blocksNormalGeckoSessions()) {
+            val activeGuestTab = currentTab()?.takeIf { it.isGuest }
+            if (activeGuestTab != null && TorGuestRoutingController.isReady() &&
+                (!NovaBrowserVpnController.isVpnEnabled() || NovaBrowserVpnController.isVpnRoutingReady()) &&
+                activeGuestTab.needsReload) {
+                loadTabUrl(activeGuestTab, activeGuestTab.lastUrl)
+            }
+            // Guest-owned links remain Guest-only; non-Guest tabs and engines stay paused.
             retryPendingExternalLink()
             return
         }
@@ -5191,7 +5209,9 @@ class MainActivity : ComponentActivity() {
                                 if (!parent || parent.closest(excluded)) continue;
                                 let element = parent;
                                 let visible = true;
-                                while (element && root.contains(element)) {
+                                // Inspect ancestors above the selected article too; a hidden
+                                // wrapper can make the entire article invisible while retaining layout.
+                                while (element) {
                                   const style = getComputedStyle(element);
                                   if (style.display === 'none' || style.visibility === 'hidden' ||
                                       style.visibility === 'collapse' || Number(style.opacity) === 0) {
@@ -5202,7 +5222,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 if (visible && parent.getClientRects().length > 0) parts.push(node.nodeValue || '');
                               }
-                              const text = parts.join(' ').replace(/\\s+/g, ' ').trim().slice(0, 24000);
+                              const text = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 24000);
                               return JSON.stringify({ url: location.href, text });
                             })()
                         """.trimIndent()

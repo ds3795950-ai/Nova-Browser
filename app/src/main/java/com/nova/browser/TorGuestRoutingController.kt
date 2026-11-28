@@ -141,11 +141,17 @@ internal object TorGuestRoutingController {
             onStopped?.invoke()
             return
         }
-        this.onStopped = onStopped
         if (state == State.STOPPING) {
+            if (onStopped != null) {
+                val previous = this.onStopped
+                this.onStopped = if (previous == null) onStopped else {
+                    { runCatching { previous() }; runCatching { onStopped() } }
+                }
+            }
             checkStopReadiness()
             return
         }
+        this.onStopped = onStopped
         state = State.STOPPING
         lastError = "Waiting for the proxy extension to confirm Guest Tor is disabled"
         // Keep the status listener alive while requesting the reset. Even Activity teardown
