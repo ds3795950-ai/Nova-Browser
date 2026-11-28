@@ -59,9 +59,7 @@ private object NovaAiModelCatalog {
         NovaAiProvider.GEMINI -> listOf("gemini-3.1-pro")
         NovaAiProvider.KIMI -> listOf("kimi-k2-thinking")
         NovaAiProvider.DEEPSEEK -> listOf("deepseek-reasoner")
-        NovaAiProvider.PERPLEXITY -> listOf(
-            "perplexity/sonar-pro", "perplexity/sonar-reasoning-pro", "perplexity/sonar-deep-research"
-        )
+        NovaAiProvider.PERPLEXITY -> emptyList()
     }
 }
 
@@ -355,7 +353,7 @@ internal object NovaAiApi {
                 }
                 NovaAiProvider.PERPLEXITY->{
                     val input=JSONArray()
-                    recent.forEach{input.put(JSONObject().put("role",it.role).put("content",it.text))}
+                    recent.forEach{input.put(JSONObject().put("type","message").put("role",it.role).put("content",it.text))}
                     val response=call(
                         "POST",
                         "https://api.perplexity.ai/v1/agent",

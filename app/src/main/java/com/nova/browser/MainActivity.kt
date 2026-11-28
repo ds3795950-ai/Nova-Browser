@@ -4124,8 +4124,13 @@ class MainActivity : ComponentActivity() {
     private fun persistTabs() {
         val normalTabs = tabs.filter { !it.isPrivate && !it.isGuest }
         normalTabs.forEach { tab ->
-            (tab.browserEngine as? CefriumBrowserEngine)?.serializeNavigationState()?.let { rawState ->
-                tab.cefriumNavigationState = CefriumTabStateCipher.encrypt(rawState, enginePreferences.cefriumProfileName())
+            // A blocked navigation may have set lastUrl to its requested destination.
+            // Never replace that pending destination with a snapshot of the old live page.
+            val pendingDestination = tab.needsReload && tab.cefriumNavigationState == null
+            if (!pendingDestination) {
+                (tab.browserEngine as? CefriumBrowserEngine)?.serializeNavigationState()?.let { rawState ->
+                    tab.cefriumNavigationState = CefriumTabStateCipher.encrypt(rawState, enginePreferences.cefriumProfileName())
+                }
             }
         }
         val saved = JSONArray()
