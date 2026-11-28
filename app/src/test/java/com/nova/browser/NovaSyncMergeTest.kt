@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NovaSyncMergeTest {
-    @Test fun newCloudBundleKeepsBrowserAndVaultInOneEnvelope() {
+    @Test fun previouslyBundledSnapshotsRemainReadableForMigration() {
         val browser = JSONObject().put("bookmarks", JSONArray().put(JSONObject().put("url", "https://nova.example")))
         val vault = JSONObject().put("credentials", JSONArray().put(JSONObject().put("origin", "https://nova.example")))
         val packed = NovaCloudBundle.pack(browser, vault)

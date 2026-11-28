@@ -262,7 +262,7 @@ class NovaCloudSync(context: Context) {
         val token = session.getString("access_token")
         val snapshot = fetchRow("nova_sync_state", "snapshot", userId, token)
         // Always read the legacy vault row as well. Older clients may still update it
-        // independently; merge that payload before the next atomic bundle write.
+        // independently; merge that payload before the next transactional sync write.
         val legacyVault = fetchRow("nova_encrypted_vault", "payload", userId, token)
         val unpacked = NovaCloudBundle.unpack(snapshot, legacyVault)
         val payloads = buildList {
