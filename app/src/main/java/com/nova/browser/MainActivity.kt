@@ -1917,10 +1917,22 @@ class MainActivity : ComponentActivity() {
                     tab.cefriumNavigationState = null
                     return@post
                 }
-                val latestSelection = engineSelectionForTab(tab, destination)
-                if (latestSelection.engine == BrowserEngineType.CEFRIUM) return@post
                 val wasActive = currentTab()?.id == tab.id
                 val wasSecondary = splitTabId == tab.id
+                val latestSelection = engineSelectionForTab(tab, destination)
+                if (latestSelection.engine == BrowserEngineType.CEFRIUM) {
+                    // Engine preferences may change while this handoff is queued. Keep the
+                    // requested destination and complete it in Cefrium rather than dropping it.
+                    tab.engineType = BrowserEngineType.CEFRIUM
+                    tab.lastUrl = destination
+                    tab.cefriumNavigationState = null
+                    tab.needsReload = destination != HOME_URL
+                    tab.engineFallbackReason = null
+                    persistTabs()
+                    if (wasActive) activateTab(tab)
+                    else if (wasSecondary) loadSecondaryTabUrl(tab, destination)
+                    return@post
+                }
                 closeTabRuntime(tab)
                 tab.engineType = latestSelection.engine
                 tab.lastUrl = destination
@@ -2155,12 +2167,20 @@ class MainActivity : ComponentActivity() {
      */
     private fun applyVpnRoutingReadiness() {
         if (!::browserPane.isInitialized) return
-        if (guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()) return
+        if (guestTorStartPending || TorGuestRoutingController.blocksNormalGeckoSessions()) {
+            // This retry is policy-gated: Guest-owned links remain Guest-only and cannot
+            // fall through to a Normal/Private tab while Tor owns the shared runtime.
+            retryPendingExternalLink()
+            return
+        }
         if (GuestTorIsolationPolicy.shouldDeferTabRestore(
                 guestStartPending = guestTorStartPending,
                 activeTabIsGuest = currentTab()?.isGuest == true,
                 torReady = TorGuestRoutingController.isReady()
-            )) return
+            )) {
+            retryPendingExternalLink()
+            return
+        }
         if (!NovaBrowserVpnController.isVpnEnabled()) {
             if (tabs.isNotEmpty() && (currentTab()?.needsReload == true || currentTab()?.browserEngine == null)) {
                 switchTab(activeIndex.coerceIn(tabs.indices))
@@ -3100,11 +3120,12 @@ class MainActivity : ComponentActivity() {
                 if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                         NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
                     )) {
-                    tab.lastUrl = request.uri
-                    tab.needsReload = request.uri != HOME_URL
+                    // GeckoView's LoadRequest does not expose the HTTP method or body.
+                    // Do not replay an unknown request as a URL-only GET: that could silently
+                    // change a blocked form submission into a different request.
                     runOnUiThread {
                         applyVpnRoutingReadiness()
-                        if (currentTab()?.id == tab.id) setPageStatus("1VPN is not ready · navigation paused until protected routing is restored", 1)
+                        if (currentTab()?.id == tab.id) setPageStatus("1VPN is not ready · this request was blocked; retry after protected routing is restored", 1)
                     }
                     return GeckoResult.deny()
                 }
@@ -3615,7 +3636,15 @@ class MainActivity : ComponentActivity() {
 
 
     private fun loadSecondaryTabUrl(tab: BrowserTab, url: String) {
-        if (!canUseTabEngine(tab, "Split-screen navigation")) return
+        if (!canUseTabEngine(tab, "Split-screen navigation")) {
+            if (url != HOME_URL) {
+                tab.lastUrl = url
+                tab.needsReload = true
+                tab.cefriumNavigationState = null
+                if (!tab.isPrivate && !tab.isGuest) persistTabs()
+            }
+            return
+        }
         if (!selectEngineForNavigation(tab, url)) return
         val engine = ensureBrowserEngine(tab)
         if (engine.type == BrowserEngineType.GECKOVIEW) engine.attachTo(secondaryBrowserView)
@@ -4470,7 +4499,9 @@ class MainActivity : ComponentActivity() {
             .setItems(entries.map { "${it.title}\n${it.url}" }.toTypedArray()) { _, position ->
                 val entry = entries.getOrNull(position) ?: return@setItems
                 if (createTab(false, entry.url)) {
-                    writeRecentlyClosedTabs(RecentlyClosedTabsPolicy.remove(entries, entry.id))
+                    // Re-read the current list: another close/clear action may have changed it
+                    // since this dialog was opened.
+                    writeRecentlyClosedTabs(RecentlyClosedTabsPolicy.remove(readRecentlyClosedTabs(), entry.id))
                     toast("Tab restored")
                 } else {
                     toast("Tab could not be restored while protected routing or Guest Mode is active")
@@ -5145,8 +5176,11 @@ class MainActivity : ComponentActivity() {
                                     val payload = if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
                                     val pageUrl = payload.optString("url")
                                     val text = payload.optString("text").take(24000)
-                                    if (text.isNotBlank() && sameDocumentUrl(expectedUrl, pageUrl) &&
-                                        sameDocumentUrl(active.lastUrl, pageUrl) && currentTab()?.id == active.id) {
+                                    // Compare the complete URL, including fragments. Hash-route
+                                    // changes can represent a different document view even when the
+                                    // origin/path/query remain unchanged.
+                                    if (text.isNotBlank() && expectedUrl == pageUrl &&
+                                        active.lastUrl == pageUrl && currentTab()?.id == active.id) {
                                         aiPageText[active.id] = text
                                         aiPageUrl[active.id] = pageUrl
                                         text
@@ -6549,6 +6583,7 @@ private fun showQuickSettings() {
             .putLong("history_cleared_at", System.currentTimeMillis())
             .remove("history")
             .remove("history_v2")
+            .remove("nova_recently_closed_tabs")
             .apply()
     }
 
