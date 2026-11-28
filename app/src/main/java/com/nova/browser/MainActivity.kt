@@ -98,6 +98,7 @@ import com.nova.browser.engine.EngineSelectionRequest
 import com.nova.browser.engine.EngineSelectionPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.CefriumSitePermissionPolicy
+import com.nova.browser.engine.CefriumTrackingProtectionPolicy
 import com.nova.browser.engine.GeckoViewBrowserEngine
 import com.nova.browser.engine.NovaScriptAddonStore
 
