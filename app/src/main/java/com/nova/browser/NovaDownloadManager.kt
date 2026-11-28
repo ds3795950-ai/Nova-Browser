@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.StatFs
 import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -57,6 +58,49 @@ class NovaDownloadManager(
     private val records = LinkedHashMap<String, Item>()
 
     init { loadRecords() }
+
+    data class PublishedFile(val name: String, val mimeType: String, val uri: Uri, val size: Long, val modifiedAt: Long)
+
+    fun publishedFiles(): List<PublishedFile> {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val relativePath = Environment.DIRECTORY_DOWNLOADS + "/Nova/${storageNamespace}/"
+            val legacyCefriumPath = Environment.DIRECTORY_DOWNLOADS + "/Nova/"
+            val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME,
+                MediaStore.Downloads.MIME_TYPE, MediaStore.Downloads.SIZE, MediaStore.Downloads.DATE_MODIFIED)
+            val selection = if (storageNamespace == "cefrium") {
+                "(${MediaStore.Downloads.RELATIVE_PATH} = ? OR ${MediaStore.Downloads.RELATIVE_PATH} = ?) AND ${MediaStore.Downloads.IS_PENDING} = 0"
+            } else {
+                "${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.IS_PENDING} = 0"
+            }
+            val selectionArgs = if (storageNamespace == "cefrium") arrayOf(relativePath, legacyCefriumPath) else arrayOf(relativePath)
+            return runCatching {
+                context.contentResolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection,
+                    selection,
+                    selectionArgs, "${MediaStore.Downloads.DATE_MODIFIED} DESC"
+                )?.use { cursor ->
+                    buildList {
+                        val idCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+                        val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME)
+                        val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.MIME_TYPE)
+                        val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.SIZE)
+                        val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.DATE_MODIFIED)
+                        while (cursor.moveToNext()) {
+                            val id = cursor.getLong(idCol)
+                            add(PublishedFile(cursor.getString(nameCol) ?: "Downloaded file",
+                                cursor.getString(mimeCol) ?: "application/octet-stream",
+                                Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString()),
+                                cursor.getLong(sizeCol), cursor.getLong(dateCol)))
+                        }
+                    }
+                } ?: emptyList()
+            }.getOrDefault(emptyList())
+        }
+        val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+        return directory.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() }?.map {
+            PublishedFile(it.name, "application/octet-stream", Uri.fromFile(it), it.length(), it.lastModified() / 1000L)
+        } ?: emptyList()
+    }
 
     fun setOnChangedListener(listener: ((List<Item>) -> Unit)?) { changed = listener }
 
@@ -218,6 +262,54 @@ class NovaDownloadManager(
             val etag = connection.getHeaderField("ETag") ?: if (restartedFromZero || offset == 0L) null else worker.item.etag
             val modified = connection.getHeaderField("Last-Modified") ?: if (restartedFromZero || offset == 0L) null else worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
+            if (length > 0L) {
+                val margin = 8L * 1024L * 1024L
+                val partialDirectory = part.parentFile ?: context.filesDir
+                val downloadsDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val destinationDirectory = downloadsDirectory.takeIf { it.exists() } ?: Environment.getExternalStorageDirectory()
+                val partialAvailable = runCatching { StatFs(partialDirectory.absolutePath).availableBytes }.getOrDefault(0L)
+                val destinationAvailable = runCatching { StatFs(destinationDirectory.absolutePath).availableBytes }.getOrDefault(0L)
+                val partialStore = runCatching { java.nio.file.Files.getFileStore(partialDirectory.toPath()) }.getOrNull()
+                val destinationStore = runCatching { java.nio.file.Files.getFileStore(destinationDirectory.toPath()) }.getOrNull()
+                // If the store cannot be identified, assume both paths share storage and use the
+                // conservative combined requirement rather than risk a failed MediaStore copy.
+                val sameStore: Boolean? = if (partialStore != null && destinationStore != null) {
+                    partialStore == destinationStore
+                } else null
+                val partialBytes = part.length().coerceAtLeast(0L)
+                if (length > Long.MAX_VALUE - partialBytes) {
+                    throw IllegalStateException("The server declared an invalid download size")
+                }
+                val completedBytes = partialBytes + length
+                if (completedBytes > Long.MAX_VALUE - margin || length > Long.MAX_VALUE - margin) {
+                    throw IllegalStateException("The server declared an invalid download size")
+                }
+                val destinationRequired = completedBytes + margin
+                when (sameStore) {
+                    true -> {
+                        if (length > Long.MAX_VALUE - destinationRequired ||
+                            partialAvailable < length + destinationRequired
+                        ) {
+                            throw IllegalStateException("Not enough free storage to finish and publish this download")
+                        }
+                    }
+                    false -> {
+                        if (partialAvailable < length + margin || destinationAvailable < destinationRequired) {
+                            throw IllegalStateException("Not enough free storage to finish and publish this download")
+                        }
+                    }
+                    null -> {
+                        // Android may deny filesystem identity inspection. Use the conservative
+                        // combined-space requirement and also verify the publish destination.
+                        if (length > Long.MAX_VALUE - destinationRequired ||
+                            partialAvailable < length + destinationRequired ||
+                            destinationAvailable < destinationRequired
+                        ) {
+                            throw IllegalStateException("Not enough free storage to finish and publish this download")
+                        }
+                    }
+                }
+            }
             val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 && validator != null
             val total = when {
                 contentRange?.total != null -> contentRange.total

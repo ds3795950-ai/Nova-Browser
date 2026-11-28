@@ -1,6 +1,9 @@
 package com.nova.browser
 
 import androidx.activity.ComponentActivity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
@@ -14,6 +17,7 @@ import android.app.Dialog
 import android.text.Editable
 import android.text.TextWatcher
 import java.text.SimpleDateFormat
+import java.io.File
 import java.util.Date
 import java.util.Locale
 import org.mozilla.geckoview.GeckoResult
@@ -37,6 +41,7 @@ import android.content.res.Configuration
 import android.view.ViewGroup
 import android.graphics.Typeface
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.ColorDrawable
@@ -164,6 +169,7 @@ class MainActivity : ComponentActivity() {
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
     private var guestTorStartPending: Boolean = false
+    @Volatile private var guestModeEpoch: Long = 0L
     private val guestContextCleanupLock = Any()
 
     private fun guestTorReservesGeckoRuntime(): Boolean =
@@ -1268,6 +1274,13 @@ class MainActivity : ComponentActivity() {
             if (!tab.isPrivate) actions += getString(R.string.downloads) to { showDownloads() }
             actions += getString(if (tab.isLoading) R.string.stop_loading else R.string.reload_page) to { toggleStopReload() }
             actions += getString(R.string.find_in_page) to { showFindBar() }
+            actions += "Print / Save as PDF" to { printCurrentPage() }
+            val shortcutUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+            if (!tab.isPrivate && !tab.isGuest &&
+                (shortcutUrl.startsWith("https://") || shortcutUrl.startsWith("http://"))
+            ) {
+                actions += "Add to Home screen" to { addCurrentSiteToHomeScreen() }
+            }
             actions += getString(if (tab.desktopSite) R.string.mobile_site else R.string.desktop_site) to { toggleDesktopSite() }
             actions += getString(if (tab.readerOriginalUrl != null) R.string.exit_reader_mode else R.string.reader_mode) to { if (tab.readerOriginalUrl != null) exitReaderMode() else openReaderMode() }
             actions += getString(R.string.translate_page) to { translatePage() }
@@ -1386,6 +1399,8 @@ class MainActivity : ComponentActivity() {
             toast("Close Private tabs before starting Guest Mode. Guest Tor uses GeckoView's shared network proxy.")
             return
         }
+        // Invalidate pending Normal-profile Downloads folder results as soon as Guest is requested.
+        guestModeEpoch++
         if (splitTabId != null) exitSplitScreen()
         // GeckoView's proxy extension is runtime-wide rather than per-session. Suspend
         // every persistent Normal engine session before enabling Guest Tor, including
@@ -4845,7 +4860,6 @@ class MainActivity : ComponentActivity() {
         }
         val manager = downloadsFor(tab)
         downloadsItems = manager.items()
-        if (downloadsItems.isEmpty()) { downloadPrompt(); return }
         val listView = ListView(this)
         val emptyView = TextView(this).apply { text = getString(R.string.no_downloads); gravity = Gravity.CENTER; setPadding(dp(16), dp(24), dp(16), dp(24)) }
         val adapter = object : android.widget.BaseAdapter() {
@@ -4883,7 +4897,25 @@ class MainActivity : ComponentActivity() {
         downloadsAdapter = adapter
         listView.adapter = adapter
         listView.emptyView = emptyView
-        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(emptyView, LinearLayout.LayoutParams(-1, 0, 1f)); addView(listView, LinearLayout.LayoutParams(-1, 0, 1f)) }
+        val downloadActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            addView(Button(this@MainActivity).apply {
+                text = "Browse Nova folder"
+                setOnClickListener { openNovaDownloadsFolder(manager, tab) }
+            })
+            addView(Button(this@MainActivity).apply {
+                text = "Clear completed"
+                setOnClickListener { clearCompletedDownloads(manager) }
+            })
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(downloadActions, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(emptyView, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(listView, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
         listView.setOnItemClickListener { _, _, which, _ -> downloadsItems.getOrNull(which)?.let { showDownloadActions(it, manager) } }
         val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.downloads_count, downloadsItems.size)).setView(container)
             .setPositiveButton(getString(R.string.new_download), null)
@@ -4904,7 +4936,12 @@ class MainActivity : ComponentActivity() {
             "PAUSED" -> listOf(getString(R.string.resume) to { manager.resume(item.id) }, getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
             "QUEUED" -> listOf(getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
             "FINALIZING", "SAVING" -> listOf(getString(R.string.close) to { })
-            "COMPLETE" -> listOf(getString(R.string.open_download) to { openDownloadedFile(item) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
+            "COMPLETE" -> listOf(
+                getString(R.string.open_download) to { openDownloadedFile(item) },
+                "Share file" to { shareDownloadedFile(item) },
+                getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) },
+                "Delete file" to { deleteDownloadedFile(item, manager) }
+            )
             "INTERRUPTED" -> if (item.url.isNotBlank()) listOf(getString(R.string.resume) to { manager.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
             else -> if (item.url.isNotBlank()) listOf(getString(R.string.retry_download) to { manager.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
         }
@@ -5199,6 +5236,369 @@ class MainActivity : ComponentActivity() {
                 prefs.edit().putString("search_engine", searchEngine).apply()
                 dialog.dismiss(); toast("$searchEngine selected")
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun addCurrentSiteToHomeScreen() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Home-screen shortcuts are unavailable in Private and Guest Mode")
+            return
+        }
+        val url = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+        val uri = runCatching { Uri.parse(url) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase()
+        val host = uri?.host?.takeIf { !it.isBlank() }
+        if (scheme !in setOf("http", "https") || host == null) {
+            toast("Open a website before adding a shortcut")
+            return
+        }
+        if (!ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
+            toast("This launcher does not support pinned shortcuts")
+            return
+        }
+
+        // PWA manifest metadata is an enhancement only: unsupported engines or pages without
+        // a valid same-origin manifest still get a regular Nova website shortcut.
+        val fallbackTitle = tab.title.trim().ifBlank { host }.take(40)
+        // PWA metadata uses HttpURLConnection, outside the browser engine's proxy.
+        // Do not start those direct requests while Guest Tor or 1VPN is requested.
+        if (!pwaMetadataNetworkAllowed(tab, url)) {
+            pinWebsiteShortcut(uri, host, url, fallbackTitle, null)
+            return
+        }
+        val engine = tab.browserEngine as? CefriumBrowserEngine
+        if (tab.engineType == BrowserEngineType.CEFRIUM && engine != null) {
+            runCatching { engine.evaluateJavaScript(PWA_MANIFEST_LINK_SCRIPT) { raw ->
+                if (!pwaMetadataNetworkAllowed(tab, url)) {
+                    runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
+                    return@evaluateJavaScript
+                }
+                val manifestUrl = parsePwaManifestUrl(raw, uri)
+                if (manifestUrl == null) {
+                    runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
+                } else {
+                    Thread {
+                        val metadata = fetchPwaShortcutMetadata(manifestUrl, uri) { pwaMetadataNetworkAllowed(tab, url) }
+                        runOnUiThread {
+                            val launchUri = metadata.first
+                            val title = metadata.second.ifBlank { fallbackTitle }
+                            pinWebsiteShortcut(launchUri, host, url, title, metadata.third)
+                        }
+                    }.start()
+                }
+            } }.onFailure { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
+        } else {
+            pinWebsiteShortcut(uri, host, url, fallbackTitle, null)
+        }
+    }
+
+    private fun pwaMetadataNetworkAllowed(tab: BrowserTab, expectedUrl: String): Boolean {
+        val currentPageUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+        return !isFinishing && !isDestroyed &&
+            currentPageUrl == expectedUrl && tab.engineType == BrowserEngineType.CEFRIUM &&
+            tab.browserEngine is CefriumBrowserEngine && !tab.isPrivate && !tab.isGuest &&
+            !guestTorReservesGeckoRuntime() && !NovaBrowserVpnController.isVpnEnabled()
+    }
+
+    private fun isSamePwaOrigin(candidate: java.net.URL, page: java.net.URL): Boolean {
+        fun effectivePort(url: java.net.URL): Int = if (url.port == -1) url.defaultPort else url.port
+        return candidate.protocol.equals(page.protocol, ignoreCase = true) &&
+            candidate.host.equals(page.host, ignoreCase = true) &&
+            effectivePort(candidate) == effectivePort(page)
+    }
+
+    private fun parsePwaManifestUrl(raw: String?, pageUri: Uri): java.net.URL? {
+        if (raw.isNullOrBlank()) return null
+        return runCatching {
+            val decoded = org.json.JSONTokener(raw).nextValue()
+            val payload = if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+            val href = payload.optString("manifestUrl")
+            if (href.isBlank()) return null
+            val page = java.net.URL(pageUri.toString())
+            val manifest = java.net.URL(page, href)
+            manifest.takeIf { it.protocol in setOf("http", "https") && isSamePwaOrigin(it, page) }
+        }.getOrNull()
+    }
+
+    private fun readPwaResource(
+        url: java.net.URL,
+        maxBytes: Int,
+        acceptPrefix: String? = null,
+        networkAllowed: () -> Boolean
+    ): ByteArray? {
+        if (!networkAllowed()) return null
+        val connection = (url.openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 5000
+            readTimeout = 5000
+            instanceFollowRedirects = false
+        }
+        return try {
+            if (connection.responseCode !in 200..299 || !networkAllowed()) return null
+            if (acceptPrefix != null && !connection.contentType.orEmpty().startsWith(acceptPrefix)) return null
+            val declared = connection.getHeaderFieldLong("Content-Length", -1L)
+            if (declared > maxBytes) return null
+            connection.inputStream.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    if (!networkAllowed()) return null
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > maxBytes) return null
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun fetchPwaShortcutMetadata(
+        manifestUrl: java.net.URL,
+        pageUri: Uri,
+        networkAllowed: () -> Boolean
+    ): Triple<Uri, String, Bitmap?> {
+        val fallback = Triple(Uri.parse(pageUri.toString()), "", null)
+        return runCatching {
+            val deadlineNanos = System.nanoTime() + 12_000_000_000L
+            val canContinue = { networkAllowed() && System.nanoTime() < deadlineNanos }
+            if (!canContinue()) return@runCatching fallback
+            val bytes = readPwaResource(manifestUrl, 256 * 1024, networkAllowed = canContinue)
+                ?: return@runCatching fallback
+            val manifest = JSONObject(String(bytes, Charsets.UTF_8))
+            val page = java.net.URL(pageUri.toString())
+            fun sameOrigin(value: String): java.net.URL? = runCatching {
+                java.net.URL(manifestUrl, value).takeIf {
+                    it.protocol in setOf("http", "https") && isSamePwaOrigin(it, page)
+                }
+            }.getOrNull()
+            val requestedStart = manifest.optString("start_url").takeIf { it.isNotBlank() }?.let(::sameOrigin) ?: page
+            val scope = manifest.optString("scope").takeIf { it.isNotBlank() }?.let(::sameOrigin)
+                ?: runCatching { java.net.URL(requestedStart, ".") }.getOrNull()
+            val start = requestedStart.takeIf { scope == null || it.path.startsWith(scope.path) } ?: page
+            val icons = manifest.optJSONArray("icons")
+            var bitmap: Bitmap? = null
+            if (icons != null) {
+                val candidates = (0 until icons.length()).mapNotNull { index ->
+                    icons.optJSONObject(index)?.let { it.optString("src") to it.optString("sizes") }
+                }.sortedByDescending { (_, sizes) -> if (sizes.contains("192")) 2 else if (sizes == "any") 1 else 0 }
+                for ((src, _) in candidates.take(4)) {
+                    if (!canContinue()) break
+                    val iconUrl = sameOrigin(src) ?: continue
+                    val iconBytes = readPwaResource(iconUrl, 512 * 1024, "image/", canContinue) ?: continue
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, bounds)
+                    if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 8192 || bounds.outHeight > 8192) continue
+                    val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 512)
+                    bitmap = BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                    if (bitmap != null) break
+                }
+            }
+            val title = manifest.optString("short_name").ifBlank { manifest.optString("name") }.take(40)
+            Triple(Uri.parse(start.toString()), title, bitmap)
+        }.getOrDefault(fallback)
+    }
+
+    private fun pinWebsiteShortcut(
+        launchUri: Uri,
+        host: String,
+        originalUrl: String,
+        title: String,
+        icon: Bitmap?
+    ) {
+        val shortcut = ShortcutInfoCompat.Builder(this, "nova-site-${Uri.encode(host).take(32)}-${originalUrl.hashCode()}")
+            .setShortLabel(title.take(25))
+            .setLongLabel(title)
+            .setIcon(if (icon != null) IconCompat.createWithBitmap(icon) else IconCompat.createWithResource(this, R.mipmap.ic_nova_launcher))
+            .setIntent(Intent(Intent.ACTION_VIEW, launchUri, this, MainActivity::class.java).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            })
+            .build()
+        val requested = runCatching { ShortcutManagerCompat.requestPinShortcut(this, shortcut, null) }.getOrDefault(false)
+        toast(if (requested) "Home-screen shortcut request sent" else "Could not create the home-screen shortcut")
+    }
+
+    private fun openNovaDownloadsFolder(manager: NovaDownloadManager, sourceTab: BrowserTab) {
+        val requestEpoch = guestModeEpoch
+        val sourceTabId = sourceTab.id
+        val sourceEngine = sourceTab.engineType
+        fun sourceContextStillEligible(): Boolean =
+            guestModeEpoch == requestEpoch && !guestTorStartPending &&
+                !TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                tabs.any { it.id == sourceTabId && !it.isPrivate && !it.isGuest && it.engineType == sourceEngine } &&
+                currentTab()?.isGuest != true
+
+        Thread({
+            val files = manager.publishedFiles()
+            val labels = files.map { file -> "${file.name}\n${NovaDownloadManager.formatBytes(file.size)}" }.toTypedArray()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (!sourceContextStillEligible()) {
+                    toast("Downloads are hidden while Guest Mode is active or the original tab is no longer available")
+                    return@runOnUiThread
+                }
+                if (files.isEmpty()) {
+                    AlertDialog.Builder(this).setTitle("Nova Downloads folder")
+                        .setMessage("This engine's Nova Downloads folder is empty. Completed files saved by this engine will appear here.")
+                        .setPositiveButton(getString(R.string.close), null).show()
+                    return@runOnUiThread
+                }
+                AlertDialog.Builder(this).setTitle("Nova Downloads folder")
+                    .setItems(labels) { _, which ->
+                        if (!sourceContextStillEligible()) {
+                            toast("Downloads are unavailable in Guest Mode")
+                            return@setItems
+                        }
+                        val file = files.getOrNull(which) ?: return@setItems
+                        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.mimeType).apply {
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        runCatching { startActivity(intent) }
+                            .onFailure { toast("No app can open this file: ${it.localizedMessage ?: "Unknown error"}") }
+                    }
+                    .setNegativeButton(getString(R.string.close), null).show()
+            }
+        }, "NovaDownloadsBrowse").start()
+    }
+
+
+    private fun printCurrentPage() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Printing is disabled in Private and Guest Mode to avoid saving session content outside the profile")
+            return
+        }
+        if (tab.lastUrl == HOME_URL) {
+            toast("Open a webpage before printing")
+            return
+        }
+        if (!canUseTabEngine(tab, "Print")) return
+        val title = tab.title.trim().ifBlank { "Nova webpage" }.take(80)
+        val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
+        if (printManager == null) {
+            toast("Android printing is unavailable on this device")
+            return
+        }
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            val engine = runCatching { ensureBrowserEngine(tab) as? CefriumBrowserEngine }.getOrNull()
+            if (engine == null) {
+                toast("This Cefrium page cannot be printed right now")
+                return
+            }
+            runCatching {
+                checkNotNull(printManager.print(
+                    title,
+                    engine.createPrintDocumentAdapter(title),
+                    android.print.PrintAttributes.Builder().build()
+                )) { "Android could not start the print dialog" }
+            }.onFailure { toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}") }
+            return
+        }
+        val session = tab.session
+        if (session == null) {
+            toast("This GeckoView page is not ready to print")
+            return
+        }
+        session.saveAsPdf().accept({ input ->
+            val pdf = File(cacheDir, "nova-print-${UUID.randomUUID()}.pdf")
+            Thread({
+                val saved = runCatching {
+                    val source = input ?: throw IllegalStateException("PDF stream is empty")
+                    source.use { stream -> pdf.outputStream().use { output -> stream.copyTo(output) } }
+                    pdf.isFile && pdf.length() > 0L
+                }.getOrDefault(false)
+                runOnUiThread {
+                    if (!saved) {
+                        pdf.delete()
+                        toast("Nova could not create a PDF for this page")
+                        return@runOnUiThread
+                    }
+                    runCatching {
+                        checkNotNull(printManager.print(title, NovaPdfPrintAdapter(pdf), android.print.PrintAttributes.Builder().build())) {
+                            "Android could not start the print dialog"
+                        }
+                    }.onFailure {
+                        pdf.delete()
+                        toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}")
+                    }
+                }
+            }, "NovaPdfCopy").start()
+        }, { error ->
+            runOnUiThread { toast("This page could not be exported as PDF: ${error?.localizedMessage ?: "Unsupported page"}") }
+        })
+    }
+
+    private fun shareDownloadedFile(item: NovaDownloadManager.Item) {
+        if (item.savedUri.isBlank()) {
+            toast("Downloaded file is not available to share")
+            return
+        }
+        runCatching {
+            val uri = Uri.parse(item.savedUri)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = item.mimeType.ifBlank { "application/octet-stream" }
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = android.content.ClipData.newUri(contentResolver, item.fileName, uri)
+            }
+            startActivity(Intent.createChooser(send, "Share download"))
+        }.onFailure { toast("Could not share this download: ${it.localizedMessage ?: "Unknown error"}") }
+    }
+
+    private fun deleteDownloadedFile(item: NovaDownloadManager.Item, manager: NovaDownloadManager) {
+        if (item.savedUri.isBlank()) {
+            toast("Downloaded file location is unavailable")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Delete downloaded file?")
+            .setMessage("This permanently deletes ${item.fileName} from Android Downloads.")
+            .setNegativeButton(getString(R.string.keep), null)
+            .setPositiveButton("Delete file") { _, _ ->
+                val deleted = runCatching {
+                    contentResolver.delete(Uri.parse(item.savedUri), null, null) > 0
+                }.getOrDefault(false)
+                if (deleted) {
+                    manager.cancel(item.id)
+                    toast("Downloaded file deleted")
+                } else {
+                    toast("Android could not delete this file; it remains in Downloads")
+                }
+            }
+            .show()
+    }
+
+    private fun clearCompletedDownloads(manager: NovaDownloadManager) {
+        val completed = manager.items().filter { it.state == "COMPLETE" }
+        if (completed.isEmpty()) {
+            toast("No completed downloads to clear")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Clear completed downloads?")
+            .setMessage("Nova will delete ${completed.size} completed file(s) from Android Downloads.")
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton("Clear completed") { _, _ ->
+                var removed = 0
+                completed.forEach { item ->
+                    val deleted = item.savedUri.isNotBlank() && runCatching {
+                        contentResolver.delete(Uri.parse(item.savedUri), null, null) > 0
+                    }.getOrDefault(false)
+                    if (deleted) {
+                        manager.cancel(item.id)
+                        removed++
+                    }
+                }
+                refreshDownloadsList(manager.items())
+                toast("Deleted $removed of ${completed.size} completed file(s)")
+            }
+            .show()
     }
 
     private fun sharePage() {
@@ -7735,5 +8135,11 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private val pendingGeckoDataClearTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         @Volatile private var pendingGeckoDataClearActive = false
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
+        private const val PWA_MANIFEST_LINK_SCRIPT = """
+            (() => {
+              const link = document.querySelector('link[rel~="manifest"]');
+              return JSON.stringify({ manifestUrl: link ? link.href : '' });
+            })()
+        """
     }
 }
