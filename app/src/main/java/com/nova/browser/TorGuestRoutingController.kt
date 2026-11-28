@@ -117,6 +117,9 @@ internal object TorGuestRoutingController {
 
     fun isReady(): Boolean = state == State.READY && NovaBrowserVpnController.isTorGuestRoutingReady()
 
+    /** True while a reset acknowledgement is pending; used to expose an explicit retry action. */
+    fun isStopping(): Boolean = state == State.STOPPING
+
     /** Reserve the shared GeckoView runtime for Guest while its proxy may be in Tor mode. */
     fun blocksNormalGeckoSessions(): Boolean = state != State.STOPPED
 

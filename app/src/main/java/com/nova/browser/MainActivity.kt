@@ -444,7 +444,14 @@ class MainActivity : ComponentActivity() {
                         guestTorStartPending = false
                         if (isChangingConfigurations) return@start
                         if (tabs.any { it.isGuest }) closeGuestTabs()
-                        if (tabs.isEmpty()) createTab(false, HOME_URL) else switchTab(activeIndex)
+                        if (tabs.isEmpty()) {
+                            if (!createTab(false, HOME_URL)) {
+                                ensureHomeTabRecord()
+                                persistTabs()
+                            }
+                        } else {
+                            switchTab(activeIndex)
+                        }
                         toast("Guest Mode closed because Tor could not be verified: $reason")
                     }
                 )
@@ -468,7 +475,10 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             restoreTabs()
-            if (tabs.isEmpty()) createTab(false, HOME_URL)
+            if (tabs.isEmpty() && !createTab(false, HOME_URL)) {
+                ensureHomeTabRecord()
+                persistTabs()
+            }
             if (tabs.none { it.isGuest } && TorGuestRoutingController.blocksNormalGeckoSessions()) {
                 TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
             }
@@ -5193,14 +5203,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openOrbotTorRouting() {
-        if (currentTab()?.isGuest != true) {
+        val stopping = TorGuestRoutingController.isStopping()
+        if (currentTab()?.isGuest != true && !stopping) {
             toast("Tor status is available only in Guest Mode")
             return
         }
-        AlertDialog.Builder(this).setTitle("Nova Guest Tor · always on")
+        val dialog = AlertDialog.Builder(this).setTitle("Nova Guest Tor · always on")
             .setMessage("Guest Mode requires the embedded Tor service. Browsing is allowed only after Tor has built a circuit, the SOCKS5 proxy is active, remote DNS is enabled, and WebRTC leak protection is confirmed. If Tor or its proxy bridge stops, Guest Mode closes instead of falling back to your normal connection.\n\nStatus: ${TorGuestRoutingController.statusText()}")
-            .setPositiveButton("OK", null)
-            .show()
+        if (stopping) {
+            dialog.setPositiveButton("Retry reset") { _, _ ->
+                TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
+            }.setNegativeButton("Close", null)
+        } else {
+            dialog.setPositiveButton("OK", null)
+        }
+        dialog.show()
     }
 
     @androidx.annotation.OptIn(markerClass = [org.mozilla.geckoview.ExperimentalGeckoViewApi::class])
@@ -6506,6 +6523,15 @@ private fun showQuickSettings() {
     }
 
     private fun showSettings() {
+        if (TorGuestRoutingController.isStopping() && currentTab()?.isGuest != true) {
+            showBottomSheetMenu("Guest Tor recovery", listOf(
+                "Retry Guest routing reset" to {
+                    TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
+                },
+                "View Guest Tor status" to { openOrbotTorRouting() }
+            ), "Normal and Private tabs remain paused until Nova confirms that Guest routing is disabled.")
+            return
+        }
         if (currentTab()?.isGuest == true) {
             showBottomSheetMenu(getString(R.string.guest_settings), listOf(
                 getString(R.string.tor_routing) to { openOrbotTorRouting() },
