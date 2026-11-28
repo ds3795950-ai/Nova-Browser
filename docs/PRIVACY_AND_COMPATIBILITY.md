@@ -6,6 +6,18 @@ Normal tabs prefer Cefrium, but engine selection is capability-gated. Nova Shiel
 
 Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Browsing lists. Standard/Aggressive modes additionally enable cookie purging, private-mode query stripping and email-tracker protection; Aggressive enables strict social-tracker and fingerprinting protection. These controls block known trackers and some ad trackers, but they are **not** a complete EasyList/uBlock-style ad blocker and do not remove every ad or cosmetic page element. Safe Browsing remains active even when Shield is Off.
 
+## Cefrium Normal-tab request controls
+
+Cefrium 0.21 supports a conservative curated tracker-domain filter, image blocking for Data Saver/per-site image rules, and per-origin cookie send/store filtering for browser-owned requests. The tracker list is not a complete filter-list engine or full GeckoView Enhanced Tracking Protection.
+
+**Cookie limitation:** Cefrium 0.21 does not invoke the cookie callbacks for profile-level requests that belong to no browser, including service-worker requests and their fetches. Nova labels the Cefrium cookie control "browser requests only" and does not claim complete cookie isolation or third-party cookie partitioning. A site may still use cookies from its service worker. Do not present this setting as a comprehensive cookie-blocking guarantee.
+
+Explicit saved-login filling in Normal Cefrium tabs is manual, HTTPS-only, exact-origin and same-origin-form-action constrained, and requires device credential or biometric verification. Automatic password detection and save prompts remain GeckoView-only.
+
+## Extension scope
+
+Nova has no user-installable extension manager, user scripts or third-party add-on support. The only extension-backed components are Nova's internal 1VPN and AI Reader bridges; they are built-in browser infrastructure, not user-installable extensions.
+
 ## DNS and network routing
 
 Nova applies AdGuard DNS-over-HTTPS in strict mode to GeckoView and Cefrium browser DNS. GeckoView uses TRR_MODE_ONLY; Cefrium uses the SDK Secure DNS mode. Direct DNS lookups do not fall back to unencrypted system DNS when the configured resolver is unavailable. Cefrium component updates are disabled because the SDK documents that they use a separate system network context outside a profile proxy.
