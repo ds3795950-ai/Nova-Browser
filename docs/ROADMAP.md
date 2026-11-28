@@ -1,14 +1,16 @@
 # Nova Browser roadmap and verification status
 
-Last reconciled: 2026-11-28. This document describes the current default `main` branch unless a pull request is named explicitly.
+Last reconciled: 2026-11-28 14:08 UTC. This document describes the current default `main` branch and separately identifies work under review.
 
 ## Repository state
 
 - Default branch: `main`.
-- Current main commit: `390a7c495a75f6deabd5fc079e3964cb6168be22` — PR #25 merged, including engine-routing, Guest Tor and VPN fail-closed hardening.
-- Main-branch Android build and lint checks passed on this commit.
-- Only open PR at this reconciliation: [PR #27 — low-memory performance and device diagnostics](https://github.com/ds3795950-ai/Nova-Browser/pull/27).
-- PR #27 head `c62c281231d5f559c4f26ba30a2ae6211072080a` fixes two Android instrumentation test compile errors (`Long` metrics initialized as `Int`). The previous run's build, lint and CodeRabbit review passed; emulator instrumentation failed at Kotlin test compilation. Fresh checks after the fix are pending. Do not merge until those checks complete.
+- Current main commit: `b2caaaf8438f3c3a4c002fc797bb19743b6a4c24`. Its ancestry includes PR #25 engine-routing/Guest Tor hardening and PR #27 low-memory performance diagnostics.
+- Main-branch Android build, unit tests, lint and Android 16 emulator smoke passed on the current main commit.
+- [PR #27](https://github.com/ds3795950-ai/Nova-Browser/pull/27) is merged.
+- [PR #31 — Cefrium privacy and capability fallbacks](https://github.com/ds3795950-ai/Nova-Browser/pull/31) is open. Latest head `444afff5f0e621e7c8128d3a781202cd7e2c3b47`; the final global-image-default fallback review finding has been fixed and fresh CI/CodeRabbit validation is pending.
+- [PR #32 — atomic encrypted cloud sync](https://github.com/ds3795950-ai/Nova-Browser/pull/32) is open. It writes the browser snapshot and password vault as one CAS bundle and retains legacy two-table read compatibility; CI and CodeRabbit review are pending.
+- PR #29 remains closed because it would restore the removed user-installable add-on system.
 
 ## Engine integration and feature coverage
 
@@ -37,23 +39,27 @@ Last reconciled: 2026-11-28. This document describes the current default `main` 
 
 - Downloads use engine-specific storage namespaces and include interrupted-download recovery. Partial-file reconciliation, process-death recovery, resume responses and engine-switch behavior still need extended Android tests.
 - Cloud sync uses client-side encrypted payloads, per-engine profile separation, merge/tombstone handling and compare-and-swap conflict detection. Private and Guest data is excluded.
+- PR #32 fixes a partial-write hazard: new clients now bundle the browser snapshot and password vault into one `nova_sync_state` row and perform one CAS write. Legacy `nova_encrypted_vault` data remains readable and is merged, but new clients no longer write the legacy table.
+- Live Supabase project check (2026-11-28): project is `ACTIVE_HEALTHY`, Postgres 17.11.0.019. Both sync tables have RLS enabled; authenticated SELECT/INSERT/UPDATE/DELETE privileges are present with owner-scoped policies and UPDATE `WITH CHECK`; anon SELECT is denied. Security and performance advisors returned no lints. Each table has one updated-at trigger. Both tables currently contain zero rows, so no real account backup has yet been proven.
 - Required acceptance: restore on two real devices; wrong-passphrase behavior; concurrent edits/conflict retry; deletion propagation; sign-out and account-deletion behavior. Do not mark multi-device sync fully accepted from unit tests alone.
 
 ## Authentication and release setup
 
 **Code exists; owner-controlled setup and live acceptance remain.**
 
-- Email OTP, encrypted local session storage, token refresh and sign-out are implemented. The Supabase dashboard/template/SMTP configuration was last documented as requiring owner setup; its live state has not been rechecked in this reconciliation.
-- A verified sender domain and provider SMTP configuration may be required for reliable production OTP delivery. The project owner must validate actual delivery and expiry.
+- Email OTP, encrypted local session storage, token refresh and sign-out are implemented. The Supabase connector available for this audit could inspect database/RLS state but could not read or update Auth email-template/SMTP settings.
+- Repository setup notes record that the Magic Link template still uses `{{ .ConfirmationURL }}` rather than numeric `{{ .Token }}`, and that custom SMTP is not configured. Treat these as the last recorded settings, not a fresh live dashboard verification. A project owner must configure the numeric OTP template and verified SMTP sender, then test a real inbox and expiry.
 - Production signing requires `NOVA_RELEASE_KEYSTORE_BASE64`, `NOVA_RELEASE_STORE_PASSWORD`, `NOVA_RELEASE_KEY_ALIAS` and `NOVA_RELEASE_KEY_PASSWORD`. Do not put these secrets in source.
 - The current dual-engine ARM64 test APK was previously measured at approximately 222 MB; the under-100-MB target is not met while both native engines are bundled.
 
 ## QA and remaining acceptance
 
-- Main: Android build and lint passed on `390a7c4`.
-- PR #27: unit/build and lint passed on its previous head; CodeRabbit review completed successfully. Emulator smoke failed because `CefriumEmulatorSmokeTest.kt` initialized two `Long` PSS metrics with `Int` literals. Fixed in `c62c281`; rerun pending.
-- BrowserStack App Automate execution remains quota/credential dependent; the prior trial quota exhaustion prevented device runs. The Realme RMX5313 physical-device run has not been performed in this session.
-- Before calling Nova release-ready: pass fresh PR #27 CI; pass Android 16 emulator instrumentation; test on the target ARM64 phone; verify VPN/Tor network behavior; complete two-device sync and live OTP checks; configure production signing; review APK size and release artifact.
+- Main: Android build, unit tests, lint and Android 16 emulator smoke passed on `b2caaaf`.
+- PR #31: previous head `2b383d0` passed build/unit tests, lint and emulator smoke. Latest head `444afff` fixes the final reviewed worker-image fallback issue; fresh checks are still running.
+- PR #32: CI is running for the atomic sync change; CodeRabbit review is in progress.
+- BrowserStack home/search, settings and Guest Tor workflows were dispatched on 2026-11-28. Their results must be checked before reporting any real-device run as passed. BrowserStack UI tests do not prove network privacy.
+- The Realme RMX5313 physical-device run has not been performed in this session.
+- Before calling Nova release-ready: complete current PR checks; test on the target ARM64 phone; verify VPN/Tor IP/DNS/WebRTC/IPv6 behavior; complete two-device sync and live OTP checks; configure production signing; review APK size and release artifact.
 
 ## Scope decisions
 
