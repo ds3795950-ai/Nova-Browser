@@ -378,21 +378,23 @@ class CefriumBrowserEngine(
             (() => {
               const expectedOrigin = $originLiteral;
               if (location.origin !== expectedOrigin) return JSON.stringify({ok:false, reason:'origin-changed'});
+              const hasAutocomplete = (field, token) =>
+                (field.autocomplete || '').toLowerCase().split(/\s+/).includes(token);
               const findPasswordField = form => {
                 // form.elements includes controls associated via form="id", even outside the form.
                 const fields = Array.from(form.elements).filter(control =>
                   control.form === form && control instanceof HTMLInputElement &&
-                  control.type === 'password' && control.autocomplete !== 'new-password' &&
+                  control.type === 'password' && !hasAutocomplete(control, 'new-password') &&
                   !control.disabled && !control.readOnly
                 );
-                return fields.find(field => field.autocomplete === 'current-password') || fields[0] || null;
+                return fields.find(field => hasAutocomplete(field, 'current-password')) || fields[0] || null;
               };
               const findUsernameField = (form, passwordField) =>
                 Array.from(form.elements).find(control =>
                   control.form === form && control instanceof HTMLInputElement &&
                   control !== passwordField && control.type !== 'password' &&
                   !control.disabled && !control.readOnly &&
-                  (control.autocomplete === 'username' || control.type === 'email' ||
+                  (hasAutocomplete(control, 'username') || control.type === 'email' ||
                     /user|email/i.test((control.name || '') + ' ' + (control.id || '')))
                 ) || null;
               const forms = Array.from(document.forms);
