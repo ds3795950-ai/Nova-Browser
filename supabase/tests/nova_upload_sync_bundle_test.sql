@@ -1,5 +1,5 @@
--- Transactional integration test for nova_upload_sync_bundle.
--- Creates a synthetic auth user and sync rows, then rolls the entire test back.
+-- Transactional integration test for nova_upload_sync_bundle(p_bundle, p_expected_updated_at).
+-- Creates a synthetic auth user and a sync row, then rolls the entire test back.
 -- Safe to run against a test project or an otherwise empty project.
 begin;
 
@@ -36,69 +36,75 @@ select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-0000000
 do $$
 declare
     v_user_id uuid := auth.uid();
-    v_snapshot_revision timestamptz;
-    v_vault_revision timestamptz;
-    v_snapshot_before jsonb;
-    v_vault_before jsonb;
-    v_snapshot_after jsonb;
-    v_vault_after jsonb;
-    v_snapshot_revision_after timestamptz;
-    v_vault_revision_after timestamptz;
+    v_revision timestamptz;
+    v_revision_after timestamptz;
+    v_before jsonb;
+    v_after jsonb;
     v_result jsonb;
+    v_legacy_rows integer;
 begin
     if v_user_id is null or v_user_id <> '00000000-0000-4000-8000-000000000032'::uuid then
         raise exception 'TEST_AUTH_CLAIM_NOT_APPLIED';
     end if;
 
-    -- First upload inserts both rows and returns both new revisions.
+    -- First upload inserts one row holding both bundled objects and returns one revision.
     v_result := public.nova_upload_sync_bundle(
-        '{"snapshot":"initial"}'::jsonb,
-        '{"vault":"initial"}'::jsonb,
-        null,
+        '{"format":"nova-encrypted-sync-bundle-v1","browser":{"payload":"initial"},"vault":{"payload":"initial"}}'::jsonb,
         null
     );
-    select updated_at, snapshot into v_snapshot_revision, v_snapshot_before
+    select updated_at, snapshot into v_revision, v_before
       from public.nova_sync_state where user_id = v_user_id;
-    select updated_at, payload into v_vault_revision, v_vault_before
-      from public.nova_encrypted_vault where user_id = v_user_id;
-    if v_snapshot_revision is null or v_vault_revision is null
-       or v_result->>'snapshot_updated_at' is null
-       or v_result->>'vault_updated_at' is null then
-        raise exception 'TEST_INITIAL_INSERT_DID_NOT_RETURN_REVISIONS';
+    if v_revision is null
+       or v_result->>'updated_at' is null
+       or v_before->'browser'->>'payload' is distinct from 'initial'
+       or v_before->'vault'->>'payload' is distinct from 'initial' then
+        raise exception 'TEST_INITIAL_INSERT_DID_NOT_STORE_BUNDLE';
     end if;
 
-    -- A stale snapshot revision must reject the whole write.
+    -- The legacy two-table vault must not be written by the new RPC.
+    select count(*) into v_legacy_rows
+      from public.nova_encrypted_vault where user_id = v_user_id;
+    if v_legacy_rows <> 0 then
+        raise exception 'TEST_LEGACY_VAULT_TABLE_WAS_WRITTEN';
+    end if;
+
+    -- A malformed bundle (wrong format) must be rejected.
     begin
         perform public.nova_upload_sync_bundle(
-            '{"snapshot":"stale-snapshot"}'::jsonb,
-            '{"vault":"stale-snapshot"}'::jsonb,
-            '2000-01-01T00:00:00Z'::timestamptz,
-            v_vault_revision
+            '{"format":"wrong","browser":{},"vault":{}}'::jsonb,
+            v_revision
         );
-        raise exception 'TEST_STALE_SNAPSHOT_CONFLICT_NOT_RAISED';
+        raise exception 'TEST_INVALID_FORMAT_NOT_REJECTED';
     exception when others then
-        if sqlerrm <> 'CLOUD_SYNC_CONFLICT' then raise; end if;
+        if sqlerrm <> 'SYNC_BUNDLE_INVALID' then raise; end if;
     end;
 
-    -- A stale vault revision must also reject the whole write.
+    -- A bundle missing its vault object must be rejected.
     begin
         perform public.nova_upload_sync_bundle(
-            '{"snapshot":"stale-vault"}'::jsonb,
-            '{"vault":"stale-vault"}'::jsonb,
-            v_snapshot_revision,
+            '{"format":"nova-encrypted-sync-bundle-v1","browser":{}}'::jsonb,
+            v_revision
+        );
+        raise exception 'TEST_MISSING_VAULT_NOT_REJECTED';
+    exception when others then
+        if sqlerrm <> 'SYNC_BUNDLE_INVALID' then raise; end if;
+    end;
+
+    -- A stale revision must reject the whole write.
+    begin
+        perform public.nova_upload_sync_bundle(
+            '{"format":"nova-encrypted-sync-bundle-v1","browser":{"payload":"stale"},"vault":{"payload":"stale"}}'::jsonb,
             '2000-01-01T00:00:00Z'::timestamptz
         );
-        raise exception 'TEST_STALE_VAULT_CONFLICT_NOT_RAISED';
+        raise exception 'TEST_STALE_REVISION_CONFLICT_NOT_RAISED';
     exception when others then
         if sqlerrm <> 'CLOUD_SYNC_CONFLICT' then raise; end if;
     end;
 
-    -- A competing first-upload attempt must conflict instead of overwriting.
+    -- A competing first-upload attempt (no expected revision) must conflict instead of overwriting.
     begin
         perform public.nova_upload_sync_bundle(
-            '{"snapshot":"duplicate-initial"}'::jsonb,
-            '{"vault":"duplicate-initial"}'::jsonb,
-            null,
+            '{"format":"nova-encrypted-sync-bundle-v1","browser":{"payload":"duplicate"},"vault":{"payload":"duplicate"}}'::jsonb,
             null
         );
         raise exception 'TEST_COMPETING_INITIAL_INSERT_CONFLICT_NOT_RAISED';
@@ -106,32 +112,45 @@ begin
         if sqlerrm <> 'CLOUD_SYNC_CONFLICT' then raise; end if;
     end;
 
-    -- Force the snapshot write to fail after the vault UPDATE. The RPC subtransaction
-    -- must roll back the earlier vault UPDATE as well.
+    -- Rejected writes must leave both bundled objects unchanged.
+    select updated_at, snapshot into v_revision_after, v_after
+      from public.nova_sync_state where user_id = v_user_id;
+    if v_revision_after is distinct from v_revision
+       or v_after is distinct from v_before then
+        raise exception 'TEST_REJECTED_WRITE_CHANGED_BUNDLE';
+    end if;
+
+    -- A write that fails mid-update must roll back, leaving both bundled objects unchanged.
     perform set_config('nova.test_fail_snapshot', 'true', true);
     begin
         perform public.nova_upload_sync_bundle(
-            '{"snapshot":"must-rollback"}'::jsonb,
-            '{"vault":"must-rollback"}'::jsonb,
-            v_snapshot_revision,
-            v_vault_revision
+            '{"format":"nova-encrypted-sync-bundle-v1","browser":{"payload":"must-rollback"},"vault":{"payload":"must-rollback"}}'::jsonb,
+            v_revision
         );
-        raise exception 'TEST_FORCED_SNAPSHOT_FAILURE_NOT_RAISED';
+        raise exception 'TEST_FORCED_FAILURE_NOT_RAISED';
     exception when others then
         if sqlerrm <> 'FORCED_SNAPSHOT_FAILURE' then raise; end if;
     end;
     perform set_config('nova.test_fail_snapshot', 'false', true);
 
-    select updated_at, snapshot into v_snapshot_revision_after, v_snapshot_after
+    select updated_at, snapshot into v_revision_after, v_after
       from public.nova_sync_state where user_id = v_user_id;
-    select updated_at, payload into v_vault_revision_after, v_vault_after
-      from public.nova_encrypted_vault where user_id = v_user_id;
-
-    if v_snapshot_revision_after is distinct from v_snapshot_revision
-       or v_vault_revision_after is distinct from v_vault_revision
-       or v_snapshot_after is distinct from v_snapshot_before
-       or v_vault_after is distinct from v_vault_before then
+    if v_revision_after is distinct from v_revision
+       or v_after is distinct from v_before then
         raise exception 'TEST_PARTIAL_WRITE_WAS_NOT_ROLLED_BACK';
+    end if;
+
+    -- A valid update with the current revision stores both new bundled objects.
+    v_result := public.nova_upload_sync_bundle(
+        '{"format":"nova-encrypted-sync-bundle-v1","browser":{"payload":"updated"},"vault":{"payload":"updated"}}'::jsonb,
+        v_revision
+    );
+    select snapshot into v_after
+      from public.nova_sync_state where user_id = v_user_id;
+    if v_result->>'updated_at' is null
+       or v_after->'browser'->>'payload' is distinct from 'updated'
+       or v_after->'vault'->>'payload' is distinct from 'updated' then
+        raise exception 'TEST_VALID_UPDATE_DID_NOT_STORE_BUNDLE';
     end if;
 end;
 $$;
