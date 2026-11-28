@@ -5013,6 +5013,7 @@ class MainActivity : ComponentActivity() {
                         pendingTranslationTabId = null
                         toast("Engine switch is blocked while GeckoView cleanup or protected routing is active")
                     } else {
+                        persistTabs()
                         toast("Switching to GeckoView; translation options will open after the page reloads")
                     }
                 }.setNegativeButton("Cancel", null).show()
