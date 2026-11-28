@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.StatFs
 import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -218,6 +219,13 @@ class NovaDownloadManager(
             val etag = connection.getHeaderField("ETag") ?: if (restartedFromZero || offset == 0L) null else worker.item.etag
             val modified = connection.getHeaderField("Last-Modified") ?: if (restartedFromZero || offset == 0L) null else worker.item.lastModified
             val length = connection.getHeaderFieldLong("Content-Length", -1L)
+            if (length > 0L) {
+                val availableBytes = runCatching { StatFs(part.parentFile!!.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+                val requiredBytes = length + 8L * 1024L * 1024L
+                if (availableBytes < requiredBytes) {
+                    throw IllegalStateException("Not enough free storage to finish this download")
+                }
+            }
             val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 && validator != null
             val total = when {
                 contentRange?.total != null -> contentRange.total

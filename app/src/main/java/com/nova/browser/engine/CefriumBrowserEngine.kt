@@ -275,6 +275,12 @@ class CefriumBrowserEngine(
 
     fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
 
+    /** Creates the engine's native Android print adapter for the current page. */
+    fun createPrintDocumentAdapter(documentName: String): android.print.PrintDocumentAdapter {
+        checkOpen()
+        return browser.createPrintDocumentAdapter(documentName)
+    }
+
     fun setJavaScriptEnabled(enabled: Boolean) {
         checkOpen()
         browser.setJavaScriptEnabled(enabled)

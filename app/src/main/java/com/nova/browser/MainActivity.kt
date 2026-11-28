@@ -1,6 +1,9 @@
 package com.nova.browser
 
 import androidx.activity.ComponentActivity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
@@ -1274,6 +1277,10 @@ class MainActivity : ComponentActivity() {
             if (!tab.isPrivate) actions += getString(R.string.downloads) to { showDownloads() }
             actions += getString(if (tab.isLoading) R.string.stop_loading else R.string.reload_page) to { toggleStopReload() }
             actions += getString(R.string.find_in_page) to { showFindBar() }
+            actions += "Print / Save as PDF" to { printCurrentPage() }
+            if (!tab.isPrivate && !tab.isGuest && (tab.lastUrl.startsWith("https://") || tab.lastUrl.startsWith("http://"))) {
+                actions += "Add to Home screen" to { addCurrentSiteToHomeScreen() }
+            }
             actions += getString(if (tab.desktopSite) R.string.mobile_site else R.string.desktop_site) to { toggleDesktopSite() }
             actions += getString(if (tab.readerOriginalUrl != null) R.string.exit_reader_mode else R.string.reader_mode) to { if (tab.readerOriginalUrl != null) exitReaderMode() else openReaderMode() }
             actions += getString(R.string.translate_page) to { translatePage() }
@@ -4866,7 +4873,21 @@ class MainActivity : ComponentActivity() {
         downloadsAdapter = adapter
         listView.adapter = adapter
         listView.emptyView = emptyView
-        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(emptyView, LinearLayout.LayoutParams(-1, 0, 1f)); addView(listView, LinearLayout.LayoutParams(-1, 0, 1f)) }
+        val downloadActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            addView(Button(this@MainActivity).apply {
+                text = "Clear completed"
+                setOnClickListener { clearCompletedDownloads(manager) }
+            })
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(downloadActions, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(emptyView, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(listView, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
         listView.setOnItemClickListener { _, _, which, _ -> downloadsItems.getOrNull(which)?.let { showDownloadActions(it, manager) } }
         val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.downloads_count, downloadsItems.size)).setView(container)
             .setPositiveButton(getString(R.string.new_download), null)
@@ -4887,7 +4908,12 @@ class MainActivity : ComponentActivity() {
             "PAUSED" -> listOf(getString(R.string.resume) to { manager.resume(item.id) }, getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
             "QUEUED" -> listOf(getString(R.string.cancel_download) to { confirmRemoveDownload(item, manager, cancel = true) })
             "FINALIZING", "SAVING" -> listOf(getString(R.string.close) to { })
-            "COMPLETE" -> listOf(getString(R.string.open_download) to { openDownloadedFile(item) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
+            "COMPLETE" -> listOf(
+                getString(R.string.open_download) to { openDownloadedFile(item) },
+                "Share file" to { shareDownloadedFile(item) },
+                getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) },
+                "Delete file" to { deleteDownloadedFile(item, manager) }
+            )
             "INTERRUPTED" -> if (item.url.isNotBlank()) listOf(getString(R.string.resume) to { manager.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
             else -> if (item.url.isNotBlank()) listOf(getString(R.string.retry_download) to { manager.resume(item.id) }, getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) }) else listOf(getString(R.string.remove_from_list) to { confirmRemoveDownload(item, manager) })
         }
@@ -5180,6 +5206,162 @@ class MainActivity : ComponentActivity() {
                 prefs.edit().putString("search_engine", searchEngine).apply()
                 dialog.dismiss(); toast("$searchEngine selected")
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun addCurrentSiteToHomeScreen() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Home-screen shortcuts are unavailable in Private and Guest Mode")
+            return
+        }
+        val url = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
+        val uri = runCatching { Uri.parse(url) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase()
+        val host = uri?.host?.takeIf { !it.isBlank() }
+        if (scheme !in setOf("http", "https") || host == null) {
+            toast("Open a website before adding a shortcut")
+            return
+        }
+        if (!ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
+            toast("This launcher does not support pinned shortcuts")
+            return
+        }
+        val title = tab.title.trim().ifBlank { host }.take(40)
+        val shortcut = ShortcutInfoCompat.Builder(this, "nova-site-${Uri.encode(host).take(32)}-${url.hashCode()}")
+            .setShortLabel(title.take(25))
+            .setLongLabel(title)
+            .setIcon(IconCompat.createWithResource(this, R.mipmap.ic_nova_launcher))
+            .setIntent(Intent(Intent.ACTION_VIEW, uri, this, MainActivity::class.java).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            })
+            .build()
+        val requested = runCatching { ShortcutManagerCompat.requestPinShortcut(this, shortcut, null) }.getOrDefault(false)
+        toast(if (requested) "Home-screen shortcut request sent" else "Could not create the home-screen shortcut")
+    }
+
+    private fun printCurrentPage() {
+        val tab = currentTab() ?: return
+        if (tab.isPrivate || tab.isGuest) {
+            toast("Printing is disabled in Private and Guest Mode to avoid saving session content outside the profile")
+            return
+        }
+        if (!canUseTabEngine(tab, "Print")) return
+        val title = tab.title.trim().ifBlank { "Nova webpage" }.take(80)
+        val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
+        if (printManager == null) {
+            toast("Android printing is unavailable on this device")
+            return
+        }
+        if (tab.engineType == BrowserEngineType.CEFRIUM) {
+            val engine = runCatching { ensureBrowserEngine(tab) as? CefriumBrowserEngine }.getOrNull()
+            if (engine == null) {
+                toast("This Cefrium page cannot be printed right now")
+                return
+            }
+            runCatching {
+                printManager.print(
+                    title,
+                    engine.createPrintDocumentAdapter(title),
+                    android.print.PrintAttributes.Builder().build()
+                )
+            }.onFailure { toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}") }
+            return
+        }
+        val session = tab.session
+        if (session == null) {
+            toast("This GeckoView page is not ready to print")
+            return
+        }
+        session.saveAsPdf().accept({ input ->
+            val pdf = File(cacheDir, "nova-print-${UUID.randomUUID()}.pdf")
+            val saved = runCatching {
+                input.use { source -> pdf.outputStream().use { output -> source.copyTo(output) } }
+                pdf.isFile && pdf.length() > 0L
+            }.getOrDefault(false)
+            runOnUiThread {
+                if (!saved) {
+                    pdf.delete()
+                    toast("Nova could not create a PDF for this page")
+                    return@runOnUiThread
+                }
+                runCatching {
+                    printManager.print(title, NovaPdfPrintAdapter(pdf), android.print.PrintAttributes.Builder().build())
+                }.onFailure {
+                    pdf.delete()
+                    toast("Could not open the print dialog: ${it.localizedMessage ?: "Unknown error"}")
+                }
+            }
+        }, { error ->
+            runOnUiThread { toast("This page could not be exported as PDF: ${error?.localizedMessage ?: "Unsupported page"}") }
+        })
+    }
+
+    private fun shareDownloadedFile(item: NovaDownloadManager.Item) {
+        if (item.savedUri.isBlank()) {
+            toast("Downloaded file is not available to share")
+            return
+        }
+        runCatching {
+            val uri = Uri.parse(item.savedUri)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = item.mimeType.ifBlank { "application/octet-stream" }
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = android.content.ClipData.newUri(contentResolver, item.fileName, uri)
+            }
+            startActivity(Intent.createChooser(send, "Share download"))
+        }.onFailure { toast("Could not share this download: ${it.localizedMessage ?: "Unknown error"}") }
+    }
+
+    private fun deleteDownloadedFile(item: NovaDownloadManager.Item, manager: NovaDownloadManager) {
+        if (item.savedUri.isBlank()) {
+            toast("Downloaded file location is unavailable")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Delete downloaded file?")
+            .setMessage("This permanently deletes ${item.fileName} from Android Downloads.")
+            .setNegativeButton(getString(R.string.keep), null)
+            .setPositiveButton("Delete file") { _, _ ->
+                val deleted = runCatching {
+                    contentResolver.delete(Uri.parse(item.savedUri), null, null) > 0
+                }.getOrDefault(false)
+                if (deleted) {
+                    manager.cancel(item.id)
+                    toast("Downloaded file deleted")
+                } else {
+                    toast("Android could not delete this file; it remains in Downloads")
+                }
+            }
+            .show()
+    }
+
+    private fun clearCompletedDownloads(manager: NovaDownloadManager) {
+        val completed = manager.items().filter { it.state == "COMPLETE" }
+        if (completed.isEmpty()) {
+            toast("No completed downloads to clear")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Clear completed downloads?")
+            .setMessage("Nova will delete ${completed.size} completed file(s) from Android Downloads.")
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton("Clear completed") { _, _ ->
+                var removed = 0
+                completed.forEach { item ->
+                    val deleted = item.savedUri.isNotBlank() && runCatching {
+                        contentResolver.delete(Uri.parse(item.savedUri), null, null) > 0
+                    }.getOrDefault(false)
+                    if (deleted) {
+                        manager.cancel(item.id)
+                        removed++
+                    }
+                }
+                refreshDownloadsList(manager.items())
+                toast("Deleted $removed of ${completed.size} completed file(s)")
+            }
+            .show()
     }
 
     private fun sharePage() {
