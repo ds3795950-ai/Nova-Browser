@@ -87,6 +87,10 @@ import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumContextMenu
 import com.nova.browser.engine.BrowserEngine as TabBrowserEngine
 import com.nova.browser.engine.BrowserEngineType
+import com.nova.browser.engine.BrowserEngineCapability
+import com.nova.browser.engine.BrowserEngineCapabilityPolicy
+import com.nova.browser.engine.BrowserEngineCapabilitySets
+import com.nova.browser.engine.BrowserEngineProfilePolicy
 import com.nova.browser.engine.BrowserRendererRecoveryPolicy
 import com.nova.browser.engine.BrowserEngineMode
 import com.nova.browser.engine.BrowserEngineState
@@ -4937,7 +4941,25 @@ class MainActivity : ComponentActivity() {
     private fun translatePage() {
         val tab = currentTab() ?: return
         if (!tab.lastUrl.startsWith("http")) { toast("Open a webpage first"); return }
-        if (tab.engineType == BrowserEngineType.CEFRIUM) { toast("On-device translation currently requires GeckoView; switch this tab's engine first"); return }
+        val route = capabilityRouteForTab(tab, BrowserEngineCapability.TRANSLATION)
+        if (!route.available) { toast(route.reason); return }
+        if (route.requiresSwitch) {
+            AlertDialog.Builder(this).setTitle("Switch to GeckoView for translation?")
+                .setMessage("Nova on-device translation requires GeckoView. Switching reloads this page; cookies, site storage and login sessions are not transferred between engine profiles. Continue?")
+                .setPositiveButton("Switch and continue") { _, _ ->
+                    if (currentTab()?.id != tab.id) {
+                        toast("The active tab changed; no engine was switched")
+                        return@setPositiveButton
+                    }
+                    switchCurrentTabToGecko(route.reason)
+                    if (tab.engineType == BrowserEngineType.GECKOVIEW) {
+                        toast("Page reopened in GeckoView. Tap Translate again after it finishes loading.")
+                    } else {
+                        toast("Engine switch is blocked until protected routing is ready")
+                    }
+                }.setNegativeButton("Cancel", null).show()
+            return
+        }
         val languages = arrayOf(
             "English" to "en", "Hindi" to "hi", "Bengali" to "bn",
             "Japanese" to "ja", "Chinese" to "zh", "Spanish" to "es", "French" to "fr",
@@ -5371,10 +5393,27 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun capabilityRouteForTab(tab: BrowserTab, required: BrowserEngineCapability) =
+        BrowserEngineCapabilityPolicy.resolve(
+            currentEngine = tab.engineType,
+            profile = BrowserEngineProfilePolicy.kindFor(tab.isPrivate, tab.isGuest),
+            required = required,
+            currentCapabilities = if (tab.engineType == BrowserEngineType.CEFRIUM)
+                BrowserEngineCapabilitySets.CEFRIUM else BrowserEngineCapabilitySets.GECKOVIEW
+        )
+
     private fun showExtensions() {
         if (denyGuestAccess("Nova Add-ons")) return
-        if (currentTab()?.engineType == BrowserEngineType.CEFRIUM) { showCefriumNovaAddons(); return }
-        if (currentTab()?.engineType != BrowserEngineType.GECKOVIEW) {
+        val tab = currentTab() ?: return
+        val required = if (tab.engineType == BrowserEngineType.CEFRIUM)
+            BrowserEngineCapability.SCRIPT_ADDONS else BrowserEngineCapability.EXTENSIONS
+        val route = capabilityRouteForTab(tab, required)
+        if (!route.available || route.engine != tab.engineType) {
+            toast(route.reason)
+            return
+        }
+        if (tab.engineType == BrowserEngineType.CEFRIUM) { showCefriumNovaAddons(); return }
+        if (tab.engineType != BrowserEngineType.GECKOVIEW) {
             toast("Nova Add-ons are not available in this engine yet")
             return
         }
@@ -5388,7 +5427,7 @@ class MainActivity : ComponentActivity() {
                     .setItems(rows + "ⓘ About extension support") { _, which ->
                         if (which >= installed.size) {
                             AlertDialog.Builder(this)
-                                .setMessage("GeckoView supports signed Firefox-compatible WebExtensions. Chrome/Chromium extensions are not supported; compatibility depends on the embedded GeckoView version.")
+                                .setMessage("Nova WebExtensions are available in GeckoView. Supported packages and features depend on the embedded engine version; other extension formats are not supported.")
                                 .setPositiveButton("OK", null).show()
                             return@setItems
                         }
@@ -5418,7 +5457,7 @@ class MainActivity : ComponentActivity() {
             "${it.name} · ${when { it.damaged -> "Needs repair"; it.enabled -> "Enabled"; else -> "Disabled" }}"
         }.toTypedArray()
         AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
-            text = "Nova Add-ons · ${addons.size}\n\nNova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView."
+            text = "Nova Add-ons · ${addons.size}\n\nNova Script Add-ons run only in Normal Cefrium tabs and only on approved website origins. Scripts run in the page's JavaScript world and can read or change that site's content. Install only code you trust. No add-on data is shared with GeckoView. Full Nova WebExtensions are available only in GeckoView; switching engines reloads the page without transferring site data."
             setPadding(dp(24), dp(16), dp(24), dp(8))
             textSize = 14f
         }).setItems(rows) { _,which ->

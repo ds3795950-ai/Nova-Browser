@@ -87,7 +87,8 @@ class CefriumBrowserEngine(
         BrowserEngineCapability.PASSWORD_FILL,
         BrowserEngineCapability.IMAGE_BLOCKING,
         BrowserEngineCapability.SITE_COOKIE_CONTROLS,
-        BrowserEngineCapability.TRACKER_BLOCKING
+        BrowserEngineCapability.TRACKER_BLOCKING,
+        BrowserEngineCapability.SCRIPT_ADDONS
     )
     private val browser = existingBrowser ?: CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)

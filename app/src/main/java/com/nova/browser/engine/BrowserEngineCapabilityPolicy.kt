@@ -34,7 +34,8 @@ object BrowserEngineCapabilitySets {
         BrowserEngineCapability.PASSWORD_FILL,
         BrowserEngineCapability.IMAGE_BLOCKING,
         BrowserEngineCapability.SITE_COOKIE_CONTROLS,
-        BrowserEngineCapability.TRACKER_BLOCKING
+        BrowserEngineCapability.TRACKER_BLOCKING,
+        BrowserEngineCapability.SCRIPT_ADDONS
     )
 }
 

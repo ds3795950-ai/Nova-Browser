@@ -13,6 +13,16 @@ class BrowserEngineCapabilityPolicyTest {
         assertFalse(route.requiresSwitch)
     }
 
+    @Test fun cefriumScriptAddonsStayNativeWithoutClaimingFullWebExtensions() {
+        val route = BrowserEngineCapabilityPolicy.resolve(
+            BrowserEngineType.CEFRIUM, BrowserProfileKind.NORMAL,
+            BrowserEngineCapability.SCRIPT_ADDONS, BrowserEngineCapabilitySets.CEFRIUM
+        )
+        assertEquals(BrowserEngineType.CEFRIUM, route.engine)
+        assertFalse(route.requiresSwitch)
+        assertFalse(BrowserEngineCapability.EXTENSIONS in BrowserEngineCapabilitySets.CEFRIUM)
+    }
+
     @Test fun translationFallsBackFromCefriumToGeckoView() {
         val route = BrowserEngineCapabilityPolicy.resolve(
             BrowserEngineType.CEFRIUM, BrowserProfileKind.NORMAL,

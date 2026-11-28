@@ -45,7 +45,8 @@ enum class BrowserEngineCapability {
     HTTP_AUTH,
     EXTERNAL_NAVIGATION,
     SITE_DATA,
-    EXTENSIONS
+    EXTENSIONS,
+    SCRIPT_ADDONS
 }
 
 fun interface BrowserEngineListener {
