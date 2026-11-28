@@ -2160,6 +2160,9 @@ class MainActivity : ComponentActivity() {
                 tab.lastUrl = url
                 tab.needsReload = true
                 tab.cefriumNavigationState = null
+                // Persist the new destination only after the stale Cefrium snapshot
+                // has been cleared, so a process death cannot restore the old page.
+                if (!tab.isPrivate && !tab.isGuest) persistTabs()
             }
             applyVpnRoutingReadiness()
             if (currentTab() === tab) setPageStatus("1VPN is connecting · navigation will resume when protected routing is ready", 1)
@@ -2170,6 +2173,7 @@ class MainActivity : ComponentActivity() {
                 tab.lastUrl = url
                 tab.needsReload = true
                 tab.cefriumNavigationState = null
+                if (!tab.isPrivate && !tab.isGuest) persistTabs()
             }
             toast("Normal browsing is paused while Guest Tor is connecting, active, or disconnecting")
             return
