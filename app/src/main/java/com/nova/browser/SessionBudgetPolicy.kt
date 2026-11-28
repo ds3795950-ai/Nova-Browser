@@ -9,13 +9,16 @@ internal object SessionBudgetPolicy {
         val isGuest: Boolean
     )
 
-    fun maxRetainedSessions(memoryClassMb: Int): Int = when {
-        memoryClassMb < 128 -> 3
-        memoryClassMb < 192 -> 4
-        memoryClassMb < 256 -> 5
-        memoryClassMb < 384 -> 6
-        memoryClassMb < 512 -> 8
-        else -> 10
+    fun maxRetainedSessions(memoryClassMb: Int, memoryPressure: Boolean = false): Int {
+        val normalLimit = when {
+            memoryClassMb < 128 -> 2
+            memoryClassMb < 192 -> 3
+            memoryClassMb < 256 -> 4
+            memoryClassMb < 384 -> 5
+            memoryClassMb < 512 -> 6
+            else -> 8
+        }
+        return if (memoryPressure) (normalLimit - 2).coerceAtLeast(2) else normalLimit
     }
 
     /** Evicts least-recent normal sessions first; visible current and split tabs are protected. */
