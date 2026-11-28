@@ -3,5 +3,5 @@ plugins {
     id("com.android.library") version "9.4.0" apply false
     id("com.google.devtools.ksp") version "2.3.12" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.3.20" apply false
-    id("com.cefrium") version "0.21.0" apply false
+    id("com.cefrium") version "0.22.0" apply false
 }

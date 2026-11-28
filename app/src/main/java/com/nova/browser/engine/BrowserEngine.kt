@@ -31,6 +31,10 @@ enum class BrowserEngineCapability {
     VPN_PROXY,
     TRANSLATION,
     PASSWORD_AUTOFILL,
+    PASSWORD_FILL,
+    IMAGE_BLOCKING,
+    BROWSER_COOKIE_FILTERING,
+    TRACKER_BLOCKING,
     NOVA_SHIELD,
     FIND_IN_PAGE,
     FULLSCREEN,
@@ -40,7 +44,7 @@ enum class BrowserEngineCapability {
     CONTEXT_MENU,
     HTTP_AUTH,
     EXTERNAL_NAVIGATION,
-    SITE_DATA
+    SITE_DATA,
 }
 
 fun interface BrowserEngineListener {

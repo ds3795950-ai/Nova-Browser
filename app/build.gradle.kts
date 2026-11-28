@@ -6,7 +6,7 @@ import java.util.zip.ZipInputStream
 
 plugins {
     id("com.android.application")
-    id("com.cefrium") version "0.21.0"
+    id("com.cefrium") version "0.22.0"
 }
 
 val releaseStorePath = System.getenv("NOVA_RELEASE_KEYSTORE_PATH")
@@ -94,8 +94,8 @@ dependencies {
     implementation("org.mozilla.geckoview:geckoview:157.0.20261005135250")
     // Embedded Tor daemon; Guest Mode uses its loopback SOCKS5 listener only.
     implementation("info.guardianproject:tor-android:0.4.9.17")
-    // Cefrium 0.21.0 supplies Chromium for eligible Normal tabs.
-    implementation("com.cefrium:cefrium-sdk:0.21.0")
+    // Cefrium 0.22.0 supplies Chromium for eligible Normal tabs.
+    implementation("com.cefrium:cefrium-sdk:0.22.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.mediarouter:mediarouter:1.7.0")
     implementation("androidx.core:core:1.16.0")
