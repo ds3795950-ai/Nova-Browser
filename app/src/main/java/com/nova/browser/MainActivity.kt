@@ -5319,10 +5319,10 @@ class MainActivity : ComponentActivity() {
                     it.protocol in setOf("http", "https") && it.host.equals(page.host, true) && it.port == page.port
                 }
             }.getOrNull()
-            val scope = sameOrigin(manifest.optString("scope").ifBlank { "./" })
-            val start = manifest.optString("start_url").takeIf { it.isNotBlank() }?.let(::sameOrigin).takeIf {
-                it != null && (scope == null || it.path.startsWith(scope.path))
-            } ?: page
+            val requestedStart = manifest.optString("start_url").takeIf { it.isNotBlank() }?.let(::sameOrigin) ?: page
+            val scope = manifest.optString("scope").takeIf { it.isNotBlank() }?.let(::sameOrigin)
+                ?: runCatching { java.net.URL(requestedStart, ".") }.getOrNull()
+            val start = requestedStart.takeIf { scope == null || it.path.startsWith(scope.path) } ?: page
             val icons = manifest.optJSONArray("icons")
             var bitmap: Bitmap? = null
             if (icons != null) {
