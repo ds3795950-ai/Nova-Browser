@@ -5319,8 +5319,8 @@ class MainActivity : ComponentActivity() {
                     it.protocol in setOf("http", "https") && it.host.equals(page.host, true) && it.port == page.port
                 }
             }.getOrNull()
-            val scope = sameOrigin(manifest.optString("scope"))
-            val start = sameOrigin(manifest.optString("start_url")).takeIf {
+            val scope = sameOrigin(manifest.optString("scope").ifBlank { "./" })
+            val start = manifest.optString("start_url").takeIf { it.isNotBlank() }?.let(::sameOrigin).takeIf {
                 it != null && (scope == null || it.path.startsWith(scope.path))
             } ?: page
             val icons = manifest.optJSONArray("icons")
@@ -5367,13 +5367,8 @@ class MainActivity : ComponentActivity() {
 
     private fun openAndroidDownloads() {
         val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
-        runCatching {
-            if (intent.resolveActivity(packageManager) != null) {
-                startActivity(intent)
-            } else {
-                toast("No Android Downloads app is available on this device")
-            }
-        }.onFailure { toast("Could not open Android Downloads: ${it.localizedMessage ?: "Unknown error"}") }
+        runCatching { startActivity(intent) }
+            .onFailure { toast("No Android Downloads app is available: ${it.localizedMessage ?: "Unknown error"}") }
     }
 
 
