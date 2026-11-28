@@ -68,6 +68,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.WebExtensionController
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
@@ -5397,7 +5398,7 @@ class MainActivity : ComponentActivity() {
         val controller = runtime.getWebExtensionController()
         controller.list().accept({ extensions ->
             runOnUiThread {
-                val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.EXTENSION_ID }
+                val installed = extensions.orEmpty().filterNot { it?.id == NovaBrowserVpnController.BRIDGE_ID }
                 val rows = installed.map { "${it?.metaData?.name ?: it?.id ?: "Extension"} · ${if (it.metaData.enabled) "Enabled" else "Disabled"}" }.toTypedArray()
                 AlertDialog.Builder(this).setTitle("Nova Add-ons · ${installed.size}")
                     // A dialog message hides the list on Android, so the note lives in its own row.
