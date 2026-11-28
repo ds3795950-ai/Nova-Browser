@@ -67,7 +67,7 @@ open class NovaVpnFirewallActivity : Activity() {
         root.addView(status)
         root.addView(Button(this).apply { text = "Close"; setOnClickListener { finish() } })
         setContentView(root)
-        NovaBrowserVpnController.setStatusListener { mainHandler.post { renderStatus() } }
+        NovaBrowserVpnController.setStatusListener(this) { mainHandler.post { renderStatus() } }
         renderStatus()
     }
 
@@ -77,7 +77,7 @@ open class NovaVpnFirewallActivity : Activity() {
     }
 
     override fun onDestroy() {
-        NovaBrowserVpnController.setStatusListener(null)
+        NovaBrowserVpnController.clearStatusListener(this)
         super.onDestroy()
     }
 }

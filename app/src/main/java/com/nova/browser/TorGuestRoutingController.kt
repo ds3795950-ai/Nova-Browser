@@ -32,9 +32,12 @@ internal object TorGuestRoutingController {
     private var proxyTimeout: Runnable? = null
     private var proxyPoll: Runnable? = null
     private var socksPortPoll: Runnable? = null
+    private var stopTimeout: Runnable? = null
+    private var stopPoll: Runnable? = null
     private var socksPortAttempts = 0
     private var onReady: (() -> Unit)? = null
     private var onFailure: ((String) -> Unit)? = null
+    private var onStopped: (() -> Unit)? = null
     private var lastError = "Tor is not running"
 
     private val serviceConnection = object : ServiceConnection {
@@ -59,6 +62,10 @@ internal object TorGuestRoutingController {
             return
         }
         if (state == State.STARTING || state == State.WAITING_FOR_PROXY) return
+        if (state == State.STOPPING) {
+            onFailure("Guest Tor is still disconnecting; wait for the proxy reset")
+            return
+        }
 
         stopInternal(disableProxy = true)
         state = State.STARTING
@@ -110,26 +117,101 @@ internal object TorGuestRoutingController {
 
     fun isReady(): Boolean = state == State.READY && NovaBrowserVpnController.isTorGuestRoutingReady()
 
+    /** True while a reset acknowledgement is pending; used to expose an explicit retry action. */
+    fun isStopping(): Boolean = state == State.STOPPING
+
+    /** Reserve the shared GeckoView runtime for Guest while its proxy may be in Tor mode. */
+    fun blocksNormalGeckoSessions(): Boolean = state != State.STOPPED
+
     fun statusText(): String = when (state) {
         State.STARTING -> "Starting embedded Tor and building a circuit…"
         State.WAITING_FOR_PROXY -> "Tor circuit built; securing GeckoView routing…"
         State.READY -> "Tor connected · Guest SOCKS5 routing and WebRTC protection active"
         State.FAILED -> "Tor unavailable · $lastError"
-        State.STOPPING -> "Stopping Guest Tor…"
+        State.STOPPING -> if (lastError.startsWith("Recovery required:")) {
+            "Guest routing reset unconfirmed · ${lastError.removePrefix("Recovery required:").trim()}"
+        } else "Stopping Guest Tor…"
         State.STOPPED -> "Tor is not running outside Guest Mode"
     }
 
-    fun stop() {
-        if (state == State.STOPPED) {
-            NovaBrowserVpnController.setTorGuestRouting(false, 0)
+    /**
+     * Stop Tor and wait until the WebExtension acknowledges that its runtime-wide proxy
+     * has left Guest mode. Callers that will resume Normal Gecko sessions must supply
+     * [onStopped]; lifecycle teardown may use the immediate no-callback path.
+     */
+    fun stop(onStopped: (() -> Unit)? = null) {
+        if (state == State.STOPPED && NovaBrowserVpnController.isTorGuestRoutingDisabledConfirmed()) {
+            onStopped?.invoke()
             return
         }
+        if (state == State.STOPPING) {
+            if (onStopped != null) {
+                val previous = this.onStopped
+                this.onStopped = if (previous == null) onStopped else {
+                    { runCatching { previous() }; runCatching { onStopped() } }
+                }
+            }
+            requestStopReset()
+            return
+        }
+        this.onStopped = onStopped
         state = State.STOPPING
-        stopInternal(disableProxy = true)
-        state = State.STOPPED
-        lastError = "Tor is not running"
+        lastError = "Waiting for the proxy extension to confirm Guest Tor is disabled"
+        // Keep the status listener alive while requesting the reset. Even Activity teardown
+        // without a completion callback must not release the shared Gecko runtime early.
+        stopInternal(disableProxy = false, clearStatusListener = false)
         onReady = null
         onFailure = null
+        NovaBrowserVpnController.setTorRoutingStatusListener {
+            mainHandler.post { checkStopReadiness() }
+        }
+        requestStopReset()
+    }
+
+    /**
+     * Retry the disable request with a fresh request ID. A timed-out STOPPING state
+     * remains fail-closed, but a later stop() call can recover without restarting Nova.
+     */
+    private fun requestStopReset() {
+        stopTimeout?.let(mainHandler::removeCallbacks)
+        stopPoll?.let(mainHandler::removeCallbacks)
+        stopPoll = null
+        stopTimeout = Runnable {
+            stopTimeout = null
+            stopPoll?.let(mainHandler::removeCallbacks)
+            stopPoll = null
+            lastError = "Recovery required: retry Guest routing reset; Normal sessions remain paused until confirmation"
+            NovaBrowserVpnController.notifyStatusChanged()
+        }
+        mainHandler.postDelayed(stopTimeout!!, 15_000L)
+        NovaBrowserVpnController.setTorGuestRouting(false, 0)
+        checkStopReadiness()
+    }
+
+    private fun checkStopReadiness() {
+        if (state != State.STOPPING) return
+        if (NovaBrowserVpnController.isTorGuestRoutingDisabledConfirmed()) {
+            stopTimeout?.let(mainHandler::removeCallbacks)
+            stopPoll?.let(mainHandler::removeCallbacks)
+            stopTimeout = null
+            stopPoll = null
+            NovaBrowserVpnController.setTorRoutingStatusListener(null)
+            state = State.STOPPED
+            lastError = "Tor is not running"
+            NovaBrowserVpnController.notifyStatusChanged()
+            NovaBrowserVpnController.onGuestTorStopped()
+            val callback = onStopped
+            onStopped = null
+            callback?.invoke()
+            return
+        }
+        if (stopTimeout != null && stopPoll == null) {
+            stopPoll = Runnable {
+                stopPoll = null
+                checkStopReadiness()
+            }
+            mainHandler.postDelayed(stopPoll!!, 250L)
+        }
     }
 
     private fun onTorCircuitReady() {
@@ -203,16 +285,20 @@ internal object TorGuestRoutingController {
         proxyTimeout?.let(mainHandler::removeCallbacks)
         proxyPoll?.let(mainHandler::removeCallbacks)
         socksPortPoll?.let(mainHandler::removeCallbacks)
+        stopTimeout?.let(mainHandler::removeCallbacks)
+        stopPoll?.let(mainHandler::removeCallbacks)
         startTimeout = null
         proxyTimeout = null
         proxyPoll = null
         socksPortPoll = null
+        stopTimeout = null
+        stopPoll = null
         socksPortAttempts = 0
     }
 
-    private fun stopInternal(disableProxy: Boolean) {
+    private fun stopInternal(disableProxy: Boolean, clearStatusListener: Boolean = true) {
         cancelTimeouts()
-        NovaBrowserVpnController.setTorRoutingStatusListener(null)
+        if (clearStatusListener) NovaBrowserVpnController.setTorRoutingStatusListener(null)
         if (disableProxy) NovaBrowserVpnController.setTorGuestRouting(false, 0)
         val context = appContext
         if (receiverRegistered && context != null && receiver != null) {
@@ -228,7 +314,65 @@ internal object TorGuestRoutingController {
     }
 }
 
+internal object DeferredExternalLinkOwnershipPolicy {
+    /** An Intent extra is trusted only when it matches Nova's private one-time token and URL. */
+    fun isTrusted(suppliedToken: String?, storedToken: String?, storedUrl: String?, incomingUrl: String): Boolean =
+        !suppliedToken.isNullOrBlank() && suppliedToken == storedToken && storedUrl == incomingUrl
+}
+
+internal object CrossEngineNavigationPolicy {
+    /** Only GET requests can be replayed after a browser-engine handoff. */
+    fun canTransfer(method: String): Boolean = method.equals("GET", ignoreCase = true)
+}
+
+internal object PendingExternalLinkPolicy {
+    fun canOpen(
+        pendingForGuest: Boolean,
+        activeTabIsGuest: Boolean,
+        guestStartPending: Boolean,
+        torProxyReserved: Boolean,
+        guestTorReady: Boolean
+    ): Boolean = if (pendingForGuest) {
+        activeTabIsGuest && !guestStartPending && guestTorReady
+    } else {
+        !activeTabIsGuest && !guestStartPending && !torProxyReserved
+    }
+
+    fun shouldDiscardGuestLink(
+        pendingForGuest: Boolean,
+        activeTabIsGuest: Boolean,
+        guestStartPending: Boolean,
+        torProxyReserved: Boolean
+    ): Boolean = pendingForGuest && !activeTabIsGuest && !guestStartPending && !torProxyReserved
+}
+
+internal object GuestTorIsolationPolicy {
+    /** The GeckoView proxy is runtime-wide; Private tabs must not share it with Guest Tor. */
+    fun canStart(hasPrivateTabs: Boolean): Boolean = !hasPrivateTabs
+
+    /** Suspend every persistent Normal session while Guest owns the browser network context. */
+    fun shouldSuspendNormalTab(isGuest: Boolean, isPrivate: Boolean): Boolean = !isGuest && !isPrivate
+
+    /** Never recreate a Gecko session while the runtime-wide proxy may still be in Tor mode. */
+    fun shouldDeferTabRestore(guestStartPending: Boolean, activeTabIsGuest: Boolean, torReady: Boolean): Boolean =
+        guestStartPending || (activeTabIsGuest && !torReady)
+
+    fun shouldBlockNonGuestSession(isGuest: Boolean, torProxyReserved: Boolean): Boolean =
+        !isGuest && torProxyReserved
+
+    /** Keep the runtime barrier for Normal links, but allow links into a verified Guest tab. */
+    fun shouldBlockPendingExternalLink(isGuest: Boolean, torProxyReserved: Boolean, guestTorReady: Boolean): Boolean =
+        if (isGuest) !guestTorReady else torProxyReserved
+}
+
 internal object GuestTorRoutingPolicy {
+    fun shouldClearGuestContextMarker(guestTabCount: Int): Boolean = guestTabCount <= 0
+
+    fun shouldStopTorAfterGuestCreationFailure(guestTabCount: Int): Boolean = guestTabCount <= 0
+
+    fun newlyCreatedGuestTabIds(existingGuestIds: Set<String>, currentGuestIds: List<String>): List<String> =
+        currentGuestIds.filterNot { it in existingGuestIds }
+
     fun canEnableProxy(torBootstrapped: Boolean, socksPort: Int): Boolean =
         torBootstrapped && socksPort in 1..65535
 

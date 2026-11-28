@@ -27,6 +27,9 @@ internal object CloudCrypto {
     private const val MAX_READ_PLAINTEXT_BYTES = 32 * 1024 * 1024
     private const val MAX_READ_CIPHERTEXT_BYTES = MAX_READ_PLAINTEXT_BYTES + 16
     private const val MAX_CIPHERTEXT_B64_CHARS = ((MAX_READ_CIPHERTEXT_BYTES + 2) / 3) * 4
+    // Legacy atomic bundles can contain two independently encrypted 32 MiB envelopes.
+    // Keep the per-envelope limits unchanged while allowing both Base64 payloads and JSON overhead.
+    internal const val MAX_HTTP_RESPONSE_BYTES = 2 * MAX_CIPHERTEXT_B64_CHARS + 2_097_152
     private fun utf8ByteCount(value: String, stopAfter: Int): Int {
         var total = 0
         var index = 0
@@ -52,6 +55,21 @@ internal object CloudCrypto {
         utf8ByteCount(value, MAX_READ_PLAINTEXT_BYTES) <= MAX_READ_PLAINTEXT_BYTES
     internal fun isCiphertextWithinLimit(encodedLength: Int): Boolean =
         encodedLength in 1..MAX_CIPHERTEXT_B64_CHARS
+
+    internal fun readBoundedResponse(input: java.io.InputStream, maxBytes: Int = MAX_HTTP_RESPONSE_BYTES): String {
+        require(maxBytes >= 0) { "Response limit cannot be negative" }
+        val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 8_192))
+        val buffer = ByteArray(8_192)
+        var total = 0
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            require(total <= maxBytes) { "Cloud sync response exceeds the allowed size" }
+            output.write(buffer, 0, count)
+        }
+        return output.toString(Charsets.UTF_8.name())
+    }
     private fun b64(bytes: ByteArray) = java.util.Base64.getEncoder().withoutPadding().encodeToString(bytes)
     private fun unb64(value: String) = java.util.Base64.getDecoder().decode(value)
 
@@ -230,6 +248,7 @@ class NovaCloudSync(context: Context) {
 
     fun signedInUserId(): String? = runCatching { validSession()?.optString("user_id")?.takeIf { it.isNotBlank() } }.getOrNull()
 
+    @Synchronized
     fun signOut() {
         runCatching { validSession()?.let { request("POST", "/auth/v1/logout", "{}", it.getString("access_token")) } }
         sessionFile.delete()
@@ -239,6 +258,7 @@ class NovaCloudSync(context: Context) {
         vaultUpdatedAt = null
     }
 
+    @Synchronized
     internal fun downloadEncrypted(expectedUserId: String): NovaCloudDownload {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
@@ -260,6 +280,7 @@ class NovaCloudSync(context: Context) {
         return NovaCloudDownload(unpacked.first, payloads)
     }
 
+    @Synchronized
     fun uploadEncrypted(expectedUserId: String, snapshot: JSONObject, vault: JSONObject) {
         val session = validSession() ?: throw IllegalStateException("Sign in to Nova Cloud first")
         val userId = session.getString("user_id")
@@ -322,6 +343,7 @@ class NovaCloudSync(context: Context) {
         }
     }
 
+    @Synchronized
     private fun validSession(): JSONObject? {
         val session = loadSession() ?: return null
         if (session.optLong("expires_at") > System.currentTimeMillis() / 1000 + 90) return session
@@ -351,7 +373,7 @@ class NovaCloudSync(context: Context) {
             if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val response = stream?.use { CloudCrypto.readBoundedResponse(it) }.orEmpty()
             if (status !in 200..299) {
                 throw IllegalStateException(NovaEmailOtpPolicy.errorMessage(response, status))
             }

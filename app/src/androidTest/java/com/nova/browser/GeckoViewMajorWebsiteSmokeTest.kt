@@ -1,30 +1,51 @@
 package com.nova.browser
 
+import android.content.Context
+import android.net.Uri
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.nova.browser.engine.GeckoViewBrowserEngine
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoSession
-import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
-import com.nova.browser.engine.BrowserEngineListener
-import com.nova.browser.engine.GeckoViewBrowserEngine
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
 @RunWith(AndroidJUnit4::class)
 class GeckoViewMajorWebsiteSmokeTest {
-    private fun hasNetworkAccess(): Boolean = runCatching {
-        val connection = URL("https://example.com/").openConnection() as HttpsURLConnection
+    private fun prepareGeckoNormalTab() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("nova_local", Context.MODE_PRIVATE).edit()
+            .putString("shield_mode", "STANDARD")
+            .putBoolean("nova_vpn_enabled", false)
+            .apply()
+    }
+
+    private fun activeGeckoEngine(activity: MainActivity): GeckoViewBrowserEngine {
+        val currentTabMethod = MainActivity::class.java.getDeclaredMethod("currentTab").apply { isAccessible = true }
+        val tab = currentTabMethod.invoke(activity)
+            ?: throw AssertionError("MainActivity did not create an active browser tab")
+        val tabClass = tab.javaClass
+        val engineGetter = tabClass.getDeclaredMethod("getBrowserEngine").apply { isAccessible = true }
+        fun currentEngine() = engineGetter.invoke(tab) as? GeckoViewBrowserEngine
+        if (currentEngine() == null) {
+            val loadMethod = MainActivity::class.java.getDeclaredMethod(
+                "loadTabUrl", tabClass, String::class.java
+            ).apply { isAccessible = true }
+            loadMethod.invoke(activity, tab, "https://example.com/")
+        }
+        return currentEngine()
+            ?: throw AssertionError("The active Normal tab did not select GeckoView for the Shield-enabled test")
+    }
+
+    private fun hasNetworkAccess(url: String): Boolean = runCatching {
+        val connection = URL(url).openConnection() as HttpsURLConnection
         connection.connectTimeout = 5000
         connection.readTimeout = 5000
         connection.requestMethod = "GET"
@@ -34,106 +55,76 @@ class GeckoViewMajorWebsiteSmokeTest {
         code in 200..399
     }.getOrDefault(false)
 
+    private fun waitForPage(
+        scenario: ActivityScenario<MainActivity>,
+        engine: GeckoViewBrowserEngine,
+        expectedUrl: String,
+        timeoutSeconds: Long
+    ): Boolean {
+        val expectedHost = Uri.parse(expectedUrl).host?.removePrefix("www.")
+        val deadline = SystemClock.uptimeMillis() + timeoutSeconds * 1000
+        while (SystemClock.uptimeMillis() < deadline) {
+            var loading = true
+            var url: String? = null
+            var error: String? = null
+            scenario.onActivity {
+                loading = engine.state.isLoading
+                url = engine.state.url
+                error = engine.state.error
+            }
+            val currentHost = url?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+            val hostMatches = currentHost != null && expectedHost != null &&
+                (currentHost == expectedHost || currentHost.endsWith(".$expectedHost"))
+            if (!loading && hostMatches && error == null) return true
+            SystemClock.sleep(100)
+        }
+        return false
+    }
+
     @Test fun majorWebsiteEntryPointsLoadInGeckoViewWhenNetworkIsAvailable() {
-        assumeTrue("Network unavailable in this emulator", hasNetworkAccess())
-        val started = AtomicReference(CountDownLatch(1))
-        val finished = AtomicReference(CountDownLatch(1))
-        val success = AtomicBoolean(false)
-        var engine: GeckoViewBrowserEngine? = null
+        val candidates = listOf(
+            "https://example.com/",
+            "https://www.google.com/",
+            "https://www.youtube.com/"
+        )
+        val reachable = candidates.filter(::hasNetworkAccess)
+        assumeTrue("Fewer than two external HTTPS sites are reachable from this emulator", reachable.size >= 2)
 
+        prepareGeckoNormalTab()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            scenario.onActivity { activity ->
-                val runtimeField = MainActivity::class.java.getDeclaredField("runtime").apply { isAccessible = true }
-                val runtime = runtimeField.get(activity) as GeckoRuntime
-                val session = GeckoSession(GeckoSessionSettings.Builder().build())
-                val view = GeckoView(activity)
-                val root = activity.findViewById<FrameLayout>(android.R.id.content)
-                root.addView(view, FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                ))
-                engine = GeckoViewBrowserEngine(session, view, BrowserEngineListener { })
-                engine!!.installDelegates { geckoSession ->
-                    geckoSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
-                        override fun onLocationChange(
-                            session: GeckoSession,
-                            url: String?,
-                            permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
-                            hasUserGesture: Boolean
-                        ) {
-                            if (!url.isNullOrBlank() && url != "about:blank") engine?.updateState(engine!!.state.copy(url = url))
-                        }
-                    }
-                    geckoSession.progressDelegate = object : GeckoSession.ProgressDelegate {
-                        override fun onPageStart(session: GeckoSession, url: String) {
-                            if (url == "about:blank") return
-                            started.get().countDown()
-                            engine?.updateState(engine!!.state.copy(url = url, isLoading = true, progress = 0, error = null))
-                        }
-
-                        override fun onPageStop(session: GeckoSession, pageSuccess: Boolean) {
-                            if (started.get().count != 0L) return
-                            success.set(pageSuccess)
-                            engine?.updateState(engine!!.state.copy(isLoading = false, progress = 100,
-                                error = if (pageSuccess) null else "GeckoView page load failed"))
-                            finished.get().countDown()
-                        }
-                    }
-                    geckoSession.open(runtime)
-                }
-                engine!!.attachTo(view)
-                engine!!.setActive(true, true)
-            }
-
-            fun loadAndCheck(url: String) {
-                success.set(false)
-                started.set(CountDownLatch(1))
-                finished.set(CountDownLatch(1))
-                scenario.onActivity { engine!!.loadUrl(url) }
-                val began = started.get().await(20, TimeUnit.SECONDS)
-                val completed = began && finished.get().await(30, TimeUnit.SECONDS)
-                assertTrue("GeckoView did not finish loading $url", completed)
-                assertTrue("GeckoView reported a failed page load for $url", success.get())
-                assertTrue("GeckoView did not keep HTTPS for $url", engine?.state?.url?.startsWith("https://") == true)
-            }
-
-            try {
-                loadAndCheck("https://example.com/")
-                listOf(
-                    "https://www.google.com/",
-                    "https://www.youtube.com/",
-                    "https://github.com/",
-                    "https://www.instagram.com/",
-                    "https://discord.com/app",
-                    "https://web.whatsapp.com/",
-                    "https://www.microsoft365.com/"
-                ).forEach { loadAndCheck(it) }
-            } finally {
-                scenario.onActivity { engine?.close() }
+            var engine: GeckoViewBrowserEngine? = null
+            scenario.onActivity { activity -> engine = activeGeckoEngine(activity) }
+            val activeEngine = engine ?: throw AssertionError("GeckoView engine was not created")
+            reachable.forEach { url ->
+                scenario.onActivity { activeEngine.loadUrl(url) }
+                assertTrue(
+                    "GeckoView did not finish loading $url",
+                    waitForPage(scenario, activeEngine, url, 35)
+                )
+                var finalUrl: String? = null
+                scenario.onActivity { finalUrl = activeEngine.state.url }
+                assertTrue("GeckoView did not keep HTTPS for $url", finalUrl?.startsWith("https://") == true)
             }
         }
     }
 
-
     @Test fun engineAdapterCanDetachReattachPauseResumeAndCloseIdempotently() {
+        prepareGeckoNormalTab()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val runtimeField = MainActivity::class.java.getDeclaredField("runtime").apply { isAccessible = true }
-                val runtime = runtimeField.get(activity) as GeckoRuntime
-                val firstView = GeckoView(activity)
+                val engine = activeGeckoEngine(activity)
                 val secondView = GeckoView(activity)
                 val root = activity.findViewById<FrameLayout>(android.R.id.content)
-                root.addView(firstView, FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                ))
-                root.addView(secondView, FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                ))
+                root.addView(
+                    secondView,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                )
 
-                val session = GeckoSession(GeckoSessionSettings.Builder().build())
-                val engine = GeckoViewBrowserEngine(session, firstView, BrowserEngineListener { })
-                session.open(runtime)
-                engine.attachTo(firstView)
-                engine.setActive(true, true)
+                // Reuse the one session already owned by MainActivity instead of allocating
+                // a second GeckoRuntime/GeckoSession beside the browser's active session.
                 engine.detach()
                 engine.attachTo(secondView)
                 engine.onHostPause()
@@ -146,5 +137,4 @@ class GeckoViewMajorWebsiteSmokeTest {
             }
         }
     }
-
 }

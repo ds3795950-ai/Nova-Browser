@@ -34,7 +34,8 @@ import javax.crypto.spec.GCMParameterSpec
 internal enum class NovaAiProvider(val label: String, val defaultModel: String) {
     CHATGPT("ChatGPT", "gpt-4o-mini"), CLAUDE("Claude", "claude-3-5-haiku-latest"),
     GROK("Grok", "grok-3-mini"), GEMINI("Gemini", "gemini-3.8-flash"),
-    KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat")
+    KIMI("Kimi", "kimi-k2.5"), DEEPSEEK("DeepSeek", "deepseek-chat"),
+    PERPLEXITY("Perplexity", "perplexity/sonar")
 }
 private const val NOVA_AI_PAGE_CONTEXT_MARKER = "--- Current webpage context (user attached) ---"
 private const val LEGACY_PAGE_CONTEXT_FINGERPRINT = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -58,11 +59,59 @@ private object NovaAiModelCatalog {
         NovaAiProvider.GEMINI -> listOf("gemini-3.1-pro")
         NovaAiProvider.KIMI -> listOf("kimi-k2-thinking")
         NovaAiProvider.DEEPSEEK -> listOf("deepseek-reasoner")
+        NovaAiProvider.PERPLEXITY -> emptyList()
     }
 }
 
 
 /** API credentials and chat history are encrypted at rest using an Android Keystore AES key. */
+/** Extracts assistant text and source links from the Perplexity Agent API response envelope. */
+internal object NovaAiResponsePolicy {
+    fun extractAgentText(response: JSONObject): String {
+        val status = response.optString("status")
+        if (status.isNotBlank() && status != "completed") {
+            error("Perplexity Agent run did not complete: $status")
+        }
+        if (response.optBoolean("incomplete", false) ||
+            (response.has("incomplete_details") && !response.isNull("incomplete_details"))) {
+            error("Perplexity Agent returned an incomplete answer; retry the request")
+        }
+        val output = response.optJSONArray("output") ?: return ""
+        val answer = mutableListOf<String>()
+        val sources = linkedSetOf<String>()
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            when (item.optString("type")) {
+                "message" -> {
+                    if (item.optString("role") != "assistant") continue
+                    val content = item.optJSONArray("content") ?: continue
+                    for (j in 0 until content.length()) {
+                        val block = content.optJSONObject(j) ?: continue
+                        if (block.optString("type") == "output_text") {
+                            block.optString("text").takeIf { it.isNotBlank() }?.let(answer::add)
+                            val annotations = block.optJSONArray("annotations") ?: continue
+                            for (k in 0 until annotations.length()) {
+                                annotations.optJSONObject(k)?.optString("url")
+                                    ?.takeIf { it.startsWith("https://") }?.let(sources::add)
+                            }
+                        }
+                    }
+                }
+                "search_results" -> {
+                    val results = item.optJSONArray("results") ?: continue
+                    for (j in 0 until results.length()) {
+                        results.optJSONObject(j)?.optString("url")
+                            ?.takeIf { it.startsWith("https://") }?.let(sources::add)
+                    }
+                }
+            }
+        }
+        val text = answer.joinToString("\n").trim()
+        if (text.isBlank() || sources.isEmpty()) return text
+        return text + "\n\nSources:\n" + sources.joinToString("\n") { "- $it" }
+    }
+}
+
 internal class NovaAiSecureStore(context:Context) {
     private val p=context.getSharedPreferences("nova_ai_secure",Context.MODE_PRIVATE)
     private val alias="com.nova.browser.ai.v1"
@@ -265,6 +314,7 @@ internal object NovaAiApi {
                 NovaAiProvider.GEMINI->"https://generativelanguage.googleapis.com/v1beta/models" to mapOf("x-goog-api-key" to key)
                 NovaAiProvider.KIMI->"https://api.moonshot.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
                 NovaAiProvider.DEEPSEEK->"https://api.deepseek.com/models" to mapOf("Authorization" to "Bearer $key")
+                NovaAiProvider.PERPLEXITY->"https://api.perplexity.ai/v1/models" to mapOf("Authorization" to "Bearer $key")
             }
             val j=call("GET",url,h);val a=j.optJSONArray(if(p==NovaAiProvider.GEMINI)"models" else "data")
             (0 until (a?.length()?:0)).mapNotNull{i->val o=a!!.optJSONObject(i)?:return@mapNotNull null
@@ -308,6 +358,17 @@ internal object NovaAiApi {
                     val a=JSONArray();recent.forEach{a.put(JSONObject().put("role",if(it.role=="assistant")"model" else "user").put("parts",JSONArray().put(JSONObject().put("text",it.text))))}
                     call("POST","https://generativelanguage.googleapis.com/v1beta/models/${enc(model)}:generateContent",mapOf("x-goog-api-key" to key),JSONObject().put("contents",a))
                         .optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty().ifBlank{error("Empty AI response")}
+                }
+                NovaAiProvider.PERPLEXITY->{
+                    val input=JSONArray()
+                    recent.forEach{input.put(JSONObject().put("type","message").put("role",it.role).put("content",it.text))}
+                    val response=call(
+                        "POST",
+                        "https://api.perplexity.ai/v1/agent",
+                        mapOf("Authorization" to "Bearer $key"),
+                        JSONObject().put("model",model).put("input",input).put("max_output_tokens",2048)
+                    )
+                    NovaAiResponsePolicy.extractAgentText(response).ifBlank{error("Empty AI response")}
                 }
             }
         };main.post{done(r)}
@@ -770,8 +831,11 @@ internal class NovaAiAssistantUi(
 
     private fun summarise() {
         status.text = "Preparing page summary…"
+        val requestGeneration = conversationGeneration
+        val requestProvider = provider
         requestPageText { page ->
-            if (dialog?.isShowing != true) return@requestPageText
+            if (requestGeneration != conversationGeneration || requestProvider != provider ||
+                dialog?.isShowing != true) return@requestPageText
             if (page.isNullOrBlank()) {
                 status.text = "No readable page found"
                 notify("Could not read the current webpage")

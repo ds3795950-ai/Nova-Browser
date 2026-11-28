@@ -55,13 +55,35 @@ jobs:
           NOVA_RELEASE_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.NOVA_RELEASE_KEY_ALIAS || '' }}
           NOVA_RELEASE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.NOVA_RELEASE_KEY_PASSWORD || '' }}
         run: gradle :app:assembleRelease
-      - name: Upload APK artifacts
-        continue-on-error: true
+      - name: Stage installable ARM64 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          SIGNED_APK="app/build/outputs/apk/release/app-arm64-v8a-release.apk"
+          UNSIGNED_APK="app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk"
+          if [ -f "$SIGNED_APK" ]; then
+            cp "$SIGNED_APK" artifacts/NovaBrowser-arm64-release.apk
+            echo "Using the production-signed ARM64 release APK."
+          elif [ -f "$UNSIGNED_APK" ] && [ -f "$HOME/.android/debug.keystore" ]; then
+            SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+            APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+            test -n "$APKSIGNER"
+            "$APKSIGNER" sign --ks "$HOME/.android/debug.keystore" \
+              --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
+              --out artifacts/NovaBrowser-arm64-test.apk "$UNSIGNED_APK"
+            "$APKSIGNER" verify --verbose artifacts/NovaBrowser-arm64-test.apk
+            echo "No production signing key is configured; this optimized ARM64 APK is signed with the runner's temporary debug key for testing only."
+          else
+            cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk artifacts/NovaBrowser-arm64-debug.apk
+            echo "Using the installable ARM64 debug APK fallback."
+          fi
+          ls -lh artifacts
+          sha256sum artifacts/*.apk
+      - name: Upload ARM64 APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nova-apks
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+          name: nova-arm64-apk
+          path: artifacts/*.apk
           if-no-files-found: error
           retention-days: 7

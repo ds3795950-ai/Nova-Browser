@@ -43,6 +43,22 @@ class CloudCryptoTest {
         assertEquals(false, CloudCrypto.isCiphertextWithinLimit(44_739_265))
     }
 
+    @Test fun cloudHttpResponseLimitFitsTwoMaximumLegacyEnvelopes() {
+        val maximumEnvelopeBase64Chars = 44_739_264 // 32 MiB plaintext + GCM tag, Base64 encoded.
+        val bundleJsonOverheadAllowance = 2_097_152
+        assertEquals(true, CloudCrypto.MAX_HTTP_RESPONSE_BYTES >=
+            2 * maximumEnvelopeBase64Chars + bundleJsonOverheadAllowance)
+    }
+
+    @Test fun cloudHttpResponseReaderAcceptsAtLimitAndRejectsOversize() {
+        val input = java.io.ByteArrayInputStream("1234".toByteArray())
+        assertEquals("1234", CloudCrypto.readBoundedResponse(input, maxBytes = 4))
+        try {
+            CloudCrypto.readBoundedResponse(java.io.ByteArrayInputStream("12345".toByteArray()), maxBytes = 4)
+            throw AssertionError("Oversized cloud response was accepted")
+        } catch (_: IllegalArgumentException) { }
+    }
+
     @Test fun eachBackupUsesFreshSaltAndIv() {
         val passphrase = "correct-horse-battery".toCharArray()
         val first = CloudCrypto.encrypt("same backup", passphrase)

@@ -11,6 +11,45 @@ import org.mozilla.geckoview.WebExtension
 import com.nova.browser.engine.CefriumVpnController
 import com.nova.browser.engine.CefriumVpnCredentials
 
+internal object VpnCredentialBootstrapPolicy {
+    fun shouldStart(vpnEnabled: Boolean, guestTorEnabled: Boolean, torProxyReserved: Boolean): Boolean =
+        vpnEnabled && !guestTorEnabled && !torProxyReserved
+}
+
+/** A Tor stop is confirmed only by the acknowledgement for the latest disable request. */
+internal object TorGuestConfigAckPolicy {
+    fun isLatestDisableAcknowledgement(
+        latestRequestId: Long,
+        disableRequestId: Long,
+        acknowledgedRequestId: Long,
+        configured: Boolean,
+        torGuestMode: Boolean
+    ): Boolean = latestRequestId > 0L && disableRequestId == latestRequestId &&
+        acknowledgedRequestId == disableRequestId && configured && !torGuestMode
+}
+
+/** Pure fail-closed decision for browser navigation while 1VPN is requested. */
+internal object BrowserVpnNavigationPolicy {
+    fun shouldBlockNavigation(vpnEnabled: Boolean, routingReady: Boolean): Boolean = vpnEnabled && !routingReady
+}
+
+/** Owner-scoped observers; destroying one Activity must not detach another Activity. */
+internal class OwnerScopedListenerRegistry {
+    private val listeners = java.util.IdentityHashMap<Any, () -> Unit>()
+
+    fun set(owner: Any, listener: (() -> Unit)?) {
+        if (listener == null) listeners.remove(owner) else listeners[owner] = listener
+    }
+
+    fun remove(owner: Any) {
+        listeners.remove(owner)
+    }
+
+    fun dispatch() {
+        listeners.values.toList().forEach { listener -> runCatching { listener.invoke() } }
+    }
+}
+
 /** Controls the bundled 1VPN browser proxy. It never creates an Android VpnService. */
 object NovaBrowserVpnController {
     const val EXTENSION_ID = "1vpn-internal@nova.browser"
@@ -22,17 +61,20 @@ object NovaBrowserVpnController {
     private var nativePort: WebExtension.Port? = null
     private var credentialBootstrapSession: GeckoSession? = null
     private var credentialBootstrapTimeout: Runnable? = null
-    private var statusListener: (() -> Unit)? = null
+    // Multiple Activities can observe routing concurrently (browser + VPN settings).
+    // A closing screen must only remove its own observer.
+    private val statusListeners = OwnerScopedListenerRegistry()
     private var torRoutingStatusListener: (() -> Unit)? = null
+    private var latestConfigRequestId = 0L
 
     fun initialize(context: Context, geckoRuntime: GeckoRuntime) {
         if (runtime === geckoRuntime) return
         runtime = geckoRuntime
         preferences = context.applicationContext.getSharedPreferences("nova_local", Context.MODE_PRIVATE)
-        preferences?.edit()?.putBoolean("nova_tor_guest_enabled", false)?.putInt("nova_tor_guest_socks_port", 0)?.putBoolean("nova_tor_guest_proxy_ready", false)?.apply()
+        preferences?.edit()?.putBoolean("nova_tor_guest_enabled", false)?.putInt("nova_tor_guest_socks_port", 0)?.putBoolean("nova_tor_guest_proxy_ready", false)?.putBoolean("nova_tor_guest_configured", false)?.putBoolean("nova_tor_guest_mode", false)?.putBoolean("nova_vpn_routing_ready", false)?.apply()
         CefriumVpnController.setStatusListener { message ->
             preferences?.edit()?.putString("nova_vpn_status", message)?.apply()
-            statusListener?.invoke()
+            notifyStatusListeners()
         }
         // Restore the persisted toggle before any Cefrium profile is opened. Profiles
         // registered later will receive a fail-closed proxy until the extension handshake.
@@ -47,13 +89,22 @@ object NovaBrowserVpnController {
                             ?.putBoolean("nova_vpn_proxy_supported", false)
                             ?.putString("nova_vpn_status", "1VPN built-in component could not be installed")
                             ?.apply()
-                        statusListener?.invoke()
+                        notifyStatusListeners()
                     } else {
                         extension.setMessageDelegate(object : WebExtension.MessageDelegate {
                             override fun onConnect(port: WebExtension.Port) {
                                 nativePort = port
+                                // A replacement bridge must not inherit the prior port's ready state.
+                                preferences?.edit()
+                                    ?.putBoolean("nova_vpn_routing_ready", false)
+                                    ?.putBoolean("nova_tor_guest_proxy_ready", false)
+                                    ?.putBoolean("nova_tor_guest_configured", false)
+                                    ?.apply()
+                                notifyStatusListeners()
+                                torRoutingStatusListener?.invoke()
                                 port.setDelegate(object : WebExtension.PortDelegate {
                                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                                        if (nativePort !== port) return
                                         val payload = message as? JSONObject ?: return
                                         val prefs = preferences ?: return
                                         when (payload.optString("type")) {
@@ -68,34 +119,53 @@ object NovaBrowserVpnController {
                                                 CefriumVpnController.updateCredentials(config)
                                                 closeCredentialBootstrap()
                                                 prefs.edit().putBoolean("nova_vpn_proxy_supported", true).apply()
-                                                statusListener?.invoke()
+                                                notifyStatusListeners()
                                             }
                                             "ready", "status" -> {
+                                                val requestId = payload.optLong("configRequestId", -1L)
+                                                if (requestId <= 0L || requestId != latestConfigRequestId) return
                                                 prefs.edit()
                                                     .putBoolean("nova_vpn_proxy_supported", payload.optBoolean("supported", false))
                                                     .putBoolean("nova_vpn_webrtc_protected", payload.optBoolean("webrtcProtected", false))
-                                                    .putBoolean("nova_tor_guest_proxy_ready", prefs.getBoolean("nova_tor_guest_enabled", false) && payload.optBoolean("torRoutingReady", false))
+                                                    .putBoolean("nova_vpn_routing_ready", payload.optBoolean("routingReady", false))
+                                                    .putBoolean("nova_tor_guest_configured", payload.has("torGuestMode"))
+                                                    .putBoolean("nova_tor_guest_mode", payload.optBoolean("torGuestMode", false))
+                                                    .putLong("nova_tor_guest_ack_request_id", requestId)
+                                                    .putBoolean("nova_tor_guest_proxy_ready", prefs.getBoolean("nova_tor_guest_enabled", false) && payload.optBoolean("torRoutingReady", false) && payload.optBoolean("routingReady", false))
                                                     .putString("nova_vpn_status", payload.optString("status", "Proxy backend ready"))
                                                     .apply()
-                                                statusListener?.invoke()
+                                                notifyStatusListeners()
                                                 torRoutingStatusListener?.invoke()
                                             }
                                             "error" -> {
+                                                val requestId = payload.optLong("configRequestId", -1L)
+                                                if (requestId > 0L && requestId != latestConfigRequestId) return
                                                 prefs.edit()
                                                     .putBoolean("nova_vpn_proxy_supported", false)
+                                                    .putBoolean("nova_vpn_routing_ready", false)
+                                                    .putBoolean("nova_tor_guest_proxy_ready", false)
+                                                    .putBoolean("nova_tor_guest_configured", false)
                                                     .putString("nova_vpn_status", payload.optString("message", "1VPN proxy error"))
                                                     .apply()
-                                                statusListener?.invoke()
+                                                notifyStatusListeners()
+                                                torRoutingStatusListener?.invoke()
                                             }
                                         }
                                     }
 
                                     override fun onDisconnect(port: WebExtension.Port) {
-                                        if (nativePort === port) nativePort = null
+                                        if (nativePort !== port) return
+                                        nativePort = null
+                                        latestConfigRequestId++
                                         closeCredentialBootstrap()
                                         if (isVpnEnabled()) CefriumVpnController.updateCredentials(null)
-                                        preferences?.edit()?.putBoolean("nova_tor_guest_proxy_ready", false)?.putString("nova_vpn_status", "Proxy bridge disconnected; Guest Tor is no longer verified")?.apply()
-                                        statusListener?.invoke()
+                                        preferences?.edit()
+                                            ?.putBoolean("nova_vpn_routing_ready", false)
+                                            ?.putBoolean("nova_tor_guest_proxy_ready", false)
+                                            ?.putBoolean("nova_tor_guest_configured", false)
+                                            ?.putString("nova_vpn_status", if (isVpnEnabled()) "1VPN bridge disconnected; navigation paused until protection is restored" else "Proxy bridge disconnected; Guest Tor is no longer verified")
+                                            ?.apply()
+                                        notifyStatusListeners()
                                         torRoutingStatusListener?.invoke()
                                     }
                                 })
@@ -110,27 +180,33 @@ object NovaBrowserVpnController {
                     ?.putBoolean("nova_vpn_proxy_supported", false)
                     ?.putString("nova_vpn_status", "Could not load 1VPN: ${error?.localizedMessage ?: "unknown error"}")
                     ?.apply()
-                statusListener?.invoke()
+                notifyStatusListeners()
             })
     }
 
     fun setVpnEnabled(enabled: Boolean) {
         CefriumVpnController.setEnabled(enabled)
         if (enabled) CefriumVpnController.updateCredentials(null) else closeCredentialBootstrap()
-        preferences?.edit()?.putBoolean("nova_vpn_enabled", enabled)?.apply()
+        preferences?.edit()?.putBoolean("nova_vpn_enabled", enabled)?.putBoolean("nova_vpn_routing_ready", !enabled)?.apply()
         preferences?.edit()?.putString("nova_vpn_status", if (enabled) "Starting 1VPN browser proxy…" else "VPN off")?.apply()
         sendCurrentSettings()
-        statusListener?.invoke()
+        notifyStatusListeners()
     }
 
     fun isVpnEnabled(): Boolean = preferences?.getBoolean("nova_vpn_enabled", false) == true
 
+    /** Navigation is denied while the user requested 1VPN but its proxy path is not verified ready. */
+    fun isVpnRoutingReady(): Boolean = !isVpnEnabled() || preferences?.getBoolean("nova_vpn_routing_ready", false) == true
+
     fun setLocation(locationId: String) {
         if (NovaVpnLocations.find(locationId) == null) return
         preferences?.edit()?.putString("nova_vpn_location", locationId)?.apply()
-        if (isVpnEnabled()) CefriumVpnController.updateCredentials(null)
+        if (isVpnEnabled()) {
+            CefriumVpnController.updateCredentials(null)
+            preferences?.edit()?.putBoolean("nova_vpn_routing_ready", false)?.apply()
+        }
         sendCurrentSettings()
-        statusListener?.invoke()
+        notifyStatusListeners()
     }
 
     fun selectedLocationId(): String =
@@ -157,11 +233,24 @@ object NovaBrowserVpnController {
         if (!enabled && current != ShieldMode.OFF) editor?.putString("shield_mode_before_off", current.name)
         editor?.putString("shield_mode", mode.name)?.apply()
         runtime?.let { NovaShield.apply(it, mode) }
-        statusListener?.invoke()
+        notifyStatusListeners()
     }
 
-    fun setStatusListener(listener: (() -> Unit)?) {
-        statusListener = listener
+    fun setStatusListener(owner: Any, listener: (() -> Unit)?) {
+        statusListeners.set(owner, listener)
+    }
+
+    fun clearStatusListener(owner: Any) {
+        statusListeners.remove(owner)
+    }
+
+    private fun notifyStatusListeners() {
+        statusListeners.dispatch()
+    }
+
+    /** Re-evaluate all active Activities after a routing transition completes. */
+    fun notifyStatusChanged() {
+        notifyStatusListeners()
     }
 
     fun setTorRoutingStatusListener(listener: (() -> Unit)?) {
@@ -169,11 +258,13 @@ object NovaBrowserVpnController {
     }
 
     fun setTorGuestRouting(enabled: Boolean, socksPort: Int) {
+        if (enabled) closeCredentialBootstrap()
         val valid = enabled && socksPort in 1..65535
         preferences?.edit()
             ?.putBoolean("nova_tor_guest_enabled", valid)
             ?.putInt("nova_tor_guest_socks_port", if (valid) socksPort else 0)
             ?.putBoolean("nova_tor_guest_proxy_ready", false)
+            ?.putBoolean("nova_tor_guest_configured", false)
             ?.apply()
         sendCurrentSettings()
         torRoutingStatusListener?.invoke()
@@ -183,27 +274,78 @@ object NovaBrowserVpnController {
         nativePort != null && preferences?.getBoolean("nova_tor_guest_enabled", false) == true &&
             preferences?.getBoolean("nova_tor_guest_proxy_ready", false) == true
 
+    /** True only after the latest matching disable request is acknowledged by the extension. */
+    fun isTorGuestRoutingDisabledConfirmed(): Boolean {
+        val prefs = preferences ?: return false
+        val requestId = prefs.getLong("nova_tor_guest_disable_request_id", 0L)
+        val acknowledgedId = prefs.getLong("nova_tor_guest_ack_request_id", 0L)
+        return nativePort != null && TorGuestConfigAckPolicy.isLatestDisableAcknowledgement(
+            latestRequestId = latestConfigRequestId,
+            disableRequestId = requestId,
+            acknowledgedRequestId = acknowledgedId,
+            configured = prefs.getBoolean("nova_tor_guest_configured", false),
+            torGuestMode = prefs.getBoolean("nova_tor_guest_mode", true)
+        )
+    }
+
     private fun sendCurrentSettings() {
         val prefs = preferences ?: return
+        val requestId = maxOf(latestConfigRequestId, prefs.getLong("nova_vpn_config_request_id", 0L)) + 1L
+        latestConfigRequestId = requestId
+        val torGuestMode = prefs.getBoolean("nova_tor_guest_enabled", false)
+        prefs.edit()
+            .putLong("nova_vpn_config_request_id", requestId)
+            .putLong("nova_tor_guest_disable_request_id", if (torGuestMode) 0L else requestId)
+            .putBoolean("nova_tor_guest_configured", false)
+            .apply()
         val payload = runCatching {
             JSONObject()
                 .put("type", "configure")
+                .put("configRequestId", requestId)
                 .put("enabled", prefs.getBoolean("nova_vpn_enabled", false))
                 .put("location", prefs.getString("nova_vpn_location", NovaVpnLocations.DEFAULT_ID))
-                .put("torGuestMode", prefs.getBoolean("nova_tor_guest_enabled", false))
+                .put("torGuestMode", torGuestMode)
                 .put("torSocksPort", prefs.getInt("nova_tor_guest_socks_port", 0))
         }.getOrNull() ?: return
         runCatching { nativePort?.postMessage(payload) }
-        if (prefs.getBoolean("nova_vpn_enabled", false)) requestCredentialBootstrap()
+        if (VpnCredentialBootstrapPolicy.shouldStart(
+                vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
+                guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
+            )) requestCredentialBootstrap()
     }
 
     /** A short-lived hidden Gecko session makes one ordinary request so 1VPN's own
      * onAuthRequired handler can hand its resolved credentials to Cefrium. */
+    fun onGuestTorStopped() {
+        val prefs = preferences ?: return
+        if (VpnCredentialBootstrapPolicy.shouldStart(
+                vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
+                guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
+            )) requestCredentialBootstrap()
+    }
+
     private fun requestCredentialBootstrap() {
         val geckoRuntime = runtime ?: return
+        val prefs = preferences ?: return
+        if (!VpnCredentialBootstrapPolicy.shouldStart(
+                vpnEnabled = prefs.getBoolean("nova_vpn_enabled", false),
+                guestTorEnabled = prefs.getBoolean("nova_tor_guest_enabled", false),
+                torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
+            )) return
         if (nativePort == null || credentialBootstrapSession != null) return
         Handler(Looper.getMainLooper()).postDelayed({
-            if (nativePort == null || !isVpnEnabled() || credentialBootstrapSession != null) return@postDelayed
+            if (nativePort == null || !isVpnEnabled() || credentialBootstrapSession != null ||
+                !VpnCredentialBootstrapPolicy.shouldStart(
+                    vpnEnabled = isVpnEnabled(),
+                    guestTorEnabled = preferences?.getBoolean("nova_tor_guest_enabled", false) == true,
+                    torProxyReserved = TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                    !isTorGuestRoutingDisabledConfirmed()
+                )) return@postDelayed
             runCatching {
                 val session = GeckoSession()
                 credentialBootstrapSession = session
@@ -219,7 +361,7 @@ object NovaBrowserVpnController {
             }.onFailure {
                 closeCredentialBootstrap()
                 preferences?.edit()?.putString("nova_vpn_status", "Could not start the 1VPN credential handshake")?.apply()
-                statusListener?.invoke()
+                notifyStatusListeners()
             }
         }, 300L)
     }
