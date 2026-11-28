@@ -155,6 +155,7 @@ class NovaCloudSync(context: Context) {
     private val appContext = context.applicationContext
     private val sessionFile = File(appContext.noBackupFilesDir, "nova-cloud-session.bin")
     @Volatile private var snapshotVersion: String? = null
+    @Volatile private var vaultVersion: String? = null
 
     /** Create a Supabase account using email and password. */
     fun signUpWithPassword(email: String, password: String) {
@@ -250,6 +251,7 @@ class NovaCloudSync(context: Context) {
         runCatching { validSession()?.let { request("POST", "/auth/v1/logout", "{}", it.getString("access_token")) } }
         sessionFile.delete()
         snapshotVersion = null
+        vaultVersion = null
     }
 
     @Synchronized
@@ -280,45 +282,40 @@ class NovaCloudSync(context: Context) {
         val userId = session.getString("user_id")
         check(userId == expectedUserId) { "Nova Cloud account changed during sync" }
         val token = session.getString("access_token")
-        // New clients write the browser snapshot and password vault in one encrypted bundle
-        // and one compare-and-swap row. Two sequential table writes could partially succeed
-        // (for example, vault succeeds but snapshot conflicts), exposing a mixed backup.
-        // The legacy vault table remains read-only compatibility input in downloadEncrypted().
-        val bundle = NovaCloudBundle.pack(snapshot, vault)
-        upsertRow("nova_sync_state", "snapshot", userId, bundle, token, snapshotVersion)
+        // The RPC validates both source revisions and updates the bundled snapshot plus
+        // the legacy vault row in one database transaction. This preserves old-client
+        // compatibility without allowing a concurrent legacy write to be silently omitted.
+        val body = JSONObject()
+            .put("p_snapshot", NovaCloudBundle.pack(snapshot, vault))
+            .put("p_legacy_vault", vault)
+            .put("p_expected_snapshot_updated_at", snapshotVersion ?: JSONObject.NULL)
+            .put("p_expected_legacy_vault_updated_at", vaultVersion ?: JSONObject.NULL)
+        val response = try {
+            request("POST", "/rest/v1/rpc/nova_upload_sync_bundle", body.toString(), token)
+        } catch (error: IllegalStateException) {
+            if (error.message?.contains("CLOUD_SYNC_CONFLICT") == true) {
+                throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
+            }
+            throw error
+        }
+        val revisions = JSONObject(response)
+        snapshotVersion = revisions.optString("snapshot_updated_at").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Cloud sync response did not include its new snapshot revision")
+        vaultVersion = revisions.optString("vault_updated_at").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Cloud sync response did not include its legacy vault revision")
     }
 
     private fun fetchRow(table: String, column: String, userId: String, token: String): JSONObject? {
         val result = request("GET", "/rest/v1/$table?select=$column,updated_at&user_id=eq.$userId", null, token)
         val rows = org.json.JSONArray(result)
         if (rows.length() == 0) {
-            if (column == "snapshot") snapshotVersion = null
+            if (column == "snapshot") snapshotVersion = null else vaultVersion = null
             return null
         }
         val row = rows.getJSONObject(0)
         val version = row.optString("updated_at").takeIf { it.isNotBlank() }
-        if (column == "snapshot") snapshotVersion = version
+        if (column == "snapshot") snapshotVersion = version else vaultVersion = version
         return row.optJSONObject(column)
-    }
-
-    /** Compare-and-swap prevents two devices syncing the same old revision from silently overwriting each other. */
-    private fun upsertRow(table: String, column: String, userId: String, payload: JSONObject, token: String, expectedVersion: String?) {
-        val body = JSONObject().put("user_id", userId).put(column, payload)
-        val response = if (expectedVersion == null) {
-            request("POST", "/rest/v1/$table?on_conflict=user_id", body.toString(), token,
-                "resolution=ignore-duplicates,return=representation")
-        } else {
-            val encodedVersion = java.net.URLEncoder.encode(expectedVersion, "UTF-8")
-            request("PATCH", "/rest/v1/$table?user_id=eq.$userId&updated_at=eq.$encodedVersion", body.toString(), token,
-                "return=representation")
-        }
-        val rows = org.json.JSONArray(response)
-        if (rows.length() == 0) {
-            throw CloudSyncConflictException("Cloud data changed on another device during sync. Run Sync now again to merge the newest copy.")
-        }
-        val newVersion = rows.getJSONObject(0).optString("updated_at").takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("Cloud sync response did not include its new revision")
-        if (column == "snapshot") snapshotVersion = newVersion
     }
 
     @Synchronized
