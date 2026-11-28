@@ -358,7 +358,7 @@ class CefriumBrowserEngine(
                 } catch (_) { return false; }
               });
               if (!form) return JSON.stringify({ok:false, reason:'same-origin-password-form-not-found'});
-              const passwordField = form.querySelector('input[type="password"]');
+              const passwordField = form.querySelector('input[autocomplete="current-password"], input[type="password"]:not([autocomplete="new-password"])');
               if (!passwordField || passwordField.disabled || passwordField.readOnly)
                 return JSON.stringify({ok:false, reason:'password-field-unavailable'});
               const usernameField = form.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[id*="user" i], input[name*="email" i], input[id*="email" i]');
@@ -374,7 +374,10 @@ class CefriumBrowserEngine(
             })()
         """.trimIndent()
         browser.evaluateJavaScript(script, ValueCallback { raw ->
-            val result = runCatching { JSONTokener(raw ?: "{}").nextValue() as? JSONObject }.getOrNull()
+            val result = runCatching {
+                val decoded = JSONTokener(raw ?: "{}").nextValue()
+                if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+            }.getOrNull()
             val success = result?.optBoolean("ok") == true
             val reason = result?.optString("reason").orEmpty()
             onResult(success, if (success) "Saved login filled" else when (reason) {

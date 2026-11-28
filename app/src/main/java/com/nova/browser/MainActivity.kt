@@ -5680,7 +5680,7 @@ class MainActivity : ComponentActivity() {
                     .origin(url).username(username.text.toString()).password(password.text.toString())
                 entry?.httpRealm?.let { builder.httpRealm(it) }
                 entry?.formActionOrigin?.let { builder.formActionOrigin(it) }
-                runCatching { passwordVault.save(builder.build()); switchCefriumTabsForSavedLogins(); onSaved() }
+                runCatching { passwordVault.save(builder.build()); onSaved() }
                     .onFailure { toast(getString(R.string.vault_save_failed)) }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -5698,7 +5698,7 @@ class MainActivity : ComponentActivity() {
                 val url = if (raw.startsWith("https://") || raw.startsWith("http://")) raw else "https://$raw"
                 if (Uri.parse(url).host.isNullOrBlank() || username.text.isBlank() || password.text.isBlank()) { toast("Enter a valid site, username and password"); return@setPositiveButton }
                 runCatching { passwordVault.save(Autocomplete.LoginEntry.Builder().guid(UUID.randomUUID().toString()).origin("${Uri.parse(url).scheme}://${Uri.parse(url).host}").username(username.text.toString()).password(password.text.toString()).build()) }
-                    .onSuccess { switchCefriumTabsForSavedLogins(); toast("Login saved encrypted on this device") }
+                    .onSuccess { toast("Login saved encrypted on this device") }
                     .onFailure { toast("Could not save login: ${it?.localizedMessage ?: "Unknown error"}") }
             }.setNegativeButton("Cancel", null).show()
     }
