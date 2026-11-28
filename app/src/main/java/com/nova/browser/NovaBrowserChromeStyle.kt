@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.EditText
 import android.widget.TextView
 import com.nova.browser.engine.BrowserEngineType
+import org.mozilla.geckoview.GeckoView
 
 /** Shared Nova browser-chrome measurements. These intentionally do not vary by page engine. */
 internal data class NovaBrowserChromeMetrics(
@@ -56,7 +57,9 @@ internal object NovaBrowserChromeStyle {
 
     /** Gives both engine surfaces the same Nova-owned background before/after navigation. */
     fun applyEngineSurface(context: Context, view: View) {
-        view.setBackgroundColor(context.getColor(R.color.nova_background))
+        val backgroundColor = context.getColor(R.color.nova_background)
+        view.setBackgroundColor(backgroundColor)
+        (view as? GeckoView)?.coverUntilFirstPaint(backgroundColor)
     }
 
     fun applyMetaLabel(context: Context, view: TextView, textSizeSp: Float, topPaddingDp: Int, bottomPaddingDp: Int) {

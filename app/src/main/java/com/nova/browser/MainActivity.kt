@@ -841,6 +841,7 @@ class MainActivity : ComponentActivity() {
                 } == true
                 if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || enterKey) {
                     navigateSecondary(text.toString())
+                    dismissSecondaryAddressBarInput()
                     true
                 } else false
             }
@@ -1130,6 +1131,14 @@ class MainActivity : ComponentActivity() {
         val inputMethodManager = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
             as? android.view.inputmethod.InputMethodManager
         inputMethodManager?.hideSoftInputFromWindow(addressBar.windowToken, 0)
+    }
+
+    private fun dismissSecondaryAddressBarInput() {
+        secondaryAddressBar.clearFocus()
+        root.requestFocus()
+        val inputMethodManager = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager
+        inputMethodManager?.hideSoftInputFromWindow(secondaryAddressBar.windowToken, 0)
     }
 
     private fun goHome() {
