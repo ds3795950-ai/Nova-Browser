@@ -31,7 +31,10 @@ object BrowserEngineCapabilitySets {
         BrowserEngineCapability.READER_MODE,
         BrowserEngineCapability.DESKTOP_MODE,
         BrowserEngineCapability.VPN_PROXY,
-        BrowserEngineCapability.PASSWORD_FILL
+        BrowserEngineCapability.PASSWORD_FILL,
+        BrowserEngineCapability.IMAGE_BLOCKING,
+        BrowserEngineCapability.SITE_COOKIE_CONTROLS,
+        BrowserEngineCapability.TRACKER_BLOCKING
     )
 }
 

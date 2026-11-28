@@ -1563,6 +1563,14 @@ class MainActivity : ComponentActivity() {
             autoplayAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "autoplay", false) },
             adBlockingEnabledForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "ads", true) },
             soundAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "sound", true) },
+            imagesBlockedForUrl = { url ->
+                CefriumTrackingProtectionPolicy.shouldBlockImage(
+                    isImage = true,
+                    dataSaverEnabled = prefs.getBoolean("nova_data_saver_enabled", false),
+                    siteImagesAllowed = siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "images", true)
+                )
+            },
+            cookiesAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "cookies", true) },
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread {
                     if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(tab.id, origin, permissions.toSet(), respond)
@@ -5972,6 +5980,20 @@ private fun showQuickSettings() {
             applyProtectedDns(enabled)
             toast(if (enabled) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
         }
+        addSwitch(
+            "Data Saver",
+            "Block page images in both engines to reduce data use",
+            checked = prefs.getBoolean("nova_data_saver_enabled", false),
+            enabled = !isRestricted
+        ) { enabled ->
+            prefs.edit().putBoolean("nova_data_saver_enabled", enabled).apply()
+            applyGeckoImageBehavior { applied ->
+                if (!applied) toast("GeckoView image settings could not be updated")
+                tabs.filter { !it.isPrivate && !it.isGuest && it.lastUrl.startsWith("http", true) }
+                    .forEach { it.browserEngine?.reload() }
+            }
+            toast(if (enabled) "Data Saver enabled · page images blocked" else "Data Saver disabled · image preferences restored")
+        }
         addAction("Nova Shield", "Current mode: ${NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")).name}",
             enabled = !isGuest) { showShieldSettings() }
         addAction("Site permissions", "Review permissions and clear this site's data",
@@ -6043,6 +6065,8 @@ private fun showQuickSettings() {
                 Triple("popups", "Pop-ups and redirects", false),
                 Triple("autoplay", "Autoplay", false),
                 Triple("ads", "Ads and trackers", true),
+                Triple("images", "Images", true),
+                Triple("cookies", "Cookies for this site", true),
                 Triple("sound", "Sound", true)
             ) else listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -6092,6 +6116,7 @@ private fun showQuickSettings() {
                             }
                         }
                         "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(siteSettingAllowed(engine, active.lastUrl, "ads", true))
+                        "images", "cookies" -> Unit // Resource interceptor reads the updated per-site preference on every request.
                         "sound" -> {
                             val effective = siteSettingAllowed(engine, active.lastUrl, "sound", true)
                             if (engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!effective) else active.mediaSession?.muteAudio(!effective)
@@ -6213,6 +6238,8 @@ private fun showQuickSettings() {
             add("site_sound_${engine}_$encoded")
             if (entry.engine == BrowserEngineType.CEFRIUM) {
                 add("site_ads_${engine}_$encoded")
+                add("site_images_${engine}_$encoded")
+                add("site_cookies_${engine}_$encoded")
                 add(cefriumSitePermissionsKey(entry.origin))
             } else if (entry.engine == BrowserEngineType.GECKOVIEW) {
                 prefs.all.keys.filter {
@@ -6230,6 +6257,8 @@ private fun showQuickSettings() {
                 Triple("popups", "Pop-ups and redirects", false),
                 Triple("autoplay", "Autoplay", false),
                 Triple("ads", "Ads and trackers", true),
+                Triple("images", "Images", true),
+                Triple("cookies", "Cookies for this site", true),
                 Triple("sound", "Sound", true)
             ) else listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -6279,6 +6308,7 @@ private fun showQuickSettings() {
                                         .forEach { runtime.storageController.setPermission(it, if (next) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
                                 }
                                 "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
+                                "images", "cookies" -> Unit // Enforced by CefriumResourceInterceptor on the next request.
                                 "sound" -> if (entry.engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next) else active.mediaSession?.muteAudio(!next)
                             }
                             active.browserEngine?.reload()

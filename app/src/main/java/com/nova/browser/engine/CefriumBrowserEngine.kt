@@ -21,6 +21,8 @@ import com.cefrium.CefriumChromeClient
 import com.cefrium.CefriumPermissionRequest
 import com.cefrium.CefriumPermission
 import com.cefrium.CefriumContentSetting
+import com.cefrium.CefriumResourceInterceptor
+import com.cefrium.CefriumResourceType
 import com.cefrium.CefriumNavigationClient
 import com.cefrium.CefriumProfile
 import com.cefrium.CefriumContextMenu
@@ -64,6 +66,8 @@ class CefriumBrowserEngine(
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
     private val soundAllowedForUrl: (String) -> Boolean = { true },
+    private val imagesBlockedForUrl: (String) -> Boolean = { false },
+    private val cookiesAllowedForUrl: (String) -> Boolean = { true },
     private val onEngineRoutingRequired: (String, String) -> Boolean = { _, _ -> false }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
@@ -81,7 +85,10 @@ class CefriumBrowserEngine(
         BrowserEngineCapability.HTTP_AUTH,
         BrowserEngineCapability.EXTERNAL_NAVIGATION,
         BrowserEngineCapability.SITE_DATA,
-        BrowserEngineCapability.PASSWORD_FILL
+        BrowserEngineCapability.PASSWORD_FILL,
+        BrowserEngineCapability.IMAGE_BLOCKING,
+        BrowserEngineCapability.SITE_COOKIE_CONTROLS,
+        BrowserEngineCapability.TRACKER_BLOCKING
     )
     private val browser = existingBrowser ?: CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
@@ -120,6 +127,28 @@ class CefriumBrowserEngine(
         browser.setPageVisible(false)
         browser.setFocus(false)
         browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl().orEmpty()))
+        // Cefrium 0.21 exposes request interception on the network thread. Keep these
+        // callbacks fast and preference-only: no disk, UI, or network work is allowed here.
+        browser.setResourceInterceptor(object : CefriumResourceInterceptor {
+            override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
+                val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
+                if (CefriumTrackingProtectionPolicy.shouldBlockImage(
+                        request.getType() == CefriumResourceType.IMAGE,
+                        imagesBlockedForUrl(pageUrl),
+                        siteImagesAllowed = true
+                    )) return true
+                return request.getType() != CefriumResourceType.MAIN_FRAME &&
+                    CefriumTrackingProtectionPolicy.shouldBlockRequest(
+                        request.url, pageUrl, adBlockingEnabledForUrl(pageUrl)
+                    )
+            }
+
+            override fun onCanSendCookie(url: String, name: String, value: String): Boolean =
+                cookiesAllowedForUrl(url)
+
+            override fun onCanSaveCookie(url: String, name: String, value: String): Boolean =
+                cookiesAllowedForUrl(url)
+        })
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
