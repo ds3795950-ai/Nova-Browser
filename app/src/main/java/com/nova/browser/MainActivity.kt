@@ -110,6 +110,7 @@ import com.nova.browser.engine.CefriumSitePermissionPolicy
 import com.nova.browser.engine.CefriumRequestPolicy
 import com.nova.browser.engine.CefriumProfileResourceInterceptor
 import com.nova.browser.engine.GeckoViewBrowserEngine
+import com.nova.browser.engine.ThreatProtectionPolicy
 
 /** Nova browser core. Normal tabs may use Cefrium; Private and Guest remain GeckoView-only. */
 private class NovaAddressAutoCompleteTextView(context: Context) : androidx.appcompat.widget.AppCompatAutoCompleteTextView(context) {
@@ -2304,6 +2305,20 @@ class MainActivity : ComponentActivity() {
             switchTab(activeIndex.coerceIn(tabs.indices))
         }
         retryPendingExternalLink()
+    }
+
+    private fun switchTabToGeckoForThreatProtection(tab: BrowserTab) {
+        if (tab.isPrivate || tab.isGuest || tab.engineType != BrowserEngineType.CEFRIUM) return
+        closeTabRuntime(tab)
+        tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
+        tab.engineType = BrowserEngineType.GECKOVIEW
+        tab.cefriumNavigationState = null
+        tab.needsReload = tab.lastUrl != HOME_URL
+        tab.engineFallbackReason = "Phishing and malware protection requires GeckoView. Nova reopened this URL; website data was not transferred."
+        persistTabs()
+        if (currentTab() === tab) activateTab(tab)
+        else if (splitTabId == tab.id) restoreSplitPane()
+        toast("Switched this tab to GeckoView Safe Browsing")
     }
 
     private fun switchAllCefriumTabsToGecko(reason: String) {
@@ -5196,7 +5211,7 @@ class MainActivity : ComponentActivity() {
         val current = NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD"))
         val tab = currentTab()
         val host = tab?.lastUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log")
+        val items = arrayOf("Off", "Standard · recommended", "Aggressive · may break sites", "Allow trackers on this site", "Show this page's protection log", "Phishing & malware protection status")
         AlertDialog.Builder(this).setTitle("Nova Shield · ${current.name}")
             .setItems(items) { _, which ->
                 when (which) {
@@ -5225,6 +5240,30 @@ class MainActivity : ComponentActivity() {
                                 .setMessage("${entries?.size ?: 0} content-protection log entries recorded for this page. GeckoView applies its native tracker and Safe Browsing lists.")
                                 .setPositiveButton("OK", null).show() }
                         }, { error -> runOnUiThread { toast("Protection log unavailable: ${error?.localizedMessage ?: "Unknown error"}") } })
+                    }
+                    5 -> {
+                        val activeTab = tab
+                        if (activeTab == null) {
+                            toast("Open a website first")
+                            return@setItems
+                        }
+                        when (ThreatProtectionPolicy.availability(activeTab.engineType)) {
+                            ThreatProtectionPolicy.Availability.NATIVE_SAFE_BROWSING_ACTIVE -> {
+                                AlertDialog.Builder(this)
+                                    .setTitle("Phishing & malware protection")
+                                    .setMessage("Active in GeckoView. Native Safe Browsing lists remain enabled in every Nova Shield mode, including Off. This helps warn about known deceptive and harmful sites, but cannot guarantee detection of every threat.")
+                                    .setPositiveButton("OK", null).show()
+                            }
+                            ThreatProtectionPolicy.Availability.UNAVAILABLE_ON_CEFRIUM -> {
+                                AlertDialog.Builder(this)
+                                    .setTitle("Protection unavailable on Cefrium")
+                                    .setMessage("Cefrium does not currently provide Nova with a verified phishing and malware reputation service. This page is not covered by GeckoView Safe Browsing. Switch this tab to GeckoView to use its native Safe Browsing lists. The page will reload; website data is not transferred between engines.")
+                                    .setPositiveButton("Switch to GeckoView") { _, _ ->
+                                        switchTabToGeckoForThreatProtection(activeTab)
+                                    }
+                                    .setNegativeButton("Not now", null).show()
+                            }
+                        }
                     }
                 }
             }.setNegativeButton("Close", null).show()
