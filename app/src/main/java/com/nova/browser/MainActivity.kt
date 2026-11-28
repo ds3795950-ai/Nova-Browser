@@ -1848,43 +1848,46 @@ class MainActivity : ComponentActivity() {
         if (state.isLoading && state.progress == 0) tab.appliedSiteDarkMode = null
         val previousUrl = tab.lastUrl
         val previousTitle = tab.title
+        val pendingReload = tab.needsReload
         val stateUrl = state.url.orEmpty()
         val stateTitle = state.title.orEmpty()
-        if (stateUrl.isNotBlank()) tab.lastUrl = stateUrl
-        if (stateTitle.isNotBlank()) tab.title = stateTitle
+        // A stale engine callback must not replace an HTTPS-upgraded restore target.
+        if (stateUrl.isNotBlank() && !pendingReload) tab.lastUrl = stateUrl
+        if (stateTitle.isNotBlank() && !pendingReload) tab.title = stateTitle
+        val displayUrl = if (pendingReload && tab.lastUrl.isNotBlank()) tab.lastUrl else stateUrl
         tab.canGoBack = state.canGoBack
         tab.canGoForward = state.canGoForward
         tab.isLoading = state.isLoading
         tab.progress = state.progress
         tab.isErrorPage = state.error != null
-        if (!state.isLoading && state.progress >= 100) applyStoredSiteDarkMode(tab)
-        val stateHost = Uri.parse(stateUrl).host ?: stateUrl
-        if (stateUrl.startsWith("https://", true)) tab.securityStatus = getString(R.string.secure_connection, stateHost)
-        else if (stateUrl.startsWith("http://", true)) tab.securityStatus = getString(R.string.not_secure, stateHost)
+        if (!state.isLoading && state.progress >= 100 && !pendingReload) applyStoredSiteDarkMode(tab)
+        val stateHost = Uri.parse(displayUrl).host ?: displayUrl
+        if (displayUrl.startsWith("https://", true)) tab.securityStatus = getString(R.string.secure_connection, stateHost)
+        else if (displayUrl.startsWith("http://", true)) tab.securityStatus = getString(R.string.not_secure, stateHost)
         if (state.error != null) tab.securityStatus = state.error
-        if (tab.id == splitTabId && ::secondaryAddressBar.isInitialized && !secondaryAddressBar.hasFocus() && stateUrl.isNotBlank()) {
+        if (tab.id == splitTabId && ::secondaryAddressBar.isInitialized && !secondaryAddressBar.hasFocus() && displayUrl.isNotBlank()) {
             secondaryAddressBar.setText(tab.lastUrl)
         }
         if (currentTab() === tab) {
-            if (!addressBar.hasFocus() && stateUrl.isNotBlank()) addressBar.setText(tab.lastUrl)
+            if (!addressBar.hasFocus() && displayUrl.isNotBlank()) addressBar.setText(tab.lastUrl)
             progressBar.progress = state.progress
             progressBar.visibility = if (state.isLoading) View.VISIBLE else View.GONE
             updateTabChrome(tab)
             refreshBookmarkButton()
             when {
                 state.error != null -> setPageStatus(state.error, 5)
-                state.isLoading -> resetPageStatus(getString(R.string.loading_page), 1)
-                stateUrl.isNotBlank() -> setPageStatus(getString(R.string.ready_for_host, Uri.parse(stateUrl).host ?: stateUrl), 1)
+                state.isLoading || pendingReload -> resetPageStatus(getString(R.string.loading_page), 1)
+                displayUrl.isNotBlank() -> setPageStatus(getString(R.string.ready_for_host, Uri.parse(displayUrl).host ?: displayUrl), 1)
             }
         }
-        if (!tab.isPrivate && !tab.isGuest && stateUrl.startsWith("http", true) && previousUrl != tab.lastUrl) {
+        if (!pendingReload && !tab.isPrivate && !tab.isGuest && stateUrl.startsWith("http", true) && previousUrl != tab.lastUrl) {
             addHistory(tab.lastUrl)
             persistTabs()
-        } else if (!tab.isPrivate && !tab.isGuest && previousTitle != tab.title && tab.lastUrl.startsWith("http", true)) {
+        } else if (!pendingReload && !tab.isPrivate && !tab.isGuest && previousTitle != tab.title && tab.lastUrl.startsWith("http", true)) {
             addHistory(tab.lastUrl)
             persistTabs()
         }
-        if (!state.isLoading && stateUrl.isNotBlank()) captureTabThumbnail(tab)
+        if (!state.isLoading && stateUrl.isNotBlank() && !pendingReload) captureTabThumbnail(tab)
     }
 
     private fun resetRendererRecoveryAfterNextPaint(tab: BrowserTab) {
@@ -7336,10 +7339,19 @@ private fun showQuickSettings() {
         continueFireClearAfterGecko(completion)
     }
 
+    private fun finishFireClearOperation(operationId: String) {
+        if (pendingFireClearOperationId != operationId) return
+        pendingFireClearCompletion = null
+        pendingFireClearOperationId = null
+        // Release deferred tab/external-link work only after every Fire cleanup stage is terminal.
+        resumePendingGeckoDataClearTab()
+        retryPendingExternalLink()
+    }
+
     private fun continueFireClearAfterGecko(completion: FireClearCompletion) {
         if (pendingFireClearOperationId != completion.operationId) return
         if (!completion.succeeded) {
-            pendingFireClearOperationId = null
+            finishFireClearOperation(completion.operationId)
             toast("Fire stopped: GeckoView data was not confirmed cleared. ${completion.message.orEmpty()}")
             return
         }
@@ -7347,7 +7359,7 @@ private fun showQuickSettings() {
         clearCefriumProfileDataNow(activeTabId = null) { cefriumSucceeded, cefriumMessage ->
             if (pendingFireClearOperationId != completion.operationId) return@clearCefriumProfileDataNow
             if (!cefriumSucceeded) {
-                pendingFireClearOperationId = null
+                finishFireClearOperation(completion.operationId)
                 toast("GeckoView data was cleared, but Cefrium data could not be confirmed: ${cefriumMessage.orEmpty()}")
                 return@clearCefriumProfileDataNow
             }
@@ -7357,7 +7369,7 @@ private fun showQuickSettings() {
                 ensureHomeTabRecord()
                 persistTabs()
             }
-            pendingFireClearOperationId = null
+            finishFireClearOperation(completion.operationId)
             toast("Fire complete · Normal tabs, history and GeckoView site data cleared. ${cefriumMessage ?: "Cefrium profile refreshed"}")
         }
     }
