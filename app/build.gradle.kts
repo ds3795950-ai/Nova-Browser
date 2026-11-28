@@ -201,7 +201,9 @@ val prepare1VpnAssets by tasks.registering {
             // Hold requests until Nova has sent the persisted routing configuration.
             // This prevents a startup race from briefly sending traffic DIRECT.
             var __novaProxyConfigPromise = new Promise(function(resolve) { globalThis.__novaProxyConfigResolve = resolve; });
-            var __novaFailClosedProxy = {type: "http", host: "127.0.0.1", port: 9};
+            // End the fallback chain with null so the browser cannot fall back to a
+            // system/Wi-Fi proxy if the loopback sink refuses the connection.
+            var __novaFailClosedProxy = [{type: "http", host: "127.0.0.1", port: 9}, null];
             var __novaTorAwareProxyRequest = function(details) {
               return __novaProxyConfigPromise.then(function() {
                 if (globalThis.__novaTorGuestMode === true) {
@@ -289,7 +291,8 @@ val prepare1VpnAssets by tasks.registering {
                       await browser.storage.local.set({ novaSavedPeerConnectionEnabled: current.value !== false });
                     }
                     await setting.set({ value: false });
-                    return true;
+                    var applied = await setting.get({});
+                    return applied.value === false;
                   }
                   var prior = await browser.storage.local.get("novaSavedPeerConnectionEnabled");
                   if (typeof prior.novaSavedPeerConnectionEnabled === "boolean") {
@@ -393,7 +396,8 @@ val prepare1VpnAssets by tasks.registering {
             background.contains("result.type === \"direct\"") &&
             novaBridge.contains("globalThis.__novaProxyConfigResolve") && novaBridge.contains("__novaTrafficGateReady") &&
             novaBridge.contains("__novaVpnConfigReady") && novaBridge.contains("configureQueue") &&
-            novaBridge.contains("nativeGeneration")) {
+            novaBridge.contains("nativeGeneration") && novaBridge.contains("applied.value === false") &&
+            background.contains("var __novaFailClosedProxy = [{type: \"http\", host: \"127.0.0.1\", port: 9}, null]")) {
             "Nova's fail-closed proxy guard is missing from the generated 1VPN extension."
         }
         backgroundFile.writeText(background + "\n" + novaBridge)
