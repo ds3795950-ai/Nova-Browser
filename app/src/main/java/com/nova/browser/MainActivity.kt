@@ -270,6 +270,12 @@ class MainActivity : ComponentActivity() {
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
     private data class HomeShortcut(val title: String, val url: String)
 
+    private data class FireClearCompletion(
+        val operationId: String,
+        val succeeded: Boolean,
+        val message: String?
+    )
+
     private data class BrowserTab(
         var session: GeckoSession?,
         val isPrivate: Boolean,
@@ -300,7 +306,9 @@ class MainActivity : ComponentActivity() {
         var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList(),
         var rendererRecoveryAttempts: Int = 0,
         var mediaSession: org.mozilla.geckoview.MediaSession? = null,
-        var isFullscreenVideoPlaying: Boolean = false
+        var isFullscreenVideoPlaying: Boolean = false,
+        var wasSleepingForMemoryBudget: Boolean = false,
+        var appliedSiteDarkMode: String? = null
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -567,7 +575,10 @@ class MainActivity : ComponentActivity() {
 
     private fun retryPendingExternalLink() {
         val url = pendingExternalLink ?: return
-        if (pendingGeckoDataClearActive) return
+        if (!NovaFireClearPolicy.canResumeAfterGeckoClear(
+                geckoClearActive = pendingGeckoDataClearActive,
+                fireClearActive = pendingFireClearOperationId != null
+            )) return
         val guest = pendingExternalLinkGuest == true
         val activeGuest = currentTab()?.isGuest == true
         val torReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
@@ -843,7 +854,13 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             addView(actionButton("Back") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.goBack() })
             addView(actionButton("Forward") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.goForward() })
-            addView(actionButton("Reload") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.reload() })
+            addView(actionButton("Reload") {
+                tabs.firstOrNull { it.id == splitTabId }?.let { tab ->
+                    val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl) ?: return@let
+                    if (policyUrl != tab.lastUrl) loadSecondaryTabUrl(tab, policyUrl)
+                    else tab.browserEngine?.reload()
+                }
+            })
             addView(secondaryAddressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
             addView(actionButton("Close split") { exitSplitScreen() })
@@ -1271,10 +1288,18 @@ class MainActivity : ComponentActivity() {
             actions += getString(R.string.bookmarks) to { showBookmarks() }
             if (!tab.isPrivate) actions += getString(R.string.history) to { showHistory() }
         if (!tab.isPrivate) actions += "Clear browsing data" to { showClearBrowsingData() }
+            if (!tab.isPrivate) actions += "Fire · clear tabs & site data" to { confirmFireClear() }
+            actions += "Print / Save as PDF" to { printCurrentPage() }
+            actions += "Site dark mode" to { cycleSiteDarkMode() }
+            actions += (if (prefs.getBoolean("https_only_mode", false)) "HTTPS-Only · on" else "HTTPS-Only · off") to {
+                val next = !prefs.getBoolean("https_only_mode", false)
+                prefs.edit().putBoolean("https_only_mode", next).apply()
+                toast(if (next) "HTTPS-Only enabled" else "HTTPS-Only disabled")
+            }
             if (!tab.isPrivate) actions += getString(R.string.downloads) to { showDownloads() }
             actions += getString(if (tab.isLoading) R.string.stop_loading else R.string.reload_page) to { toggleStopReload() }
             actions += getString(R.string.find_in_page) to { showFindBar() }
-            actions += "Print / Save as PDF" to { printCurrentPage() }
+            actions += "Pop out video" to { requestUserPictureInPicture() }
             val shortcutUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
             if (!tab.isPrivate && !tab.isGuest &&
                 (shortcutUrl.startsWith("https://") || shortcutUrl.startsWith("http://"))
@@ -1293,6 +1318,7 @@ class MainActivity : ComponentActivity() {
                     val hubUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
                     putExtra(NovaPhase2HubActivity.EXTRA_URL, hubUrl)
                     putExtra(NovaPhase2HubActivity.EXTRA_TITLE, tab.title)
+                    putExtra(NovaPhase2HubActivity.EXTRA_ENGINE, tab.engineType.name)
                 })
             }
             actions += "Search tabs" to { showTabSearch() }
@@ -1527,7 +1553,11 @@ class MainActivity : ComponentActivity() {
         session.open(runtime)
         attachAiPageReader(session, tab)
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
-            engine.loadUrl(tab.lastUrl)
+            val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl)
+            if (policyUrl != null) {
+                tab.lastUrl = policyUrl
+                engine.loadUrl(policyUrl)
+            }
             tab.needsReload = false
         }
         return session
@@ -1545,6 +1575,16 @@ class MainActivity : ComponentActivity() {
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
         check(!tab.isPrivate && !tab.isGuest) { "Private and Guest tabs must use GeckoView" }
         check(!guestTorReservesGeckoRuntime()) { "Normal Cefrium sessions are paused while Guest Tor owns the browser network context" }
+        val restoredUrl = tab.lastUrl
+        val policyUrl = applyHttpsOnlyPolicy(restoredUrl)
+        if (policyUrl == null) {
+            tab.needsReload = false
+            tab.cefriumNavigationState = null
+        } else if (policyUrl != restoredUrl) {
+            tab.lastUrl = policyUrl
+            tab.needsReload = true
+            tab.cefriumNavigationState = null
+        }
         val profile = CefriumProfile.get(enginePreferences.cefriumProfileName())
         val requestPolicy = CefriumRequestPolicy(prefs)
         // Install before creating the tab browser; this profile hook retains only preferences.
@@ -1805,44 +1845,49 @@ class MainActivity : ComponentActivity() {
         if (!state.isLoading && state.progress >= 100 && !state.title.isNullOrBlank()) {
             resetRendererRecoveryAfterNextPaint(tab)
         }
+        if (state.isLoading && state.progress == 0) tab.appliedSiteDarkMode = null
         val previousUrl = tab.lastUrl
         val previousTitle = tab.title
+        val pendingReload = tab.needsReload
         val stateUrl = state.url.orEmpty()
         val stateTitle = state.title.orEmpty()
-        if (stateUrl.isNotBlank()) tab.lastUrl = stateUrl
-        if (stateTitle.isNotBlank()) tab.title = stateTitle
+        // A stale engine callback must not replace an HTTPS-upgraded restore target.
+        if (stateUrl.isNotBlank() && !pendingReload) tab.lastUrl = stateUrl
+        if (stateTitle.isNotBlank() && !pendingReload) tab.title = stateTitle
+        val displayUrl = if (pendingReload && tab.lastUrl.isNotBlank()) tab.lastUrl else stateUrl
         tab.canGoBack = state.canGoBack
         tab.canGoForward = state.canGoForward
         tab.isLoading = state.isLoading
         tab.progress = state.progress
         tab.isErrorPage = state.error != null
-        val stateHost = Uri.parse(stateUrl).host ?: stateUrl
-        if (stateUrl.startsWith("https://", true)) tab.securityStatus = getString(R.string.secure_connection, stateHost)
-        else if (stateUrl.startsWith("http://", true)) tab.securityStatus = getString(R.string.not_secure, stateHost)
+        if (!state.isLoading && state.progress >= 100 && !pendingReload) applyStoredSiteDarkMode(tab)
+        val stateHost = Uri.parse(displayUrl).host ?: displayUrl
+        if (displayUrl.startsWith("https://", true)) tab.securityStatus = getString(R.string.secure_connection, stateHost)
+        else if (displayUrl.startsWith("http://", true)) tab.securityStatus = getString(R.string.not_secure, stateHost)
         if (state.error != null) tab.securityStatus = state.error
-        if (tab.id == splitTabId && ::secondaryAddressBar.isInitialized && !secondaryAddressBar.hasFocus() && stateUrl.isNotBlank()) {
+        if (tab.id == splitTabId && ::secondaryAddressBar.isInitialized && !secondaryAddressBar.hasFocus() && displayUrl.isNotBlank()) {
             secondaryAddressBar.setText(tab.lastUrl)
         }
         if (currentTab() === tab) {
-            if (!addressBar.hasFocus() && stateUrl.isNotBlank()) addressBar.setText(tab.lastUrl)
+            if (!addressBar.hasFocus() && displayUrl.isNotBlank()) addressBar.setText(tab.lastUrl)
             progressBar.progress = state.progress
             progressBar.visibility = if (state.isLoading) View.VISIBLE else View.GONE
             updateTabChrome(tab)
             refreshBookmarkButton()
             when {
                 state.error != null -> setPageStatus(state.error, 5)
-                state.isLoading -> resetPageStatus(getString(R.string.loading_page), 1)
-                stateUrl.isNotBlank() -> setPageStatus(getString(R.string.ready_for_host, Uri.parse(stateUrl).host ?: stateUrl), 1)
+                state.isLoading || pendingReload -> resetPageStatus(getString(R.string.loading_page), 1)
+                displayUrl.isNotBlank() -> setPageStatus(getString(R.string.ready_for_host, Uri.parse(displayUrl).host ?: displayUrl), 1)
             }
         }
-        if (!tab.isPrivate && !tab.isGuest && stateUrl.startsWith("http", true) && previousUrl != tab.lastUrl) {
+        if (!pendingReload && !tab.isPrivate && !tab.isGuest && stateUrl.startsWith("http", true) && previousUrl != tab.lastUrl) {
             addHistory(tab.lastUrl)
             persistTabs()
-        } else if (!tab.isPrivate && !tab.isGuest && previousTitle != tab.title && tab.lastUrl.startsWith("http", true)) {
+        } else if (!pendingReload && !tab.isPrivate && !tab.isGuest && previousTitle != tab.title && tab.lastUrl.startsWith("http", true)) {
             addHistory(tab.lastUrl)
             persistTabs()
         }
-        if (!state.isLoading && stateUrl.isNotBlank()) captureTabThumbnail(tab)
+        if (!state.isLoading && stateUrl.isNotBlank() && !pendingReload) captureTabThumbnail(tab)
     }
 
     private fun resetRendererRecoveryAfterNextPaint(tab: BrowserTab) {
@@ -1946,6 +1991,35 @@ class MainActivity : ComponentActivity() {
 
     /** Return true to cancel the Cefrium navigation and reopen the destination in GeckoView. */
     private fun routeCefriumNavigation(tab: BrowserTab, destination: String, method: String = "GET"): Boolean {
+        when (NovaHttpsOnlyPolicy.decide(destination, httpsOnlyEnabled())) {
+            NovaHttpsOnlyPolicy.Decision.BLOCK -> {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (currentTab()?.id == tab.id) toast("HTTPS-Only blocked a malformed or insecure HTTP request")
+                }
+                return true
+            }
+            NovaHttpsOnlyPolicy.Decision.UPGRADE_TO_HTTPS -> {
+                if (!CrossEngineNavigationPolicy.canTransfer(method)) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        if (currentTab()?.id == tab.id) toast("HTTPS-Only blocked this HTTP form/request to avoid resending it as a different request")
+                    }
+                    return true
+                }
+                val upgraded = NovaHttpsOnlyPolicy.upgradeToHttps(destination) ?: return true
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (tabs.none { it.id == tab.id }) return@post
+                    val wasActive = currentTab()?.id == tab.id
+                    val wasSecondary = splitTabId == tab.id
+                    tab.lastUrl = upgraded
+                    tab.needsReload = true
+                    tab.cefriumNavigationState = null
+                    persistTabs()
+                    if (wasActive) loadTabUrl(tab, upgraded) else if (wasSecondary) loadSecondaryTabUrl(tab, upgraded)
+                }
+                return true
+            }
+            NovaHttpsOnlyPolicy.Decision.ALLOW -> Unit
+        }
         val selection = engineSelectionForTab(tab, destination)
         if (selection.engine == BrowserEngineType.CEFRIUM) return false
         // Reject non-GET engine handoffs before a routing pause can store only the URL;
@@ -2093,11 +2167,19 @@ class MainActivity : ComponentActivity() {
             return
         }
         val engine = ensureBrowserEngine(tab)
+        if (NovaSleepingTabPolicy.shouldShowRestoreHint(tab.wasSleepingForMemoryBudget, restoredFromBudget = false)) {
+            tab.wasSleepingForMemoryBudget = false
+            toast(NovaSleepingTabPolicy.restoreMessage())
+        }
         if (engine.type == BrowserEngineType.GECKOVIEW) engine.attachTo(browserView)
         showPrimaryEngineView(engine.view)
         engine.setActive(true, true)
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
-            engine.loadUrl(tab.lastUrl)
+            val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl)
+            if (policyUrl != null) {
+                tab.lastUrl = policyUrl
+                engine.loadUrl(policyUrl)
+            }
             tab.needsReload = false
         }
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
@@ -2173,6 +2255,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadTabUrl(tab: BrowserTab, url: String) {
+        val policyUrl = applyHttpsOnlyPolicy(url) ?: return
+        if (policyUrl != url) { loadTabUrl(tab, policyUrl); return }
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
             )) {
@@ -3250,6 +3334,15 @@ class MainActivity : ComponentActivity() {
                 return GeckoResult.fromValue(newSession)
             }
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
+                when (NovaHttpsOnlyPolicy.decide(request.uri, httpsOnlyEnabled())) {
+                    NovaHttpsOnlyPolicy.Decision.UPGRADE_TO_HTTPS, NovaHttpsOnlyPolicy.Decision.BLOCK -> {
+                        runOnUiThread {
+                            if (currentTab()?.id == tab.id) toast("HTTPS-Only blocked an HTTP page request. Open the HTTPS version to continue.")
+                        }
+                        return GeckoResult.deny()
+                    }
+                    NovaHttpsOnlyPolicy.Decision.ALLOW -> Unit
+                }
                 if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                         NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
                     )) {
@@ -3362,6 +3455,7 @@ class MainActivity : ComponentActivity() {
         activeSessions.filter { it.id in evictedIds }.forEach { tab ->
             closeTabRuntime(tab)
             tab.needsReload = tab.lastUrl != HOME_URL
+            tab.wasSleepingForMemoryBudget = true
         }
 
         val activeTab = currentTab()
@@ -3797,7 +3891,8 @@ class MainActivity : ComponentActivity() {
 
     private fun navigateSecondary(input: String) {
         val tab = tabs.firstOrNull { it.id == splitTabId } ?: return
-        val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        val resolved = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        val target = applyHttpsOnlyPolicy(resolved) ?: return
         if (target != HOME_URL && !selectEngineForNavigation(tab, target)) return
         prepareDesktopModeForNavigation(tab, target)
         loadSecondaryTabUrl(tab, target)
@@ -3807,6 +3902,8 @@ class MainActivity : ComponentActivity() {
 
 
     private fun loadSecondaryTabUrl(tab: BrowserTab, url: String) {
+        val policyUrl = applyHttpsOnlyPolicy(url) ?: return
+        if (policyUrl != url) { loadSecondaryTabUrl(tab, policyUrl); return }
         if (!canUseTabEngine(tab, "Split-screen navigation")) {
             if (url != HOME_URL) {
                 tab.lastUrl = url
@@ -3928,6 +4025,63 @@ class MainActivity : ComponentActivity() {
         addressSuggestionHandler.postDelayed(request, 350L)
     }
 
+
+
+    private fun cycleSiteDarkMode() {
+        val tab = currentTab() ?: return
+        if (tab.engineType != BrowserEngineType.CEFRIUM || tab.browserEngine !is CefriumBrowserEngine) {
+            toast("Per-site page appearance is currently supported on Cefrium tabs only")
+            return
+        }
+        val host = Uri.parse(tab.lastUrl).host?.lowercase(Locale.ROOT)
+        if (host.isNullOrBlank()) { toast("No site host"); return }
+        val key = "site_dark_mode_$host"
+        val current = NovaSiteDarkMode.fromStored(prefs.getString(key, NovaSiteDarkMode.DEFAULT.stored))
+        val next = when (current) {
+            NovaSiteDarkMode.DEFAULT -> NovaSiteDarkMode.FORCE_DARK
+            NovaSiteDarkMode.FORCE_DARK -> NovaSiteDarkMode.FORCE_LIGHT
+            NovaSiteDarkMode.FORCE_LIGHT -> NovaSiteDarkMode.DEFAULT
+        }
+        prefs.edit().putString(key, next.stored).apply()
+        tab.appliedSiteDarkMode = null
+        applyStoredSiteDarkMode(tab, force = true)
+        toast("Site appearance: ${next.name.lowercase().replace('_', ' ')}")
+    }
+
+    private fun applyStoredSiteDarkMode(tab: BrowserTab, force: Boolean = false) {
+        if (tab.engineType != BrowserEngineType.CEFRIUM) return
+        val engine = tab.browserEngine as? CefriumBrowserEngine ?: return
+        val host = Uri.parse(tab.lastUrl).host?.lowercase(Locale.ROOT) ?: return
+        val mode = NovaSiteDarkMode.fromStored(prefs.getString("site_dark_mode_$host", NovaSiteDarkMode.DEFAULT.stored))
+        val appliedKey = "$host:${mode.stored}"
+        if (!force && tab.appliedSiteDarkMode == appliedKey) return
+        val script = NovaSiteDarkModePolicy.cssFor(mode)
+        runCatching {
+            engine.evaluateJavaScript(script) { }
+            tab.appliedSiteDarkMode = appliedKey
+        }.onFailure { android.util.Log.w("NovaBrowser", "Could not apply per-site appearance", it) }
+    }
+
+    private fun httpsOnlyEnabled(): Boolean =
+        prefs.getBoolean("https_only_mode", false)
+
+    private fun applyHttpsOnlyPolicy(url: String): String? {
+        return when (NovaHttpsOnlyPolicy.decide(url, httpsOnlyEnabled())) {
+            NovaHttpsOnlyPolicy.Decision.ALLOW -> url
+            NovaHttpsOnlyPolicy.Decision.UPGRADE_TO_HTTPS -> {
+                val upgraded = NovaHttpsOnlyPolicy.upgradeToHttps(url)
+                if (upgraded != null) {
+                    toast("HTTPS-Only: upgraded to HTTPS")
+                    upgraded
+                } else null
+            }
+            NovaHttpsOnlyPolicy.Decision.BLOCK -> {
+                toast("HTTPS-Only blocked insecure navigation")
+                null
+            }
+        }
+    }
+
     private fun submitAddressBar() {
         val query = addressBar.text?.toString()?.trim().orEmpty()
         if (query.isEmpty()) return
@@ -3936,7 +4090,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun navigate(input: String) {
-        val target = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        val resolved = BrowserUrlResolver.resolve(input, searchEngine) ?: return
+        val target = applyHttpsOnlyPolicy(resolved) ?: return
         val tab = currentTab() ?: return
         if (target != HOME_URL && !selectEngineForNavigation(tab, target)) return
         prepareDesktopModeForNavigation(tab, target)
@@ -3969,6 +4124,11 @@ class MainActivity : ComponentActivity() {
     private fun reloadPage() {
         currentTab()?.let { tab ->
             if (!canUseTabEngine(tab, "Reload")) return@let
+            val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl) ?: return@let
+            if (policyUrl != tab.lastUrl) {
+                loadTabUrl(tab, policyUrl)
+                return@let
+            }
             if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) toast("Wait for browsing-data deletion to finish before reloading")
             else ensureBrowserEngine(tab).reload()
         }
@@ -4985,13 +5145,20 @@ class MainActivity : ComponentActivity() {
         if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) { toast("Wait for browsing-data deletion to finish before changing this tab"); return }
         if (tab.isPrivate || tab.isGuest) { toast("Desktop preference is not saved in private or Guest Mode"); return }
         val host = Uri.parse(tab.lastUrl).host ?: run { toast("Open a website first"); return }
+        val originalUrl = tab.lastUrl
+        val policyUrl = applyHttpsOnlyPolicy(originalUrl) ?: return
+        val urlWasUpgraded = policyUrl != originalUrl
+        tab.lastUrl = policyUrl
+        if (urlWasUpgraded) persistTabs()
         val sites = desktopSites
         tab.desktopSite = if (host in sites) { sites.remove(host); false } else { sites.add(host); true }
         prefs.edit().putStringSet("desktop_sites", sites).apply()
         val activeEngine = ensureBrowserEngine(tab)
         if (activeEngine is CefriumBrowserEngine) {
-            runCatching { activeEngine.setDesktopMode(tab.desktopSite); activeEngine.reload() }
-                .onFailure { failure ->
+            runCatching {
+                activeEngine.setDesktopMode(tab.desktopSite)
+                if (urlWasUpgraded) activeEngine.loadUrl(policyUrl) else activeEngine.reload()
+            }.onFailure { failure ->
                     val fallback = fallbackTabToGecko(tab, failure)
                     fallback.attachTo(browserView)
                     showPrimaryEngineView(fallback.view)
@@ -5005,7 +5172,8 @@ class MainActivity : ComponentActivity() {
             engine.attachTo(browserView)
             showPrimaryEngineView(engine.view)
             engine.setActive(true, true)
-            engine.loadUrl(tab.lastUrl)
+            engine.loadUrl(policyUrl)
+            tab.needsReload = false
         }
         toast(if (tab.desktopSite) "Desktop site enabled for $host" else "Mobile site restored for $host")
     }
@@ -5474,12 +5642,12 @@ class MainActivity : ComponentActivity() {
             toast("Printing is disabled in Private and Guest Mode to avoid saving session content outside the profile")
             return
         }
-        if (tab.lastUrl == HOME_URL) {
-            toast("Open a webpage before printing")
+        if (!NovaPrintPolicy.canRequestPrint(tab.lastUrl)) {
+            toast("Open a supported webpage before printing")
             return
         }
         if (!canUseTabEngine(tab, "Print")) return
-        val title = tab.title.trim().ifBlank { "Nova webpage" }.take(80)
+        val title = NovaPrintPolicy.jobName(tab.title, tab.lastUrl)
         val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
         if (printManager == null) {
             toast("Android printing is unavailable on this device")
@@ -5715,7 +5883,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val dialog = AlertDialog.Builder(this).setTitle("Nova Guest Tor · always on")
-            .setMessage("Guest Mode requires the embedded Tor service. Browsing is allowed only after Tor has built a circuit, the SOCKS5 proxy is active, remote DNS is enabled, and WebRTC leak protection is confirmed. If Tor or its proxy bridge stops, Guest Mode closes instead of falling back to your normal connection.\n\nStatus: ${TorGuestRoutingController.statusText()}")
+            .setMessage("Guest Mode requires the embedded Tor service. Browsing is allowed only after Tor has built a circuit, the SOCKS5 proxy is active, remote DNS is enabled, and WebRTC leak protection is confirmed. If Tor or its proxy bridge stops, Guest Mode closes instead of falling back to your normal connection.\n\nStatus: ${TorGuestRoutingController.statusText()}\n${NovaVpnHonestyPolicy.guestTorStatusLabel(guestTorReservesGeckoRuntime(), TorGuestRoutingController.isReady())}")
         if (stopping) {
             dialog.setPositiveButton("Retry reset") { _, _ ->
                 TorGuestRoutingController.stop { runOnUiThread { restoreAfterGuestTorStop() } }
@@ -7121,6 +7289,112 @@ private fun showQuickSettings() {
         dialog.show()
     }
 
+
+    private fun confirmFireClear() {
+        if (currentTab()?.isPrivate == true) {
+            toast("Use Fire from a Normal tab")
+            return
+        }
+        if (denyGuestAccess("Fire")) return
+        if (!NovaFireClearPolicy.canRun(tabs.any { it.isPrivate || it.isGuest })) {
+            toast("Close all Private and Guest tabs before using Fire. Their session data will not be touched.")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Fire")
+            .setMessage("Fire closes Normal tabs and clears history, cookies, cache, and Cefrium site data. Close all Private and Guest tabs before continuing. Saved passwords and downloaded files are retained.")
+            .setPositiveButton("Fire") { _, _ -> applyFireClear() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun applyFireClear() {
+        if (!NovaFireClearPolicy.canRun(tabs.any { it.isPrivate || it.isGuest })) {
+            toast("Close all Private and Guest tabs before using Fire. Their session data will not be touched.")
+            return
+        }
+        if (pendingFireClearOperationId != null) {
+            toast("Fire is already clearing browser data")
+            return
+        }
+        val selection = BrowsingDataSelection.fireDefaults()
+        val operationId = java.util.UUID.randomUUID().toString()
+        pendingFireClearOperationId = operationId
+        pendingFireClearCompletion = null
+        // The completion is routed to whichever MainActivity is current when Gecko finishes.
+        clearGeckoWebsiteData(
+            selection.geckoFlags(),
+            activeTabId = null,
+            fireOperationId = operationId
+        ) { _, _ -> }
+    }
+
+    private fun consumePendingFireClearCompletion() {
+        val completion = pendingFireClearCompletion ?: return
+        if (pendingFireClearOperationId != completion.operationId) {
+            pendingFireClearCompletion = null
+            return
+        }
+        pendingFireClearCompletion = null
+        continueFireClearAfterGecko(completion)
+    }
+
+    private fun finishFireClearOperation(operationId: String) {
+        if (pendingFireClearOperationId != operationId) return
+        pendingFireClearCompletion = null
+        pendingFireClearOperationId = null
+        // Release deferred tab/external-link work only after every Fire cleanup stage is terminal.
+        resumePendingGeckoDataClearTab()
+        retryPendingExternalLink()
+    }
+
+    private fun continueFireClearAfterGecko(completion: FireClearCompletion) {
+        if (pendingFireClearOperationId != completion.operationId) return
+        if (!completion.succeeded) {
+            finishFireClearOperation(completion.operationId)
+            toast("Fire stopped: GeckoView data was not confirmed cleared. ${completion.message.orEmpty()}")
+            return
+        }
+        val selection = BrowsingDataSelection.fireDefaults()
+        clearCefriumProfileDataNow(activeTabId = null) { cefriumSucceeded, cefriumMessage ->
+            if (pendingFireClearOperationId != completion.operationId) return@clearCefriumProfileDataNow
+            if (!cefriumSucceeded) {
+                finishFireClearOperation(completion.operationId)
+                toast("GeckoView data was cleared, but Cefrium data could not be confirmed: ${cefriumMessage.orEmpty()}")
+                return@clearCefriumProfileDataNow
+            }
+            if (selection.closeNormalTabs) closeNormalTabsForFire()
+            if (selection.history) clearAllBrowsingHistory()
+            if (tabs.isEmpty() && !createTab(false, HOME_URL)) {
+                ensureHomeTabRecord()
+                persistTabs()
+            }
+            finishFireClearOperation(completion.operationId)
+            toast("Fire complete · Normal tabs, history and GeckoView site data cleared. ${cefriumMessage ?: "Cefrium profile refreshed"}")
+        }
+    }
+
+    /** Remove Normal tabs in one batch without writing any URL to recently-closed history. */
+    private fun closeNormalTabsForFire() {
+        val removed = tabs.filter { !it.isPrivate && !it.isGuest }
+        tabs.removeAll { !it.isPrivate && !it.isGuest }
+        removed.forEach { tab ->
+            aiPageText.remove(tab.id)
+            aiPageUrl.remove(tab.id)
+            closeTabRuntime(tab)
+            tab.thumbnail?.recycle()
+            tab.thumbnail = null
+        }
+        activeIndex = if (tabs.isEmpty()) 0 else activeIndex.coerceIn(tabs.indices)
+        cleanupGuestContextIfIdle()
+        if (tabs.isEmpty()) {
+            if (!createTab(false, HOME_URL)) ensureHomeTabRecord()
+        } else {
+            switchTab(activeIndex)
+        }
+        persistTabs()
+    }
+
     private fun showClearBrowsingData() {
         if (currentTab()?.isPrivate == true) {
             toast("Clear owner browsing data from a Normal tab")
@@ -7228,7 +7502,10 @@ private fun showQuickSettings() {
     }
 
     private fun resumePendingGeckoDataClearTab() {
-        if (pendingGeckoDataClearActive) return
+        if (!NovaFireClearPolicy.canResumeAfterGeckoClear(
+                geckoClearActive = pendingGeckoDataClearActive,
+                fireClearActive = pendingFireClearOperationId != null
+            )) return
         val tabId = pendingGeckoDataClearResumeTabId
         pendingGeckoDataClearResumeTabId = null
         if (tabId != null) {
@@ -7242,15 +7519,23 @@ private fun showQuickSettings() {
         retryPendingExternalLink()
     }
 
-    private fun clearGeckoWebsiteData(flags: Long, activeTabId: String?, onFinished: (Boolean, String?) -> Unit) {
+    private fun clearGeckoWebsiteData(
+        flags: Long,
+        activeTabId: String?,
+        fireOperationId: String? = null,
+        onFinished: (Boolean, String?) -> Unit
+    ) {
         if (pendingGeckoDataClearActive) {
-            onFinished(false, "A GeckoView data deletion is already in progress")
+            if (fireOperationId != null) dispatchFireClearCompletion(FireClearCompletion(fireOperationId, false, "A GeckoView data deletion is already in progress"))
+            else onFinished(false, "A GeckoView data deletion is already in progress")
             return
         }
         // GeckoView clearData(flags) is runtime-wide; it cannot scope the request to Normal.
         // Do not run it while excluded Guest/Private contexts exist, or their data would be erased.
         if (tabs.any { it.isGuest || it.isPrivate }) {
-            onFinished(false, "GeckoView cannot clear only Normal data while Guest or Private sessions are open. Keep those sessions open and try again later; their data has not been touched.")
+            val message = "GeckoView cannot clear only Normal data while Guest or Private sessions are open. Keep those sessions open and try again later; their data has not been touched."
+            if (fireOperationId != null) dispatchFireClearCompletion(FireClearCompletion(fireOperationId, false, message))
+            else onFinished(false, message)
             return
         }
         if (splitTabId != null) exitSplitScreen()
@@ -7275,20 +7560,24 @@ private fun showQuickSettings() {
                 pendingGeckoDataClearTabIds.removeAll(affectedIds)
                 pendingGeckoDataClearActive = false
                 pendingGeckoDataClearResumeTabId = activeTabId
-                val target = currentActivityReference?.get()
-                if (target != null && !target.isFinishing && !target.isDestroyed) {
-                    target.runOnUiThread {
-                        if (target.isFinishing || target.isDestroyed) return@runOnUiThread
-                        target.resumePendingGeckoDataClearTab()
-                        if (target === this) onFinished(succeeded, message)
-                        else target.toast(message ?: if (succeeded) "Selected GeckoView tab resumed after data deletion" else "GeckoView data clear failed: ${message ?: "Unknown error"}")
-                    }
+                if (fireOperationId != null) {
+                    dispatchFireClearCompletion(FireClearCompletion(fireOperationId, succeeded, message))
                 } else {
-                    // If completion beats Activity recreation, onResume consumes this retained tab ID.
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        resumePendingGeckoDataClearTab()
-                        onFinished(succeeded, message)
+                    val target = currentActivityReference?.get()
+                    if (target != null && !target.isFinishing && !target.isDestroyed) {
+                        target.runOnUiThread {
+                            if (target.isFinishing || target.isDestroyed) return@runOnUiThread
+                            target.resumePendingGeckoDataClearTab()
+                            if (target === this) onFinished(succeeded, message)
+                            else target.toast(message ?: if (succeeded) "Selected GeckoView tab resumed after data deletion" else "GeckoView data clear failed: ${message ?: "Unknown error"}")
+                        }
+                    } else {
+                        // If completion beats Activity recreation, onResume consumes this retained tab ID.
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            resumePendingGeckoDataClearTab()
+                            onFinished(succeeded, message)
+                        }
                     }
                 }
             }
@@ -7299,6 +7588,26 @@ private fun showQuickSettings() {
                 { error -> finish(false, error?.localizedMessage) }
             )
         }.onFailure { finish(false, it.localizedMessage) }
+    }
+
+    private fun dispatchFireClearCompletion(completion: FireClearCompletion) {
+        if (pendingFireClearOperationId != completion.operationId) return
+        val dispatcher = currentActivityReference?.get()
+        if (dispatcher == null || dispatcher.isFinishing || dispatcher.isDestroyed) {
+            pendingFireClearCompletion = completion
+            return
+        }
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            // Resolve the Activity at execution time, not dispatch time: recreation can
+            // happen while this completion is waiting in the main-thread queue.
+            val target = currentActivityReference?.get()
+            if (target == null || target.isFinishing || target.isDestroyed) {
+                pendingFireClearCompletion = completion
+                return@post
+            }
+            target.resumePendingGeckoDataClearTab()
+            target.continueFireClearAfterGecko(completion)
+        }
     }
 
     private fun retryRetiredCefriumProfileDeletes() {
@@ -7844,6 +8153,10 @@ private fun showForgotPassword(prefillEmail: String = "") {
         applyFoldAwareLayout(separatingFold)
     }
 
+    private val activeVideoProbeScript = """
+        (() => Array.from(document.querySelectorAll('video')).some(video => !video.paused && !video.ended && video.readyState >= 2))()
+    """.trimIndent()
+
     private val fullscreenVideoProbeScript = """
         (() => {
           const root = document.fullscreenElement;
@@ -7880,15 +8193,55 @@ private fun showForgotPassword(prefillEmail: String = "") {
         }
     }
 
-    private fun enterBrowserPictureInPicture(tab: BrowserTab, videoIsPlaying: Boolean) {
+
+    private fun requestUserPictureInPicture() {
+        val tab = currentTab() ?: return
+        if (tab.engineType != BrowserEngineType.CEFRIUM) {
+            toast("Pop out video currently requires a Cefrium tab; this tab uses GeckoView")
+            return
+        }
+        checkActiveVideoPlayback(tab) { playing ->
+            runOnUiThread {
+                if (isDestroyed || currentTab()?.id != tab.id) return@runOnUiThread
+                if (!BrowserPictureInPicturePolicy.shouldEnterUserInitiated(
+                        apiLevel = Build.VERSION.SDK_INT,
+                        activeTabIsCurrent = true,
+                        videoIsPlaying = playing,
+                        alreadyInPictureInPicture = isInPictureInPictureMode
+                    )
+                ) {
+                    toast("Play a video first, then try Pop out video")
+                    return@runOnUiThread
+                }
+                enterBrowserPictureInPicture(tab, playing, userInitiated = true)
+            }
+        }
+    }
+
+    private fun checkActiveVideoPlayback(tab: BrowserTab, onResult: (Boolean) -> Unit) {
+        val engine = tab.browserEngine as? CefriumBrowserEngine
+        if (engine == null) { onResult(false); return }
+        runCatching {
+            engine.evaluateJavaScript(activeVideoProbeScript) { raw -> onResult(raw?.trim()?.trim('"') == "true") }
+        }.onFailure { onResult(false) }
+    }
+
+    private fun enterBrowserPictureInPicture(tab: BrowserTab, videoIsPlaying: Boolean, userInitiated: Boolean = false) {
         val activeFullscreenTab = fullscreenTabId == tab.id && currentTab()?.id == tab.id
-        if (!BrowserPictureInPicturePolicy.shouldEnter(
+        val allowed = if (userInitiated) {
+            BrowserPictureInPicturePolicy.shouldEnterUserInitiated(
+                Build.VERSION.SDK_INT, currentTab()?.id == tab.id, videoIsPlaying, isInPictureInPictureMode
+            )
+        } else {
+            BrowserPictureInPicturePolicy.shouldEnter(
                 apiLevel = Build.VERSION.SDK_INT,
                 isFullscreen = isFullscreen,
                 fullscreenTabIsActive = activeFullscreenTab,
                 videoIsPlaying = videoIsPlaying,
                 alreadyInPictureInPicture = isInPictureInPictureMode
-            )) return
+            )
+        }
+        if (!allowed) return
         runCatching {
             val params = android.app.PictureInPictureParams.Builder()
                 .setAspectRatio(android.util.Rational(16, 9))
@@ -7928,6 +8281,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
             bottomToolbar.visibility = View.GONE
         } else if (isFullscreen) {
             setBrowserFullscreen(true, tabs.firstOrNull { it.id == fullscreenTabId })
+        } else {
+            setBrowserFullscreen(false, currentTab())
         }
     }
 
@@ -7952,6 +8307,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         // inside PiP must not cancel the probe that is entering PiP.
         if (!isInPictureInPictureMode) pipLeaveRequestId++
         resumePendingGeckoDataClearTab()
+        consumePendingFireClearCompletion()
         applyGeckoImageBehavior { applied ->
             if (!applied) toast("Could not update GeckoView image-loading settings")
         }
@@ -8134,6 +8490,8 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private var retainedAiPageUrl: Map<String, String>? = null
         private val pendingGeckoDataClearTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         @Volatile private var pendingGeckoDataClearActive = false
+        @Volatile private var pendingFireClearOperationId: String? = null
+        @Volatile private var pendingFireClearCompletion: FireClearCompletion? = null
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
         private const val PWA_MANIFEST_LINK_SCRIPT = """
             (() => {

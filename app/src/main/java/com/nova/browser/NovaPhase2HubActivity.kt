@@ -29,6 +29,7 @@ class NovaPhase2HubActivity : Activity() {
     companion object {
         const val EXTRA_URL = "nova.phase2.current_url"
         const val EXTRA_TITLE = "nova.phase2.current_title"
+        const val EXTRA_ENGINE = "nova.phase2.engine"
         private const val READING_LIST_KEY = "nova_phase2_reading_list"
     }
 
@@ -174,9 +175,15 @@ class NovaPhase2HubActivity : Activity() {
     private fun showReadingList() {
         val url = currentUrl
         val links = readLinks().toMutableList()
-        if (url != null) {
+        if (url != null && NovaOfflineSnapshotPolicy.canAddLink(url)) {
+            val engineLabel = intent.getStringExtra(EXTRA_ENGINE) ?: "current browser engines"
+            val snapshotMessage = if (NovaOfflineSnapshotPolicy.snapshotSupported(engineLabel)) {
+                "Save this page for offline reading?"
+            } else {
+                "${NovaOfflineSnapshotPolicy.userMessageForSnapshotAttempt(engineLabel)} The page still needs an internet connection."
+            }
             val add = AlertDialog.Builder(this).setTitle("Offline reading")
-                .setMessage("Save this link to your reading list? Full offline page snapshots are not available for the current engine APIs.")
+                .setMessage(snapshotMessage)
                 .setPositiveButton("Save link") { _, _ ->
                     links.removeAll { it.url == url }; links.add(0, SavedLink(currentTitle, url, System.currentTimeMillis()))
                     runCatching { writeLinks(links) }.onSuccess { status.text = "Link saved to reading list" }.onFailure { status.text = it.message ?: "Save failed" }

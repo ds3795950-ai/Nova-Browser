@@ -9,7 +9,9 @@ internal data class BrowsingDataSelection(
     val cache: Boolean = false,
     val siteSettings: Boolean = false,
     val cefriumProfileData: Boolean = false,
-    val savedPasswords: Boolean = false
+    val savedPasswords: Boolean = false,
+    /** When true, UI should also close Normal tabs after clearing (Fire). Private/Guest excluded. */
+    val closeNormalTabs: Boolean = false
 ) {
     fun geckoFlags(): Long {
         var flags = 0L
@@ -22,4 +24,20 @@ internal data class BrowsingDataSelection(
 
     fun hasSelection(): Boolean =
         history || siteData || cache || siteSettings || cefriumProfileData || savedPasswords
+
+    companion object {
+        /**
+         * DuckDuckGo-style Fire defaults: history, cookies/site data, cache.
+         * Does not clear saved passwords or site permission grants unless the user opts in elsewhere.
+         */
+        fun fireDefaults(): BrowsingDataSelection = BrowsingDataSelection(
+            history = true,
+            siteData = true,
+            cache = true,
+            siteSettings = false,
+            cefriumProfileData = true,
+            savedPasswords = false,
+            closeNormalTabs = true
+        )
+    }
 }
