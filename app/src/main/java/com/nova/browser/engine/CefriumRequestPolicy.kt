@@ -10,7 +10,11 @@ import com.cefrium.CefriumResourceType
 /** Preference-only Cefrium request policy safe to retain for the lifetime of a shared profile. */
 class CefriumRequestPolicy(private val preferences: SharedPreferences) {
     fun imagesBlockedFor(url: String): Boolean =
-        preferences.getBoolean("nova_data_saver_enabled", false) || !siteSettingAllowed(url, "images", true)
+        CefriumTrackingProtectionPolicy.shouldBlockImage(
+            isImage = true,
+            dataSaverEnabled = preferences.getBoolean("nova_data_saver_enabled", false),
+            siteImagesAllowed = siteSettingAllowed(url, "images", true)
+        )
 
     fun cookiesAllowedFor(url: String): Boolean = siteSettingAllowed(url, "cookies", true)
 
