@@ -9,4 +9,10 @@ class NovaFireClearPolicyTest {
         assertTrue(NovaFireClearPolicy.canRun(false))
         assertFalse(NovaFireClearPolicy.canRun(true))
     }
+
+    @Test fun tabsAndPendingExternalLinksStayPausedUntilFireFinishes() {
+        assertTrue(NovaFireClearPolicy.canResumeAfterGeckoClear(false, false))
+        assertFalse(NovaFireClearPolicy.canResumeAfterGeckoClear(true, false))
+        assertFalse(NovaFireClearPolicy.canResumeAfterGeckoClear(false, true))
+    }
 }

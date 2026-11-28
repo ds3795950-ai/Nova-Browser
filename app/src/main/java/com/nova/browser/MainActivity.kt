@@ -575,7 +575,10 @@ class MainActivity : ComponentActivity() {
 
     private fun retryPendingExternalLink() {
         val url = pendingExternalLink ?: return
-        if (pendingGeckoDataClearActive) return
+        if (!NovaFireClearPolicy.canResumeAfterGeckoClear(
+                geckoClearActive = pendingGeckoDataClearActive,
+                fireClearActive = pendingFireClearOperationId != null
+            )) return
         val guest = pendingExternalLinkGuest == true
         val activeGuest = currentTab()?.isGuest == true
         val torReserved = TorGuestRoutingController.blocksNormalGeckoSessions()
@@ -7487,7 +7490,10 @@ private fun showQuickSettings() {
     }
 
     private fun resumePendingGeckoDataClearTab() {
-        if (pendingGeckoDataClearActive) return
+        if (!NovaFireClearPolicy.canResumeAfterGeckoClear(
+                geckoClearActive = pendingGeckoDataClearActive,
+                fireClearActive = pendingFireClearOperationId != null
+            )) return
         val tabId = pendingGeckoDataClearResumeTabId
         pendingGeckoDataClearResumeTabId = null
         if (tabId != null) {
