@@ -169,6 +169,7 @@ class MainActivity : ComponentActivity() {
     private var bookmarkTransferMode: String? = null
     private var guestContextId: String = ""
     private var guestTorStartPending: Boolean = false
+    @Volatile private var guestModeEpoch: Long = 0L
     private val guestContextCleanupLock = Any()
 
     private fun guestTorReservesGeckoRuntime(): Boolean =
@@ -1398,6 +1399,8 @@ class MainActivity : ComponentActivity() {
             toast("Close Private tabs before starting Guest Mode. Guest Tor uses GeckoView's shared network proxy.")
             return
         }
+        // Invalidate pending Normal-profile Downloads folder results as soon as Guest is requested.
+        guestModeEpoch++
         if (splitTabId != null) exitSplitScreen()
         // GeckoView's proxy extension is runtime-wide rather than per-session. Suspend
         // every persistent Normal engine session before enabling Guest Tor, including
@@ -4900,7 +4903,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(8), dp(4), dp(8), dp(4))
             addView(Button(this@MainActivity).apply {
                 text = "Browse Nova folder"
-                setOnClickListener { openNovaDownloadsFolder(manager) }
+                setOnClickListener { openNovaDownloadsFolder(manager, tab) }
             })
             addView(Button(this@MainActivity).apply {
                 text = "Clear completed"
@@ -5421,12 +5424,25 @@ class MainActivity : ComponentActivity() {
         toast(if (requested) "Home-screen shortcut request sent" else "Could not create the home-screen shortcut")
     }
 
-    private fun openNovaDownloadsFolder(manager: NovaDownloadManager) {
+    private fun openNovaDownloadsFolder(manager: NovaDownloadManager, sourceTab: BrowserTab) {
+        val requestEpoch = guestModeEpoch
+        val sourceTabId = sourceTab.id
+        val sourceEngine = sourceTab.engineType
+        fun sourceContextStillEligible(): Boolean =
+            guestModeEpoch == requestEpoch && !guestTorStartPending &&
+                !TorGuestRoutingController.blocksNormalGeckoSessions() &&
+                tabs.any { it.id == sourceTabId && !it.isPrivate && !it.isGuest && it.engineType == sourceEngine } &&
+                currentTab()?.isGuest != true
+
         Thread({
             val files = manager.publishedFiles()
             val labels = files.map { file -> "${file.name}\n${NovaDownloadManager.formatBytes(file.size)}" }.toTypedArray()
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
+                if (!sourceContextStillEligible()) {
+                    toast("Downloads are hidden while Guest Mode is active or the original tab is no longer available")
+                    return@runOnUiThread
+                }
                 if (files.isEmpty()) {
                     AlertDialog.Builder(this).setTitle("Nova Downloads folder")
                         .setMessage("This engine's Nova Downloads folder is empty. Completed files saved by this engine will appear here.")
@@ -5435,6 +5451,10 @@ class MainActivity : ComponentActivity() {
                 }
                 AlertDialog.Builder(this).setTitle("Nova Downloads folder")
                     .setItems(labels) { _, which ->
+                        if (!sourceContextStillEligible()) {
+                            toast("Downloads are unavailable in Guest Mode")
+                            return@setItems
+                        }
                         val file = files.getOrNull(which) ?: return@setItems
                         val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.mimeType).apply {
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
