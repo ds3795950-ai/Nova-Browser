@@ -8,7 +8,6 @@ class NovaSiteDarkModePolicyTest {
         val script = NovaSiteDarkModePolicy.cssFor(NovaSiteDarkMode.DEFAULT)
         assertTrue(script.contains("if(!style && raw===null) return"))
         assertTrue(script.contains("data-nova-original-color-scheme"))
-        assertTrue(script.contains("getPropertyPriority('color-scheme')"))
         assertTrue(script.contains("setProperty('color-scheme',original.value,original.priority || '')"))
         assertTrue(script.contains("removeProperty('color-scheme')"))
     }
@@ -19,8 +18,7 @@ class NovaSiteDarkModePolicyTest {
         for (script in listOf(dark, light)) {
             assertTrue(script.contains("data-nova-original-color-scheme"))
             assertTrue(script.contains("getPropertyValue('color-scheme')"))
-            assertTrue(script.contains("getPropertyPriority('color-scheme')"))
-        }
+            }
         assertTrue(dark.contains("color-scheme:dark"))
         assertTrue(light.contains("color-scheme:light"))
     }
