@@ -28,16 +28,19 @@ class GeckoViewMajorWebsiteSmokeTest {
     }
 
     private fun activeGeckoEngine(activity: MainActivity): GeckoViewBrowserEngine {
-        val method = MainActivity::class.java.getDeclaredMethod("currentTab").apply { isAccessible = true }
-        val tab = method.invoke(activity) as? BrowserTab
+        val currentTabMethod = MainActivity::class.java.getDeclaredMethod("currentTab").apply { isAccessible = true }
+        val tab = currentTabMethod.invoke(activity)
             ?: throw AssertionError("MainActivity did not create an active browser tab")
-        if (tab.browserEngine !is GeckoViewBrowserEngine) {
+        val tabClass = tab.javaClass
+        val engineGetter = tabClass.getDeclaredMethod("getBrowserEngine").apply { isAccessible = true }
+        fun currentEngine() = engineGetter.invoke(tab) as? GeckoViewBrowserEngine
+        if (currentEngine() == null) {
             val loadMethod = MainActivity::class.java.getDeclaredMethod(
-                "loadTabUrl", BrowserTab::class.java, String::class.java
+                "loadTabUrl", tabClass, String::class.java
             ).apply { isAccessible = true }
             loadMethod.invoke(activity, tab, "https://example.com/")
         }
-        return tab.browserEngine as? GeckoViewBrowserEngine
+        return currentEngine()
             ?: throw AssertionError("The active Normal tab did not select GeckoView for the Shield-enabled test")
     }
 
