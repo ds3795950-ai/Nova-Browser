@@ -1,6 +1,10 @@
 package com.nova.browser
 
+import android.os.Build
+import android.os.Debug
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
@@ -47,10 +51,18 @@ class CefriumEmulatorSmokeTest {
         val titleLoaded = CountDownLatch(1)
         var engine: CefriumBrowserEngine? = null
         var sawSmokePageLoadStart = false
+        var createDurationMs = 0L
+        var loadDurationMs = 0L
+        var pssBeforeKb = 0L
+        var pssAfterLoadKb = 0L
+        var nativeHeapAfterLoadKb = 0L
+        var loadStartedAtMs = 0L
         val smokeUrlPrefix = "data:text/html;base64,"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val profile = CefriumProfile.get("nova-emulator-smoke")
+                pssBeforeKb = Debug.getPss()
+                val createStartedAtMs = SystemClock.elapsedRealtime()
                 engine = CefriumBrowserEngine(
                     activity = activity,
                     profile = profile,
@@ -67,6 +79,7 @@ class CefriumEmulatorSmokeTest {
                         }
                     }
                 )
+                createDurationMs = SystemClock.elapsedRealtime() - createStartedAtMs
                 engine!!.setDesktopMode(true)
                 val html = """
                     <!doctype html>
@@ -81,12 +94,22 @@ class CefriumEmulatorSmokeTest {
                     engine!!.view,
                     FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 )
+                loadStartedAtMs = SystemClock.elapsedRealtime()
                 engine!!.loadUrl(smokeUrlPrefix + encoded)
             }
             assertTrue("Cefrium did not finish loading its local smoke-test page in desktop mode", pageLoaded.await(30, TimeUnit.SECONDS))
+            loadDurationMs = SystemClock.elapsedRealtime() - loadStartedAtMs
             assertTrue("Cefrium did not publish the local smoke-test page title", titleLoaded.await(10, TimeUnit.SECONDS))
-            scenario.onActivity { activeScenario ->
+            scenario.onActivity {
                 assertEquals("Nova Reader Smoke", engine?.state?.title)
+                pssAfterLoadKb = Debug.getPss()
+                nativeHeapAfterLoadKb = Debug.getNativeHeapAllocatedSize() / 1024L
+                Log.i(
+                    "NovaPerf",
+                    "cefrium_smoke sdk=${Build.VERSION.SDK_INT} model=${Build.MODEL} abi=${Build.SUPPORTED_ABIS.firstOrNull().orEmpty()} " +
+                        "create_ms=$createDurationMs load_ms=$loadDurationMs pss_before_kb=$pssBeforeKb " +
+                        "pss_after_load_kb=$pssAfterLoadKb native_heap_after_load_kb=$nativeHeapAfterLoadKb"
+                )
                 engine?.close()
             }
         }

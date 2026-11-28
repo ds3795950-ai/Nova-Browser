@@ -3263,7 +3263,18 @@ class MainActivity : ComponentActivity() {
 
 
 
-    private fun enforceSessionBudget(preserveTabIds: Set<String> = emptySet()) {
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && ::pageStatus.isInitialized) {
+            // Release background renderers promptly when Android signals memory pressure.
+            enforceSessionBudget(memoryPressure = true)
+        }
+    }
+
+    private fun enforceSessionBudget(
+        preserveTabIds: Set<String> = emptySet(),
+        memoryPressure: Boolean = false
+    ) {
         val activeSessions = tabs.filter { it.browserEngine != null || it.session != null }
         val candidates = activeSessions.map { tab ->
             SessionBudgetPolicy.Candidate(tab.id, tab.lastAccess, tab.isPrivate, tab.isGuest)
@@ -3273,8 +3284,12 @@ class MainActivity : ComponentActivity() {
             splitTabId?.let(::add)
             addAll(preserveTabIds)
         }
-        val memoryClassMb = getSystemService(android.app.ActivityManager::class.java).memoryClass
-        val limit = SessionBudgetPolicy.maxRetainedSessions(memoryClassMb)
+        val activityManager = getSystemService(android.app.ActivityManager::class.java)
+        val memoryInfo = android.app.ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+        val limit = SessionBudgetPolicy.maxRetainedSessions(
+            activityManager.memoryClass,
+            memoryPressure = memoryPressure || memoryInfo.lowMemory
+        )
         val evictedIds = SessionBudgetPolicy.evictionCandidates(candidates, limit, visibleIds).toSet()
         activeSessions.filter { it.id in evictedIds }.forEach { tab ->
             closeTabRuntime(tab)
