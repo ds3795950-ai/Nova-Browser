@@ -125,7 +125,9 @@ internal object TorGuestRoutingController {
         State.WAITING_FOR_PROXY -> "Tor circuit built; securing GeckoView routing…"
         State.READY -> "Tor connected · Guest SOCKS5 routing and WebRTC protection active"
         State.FAILED -> "Tor unavailable · $lastError"
-        State.STOPPING -> "Stopping Guest Tor…"
+        State.STOPPING -> if (lastError.startsWith("Recovery required:")) {
+            "Guest routing reset unconfirmed · ${lastError.removePrefix("Recovery required:").trim()}"
+        } else "Stopping Guest Tor…"
         State.STOPPED -> "Tor is not running outside Guest Mode"
     }
 
@@ -145,6 +147,7 @@ internal object TorGuestRoutingController {
             return
         }
         state = State.STOPPING
+        lastError = "Waiting for the proxy extension to confirm Guest Tor is disabled"
         // Keep the status listener alive while requesting the reset. Even Activity teardown
         // without a completion callback must not release the shared Gecko runtime early.
         stopInternal(disableProxy = false, clearStatusListener = false)
@@ -158,8 +161,10 @@ internal object TorGuestRoutingController {
             stopTimeout = null
             stopPoll?.let(mainHandler::removeCallbacks)
             stopPoll = null
-            lastError = "Waiting for the proxy extension to confirm Guest Tor is disabled"
-            // Stay STOPPING (and keep the runtime barrier) until a matching acknowledgement arrives.
+            lastError = "Recovery required: close and reopen Nova to reset the shared GeckoView proxy safely"
+            // Never release Normal sessions without a matching reset acknowledgement. The UI
+            // exposes the recovery action instead of leaving the user with a silent spinner.
+            NovaBrowserVpnController.notifyStatusChanged()
         }
         mainHandler.postDelayed(stopTimeout!!, 15_000L)
         checkStopReadiness()

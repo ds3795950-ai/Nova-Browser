@@ -2,12 +2,12 @@
 
 **Branch:** `feature/phase-1-dual-engine-foundation`  
 **Baseline audited:** `fb717c1cd48da2683ad376d40e5b0bfbbe686d22` (`main`, 2026-11-19)  
-**Status:** dual-engine source integration is merged on `main`; repository CI and emulator smoke checks pass. Physical-device acceptance remains open.
+**Status (2026-11-28):** dual-engine source integration exists on `main`; the Guest Tor/VPN hardening work is still on the open PR #25 branch and is not merged. CI, lint and emulator smoke checks must be checked against the latest PR head before release. Physical-device acceptance and VPN/Tor leak testing remain open.
 
 ## Repository findings
 
-- Nova is a Kotlin Android app (`com.nova.browser`) with a single large `MainActivity` that owns the browser UI, tab list and most GeckoView delegates.
-- `MainActivity` creates one `GeckoRuntime` and a `GeckoSession` per tab. Two `GeckoView` instances support the split-pane UI. The runtime is shut down with the activity.
+- Nova is a Kotlin Android app (`com.nova.browser`) with a large `MainActivity` that owns the browser UI, tab list and many GeckoView delegates.
+- Nova reuses a process-level `GeckoRuntime`; GeckoView tabs own separate `GeckoSession` instances, while eligible normal tabs may use Cefrium engines. Two GeckoView surfaces support the split-pane UI. Activity recreation preserves the shared runtime and tab/session state; process shutdown ends the runtime.
 - The tab model already distinguishes normal, private and Guest tabs. Guest sessions use Gecko private mode plus a fresh session context ID, and the previous Guest context is cleared at startup/exit. Guest and private tabs are excluded from normal tab persistence, password autofill and cloud sync.
 - Bookmarks, history, downloads, password vault, Shield, protected DNS and encrypted cloud sync are implemented in existing app services. Guest Mode now uses an embedded Tor service and GeckoView SOCKS5 extension bridge, with an explicit runtime-wide proxy isolation limitation documented below.
 - `BrowserTab` now holds an engine-neutral `BrowserEngine` adapter, while `MainActivity` still owns app-level delegates and feature routing. Remaining work is to reduce residual Gecko-specific ownership without breaking permissions, downloads, extensions, translation, Shield, split-screen and Guest isolation.
