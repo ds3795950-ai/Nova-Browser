@@ -20,7 +20,7 @@ gradle testDebugUnitTest
 gradle assembleDebug
 ```
 
-The Android CI workflow runs unit tests and builds debug APK artifacts. Lint and Android 16 emulator smoke tests run separately. ABI-specific APKs are produced; Cefrium's native libraries add substantial size and memory cost, so check the artifact for the target ABI before distribution.
+The Android CI workflow runs unit tests, builds debug and release variants, and publishes only the installable ARM64 test APK for the target device class. If production signing secrets are absent, CI signs the optimized release APK with the runner's temporary Android debug key; that artifact is for testing only, not Play Store distribution, and may require uninstalling an older build before installation. Lint and Android 16 emulator instrumentation tests run separately. The latest ARM64 release output is approximately 222 MB, so the under-100-MB target is not met with both native engines bundled; reaching it would require removing an engine or delivering one on demand.
 
 ## Release readiness
 
