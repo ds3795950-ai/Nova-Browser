@@ -61,7 +61,6 @@ class CefriumBrowserEngine(
     desktopMode: Boolean = false,
     existingBrowser: CefriumBrowser? = null,
     initialNavigationState: ByteArray? = null,
-    initialNovaAddons: List<NovaScriptAddon> = emptyList(),
     private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
@@ -98,7 +97,6 @@ class CefriumBrowserEngine(
         progress = browser.getProgress()
     )
     @Volatile private var closed = false
-    private val novaAddonScriptHandlers = mutableMapOf<String, CefriumBrowser.ScriptHandler>()
     var didRestoreInitialNavigationState: Boolean = false
         private set
 
@@ -208,7 +206,6 @@ class CefriumBrowserEngine(
             }
         })
         browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
-        setNovaScriptAddons(initialNovaAddons)
         if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
@@ -275,6 +272,12 @@ class CefriumBrowserEngine(
 
     fun ownsBrowser(candidate: CefriumBrowser): Boolean = browser === candidate
 
+    /** Creates the engine's native Android print adapter for the current page. */
+    fun createPrintDocumentAdapter(documentName: String): android.print.PrintDocumentAdapter {
+        checkOpen()
+        return browser.createPrintDocumentAdapter(documentName)
+    }
+
     fun setJavaScriptEnabled(enabled: Boolean) {
         checkOpen()
         browser.setJavaScriptEnabled(enabled)
@@ -292,42 +295,6 @@ class CefriumBrowserEngine(
         browser.setAudioMuted(muted)
     }
 
-    fun setNovaScriptAddons(addons: List<NovaScriptAddon>): List<String> {
-        checkOpen()
-        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
-        novaAddonScriptHandlers.clear()
-        val failures = mutableListOf<String>()
-        addons.filter { it.enabled }.forEach { addon ->
-            if (addon.allowedOriginRules.isEmpty()) {
-                failures += addon.id
-                android.util.Log.w("NovaBrowser", "Skipping add-on ${addon.id}: empty origin allowlist")
-                return@forEach
-            }
-            runCatching {
-                val idLiteral = org.json.JSONObject.quote(addon.id)
-                val nameLiteral = org.json.JSONObject.quote(addon.name)
-                val wrapped = """
-                    (() => {
-                      try {
-                        globalThis.__novaAddonLoaded = globalThis.__novaAddonLoaded || Object.create(null);
-                        if (globalThis.__novaAddonLoaded[$idLiteral]) return;
-                        globalThis.__novaAddonLoaded[$idLiteral] = true;
-                        ${addon.script}
-                      } catch (error) {
-                        console.error("[Nova Add-on: " + $nameLiteral + "]", error);
-                      }
-                    })();
-                """.trimIndent()
-                browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
-            }.onSuccess { handler ->
-                novaAddonScriptHandlers[addon.id] = handler
-            }.onFailure { error ->
-                failures += addon.id
-                android.util.Log.w("NovaBrowser", "Could not register Nova add-on ${addon.id}", error)
-            }
-        }
-        return failures.distinct()
-    }
     fun setSitePermission(origin: String, permission: String, decision: String) {
         if (closed) return
         val cefriumPermission = when (permission.uppercase()) {
@@ -588,8 +555,6 @@ class CefriumBrowserEngine(
     override fun close() {
         if (closed) return
         detach()
-        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
-        novaAddonScriptHandlers.clear()
         closed = true
         browser.close()
     }
@@ -726,7 +691,7 @@ private class CefriumDownloadPublisher(
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
             put(MediaStore.Downloads.MIME_TYPE, mimeType)
-            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Nova")
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Nova/cefrium")
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = appContext.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
