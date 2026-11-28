@@ -208,6 +208,7 @@ class MainActivity : ComponentActivity() {
     private var pendingHistoryExport: String? = null
     private var pendingExternalLink: String? = null
     private var pendingExternalLinkGuest: Boolean? = null
+    private var launchIntentHandled = false
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
     private val bookmarkRequestCode = 4101
@@ -316,6 +317,13 @@ class MainActivity : ComponentActivity() {
             launchNextCefriumAndroidPermission()
         }
         enginePreferences = BrowserEnginePreferenceStore(prefs)
+        launchIntentHandled = savedInstanceState?.getBoolean("nova_launch_intent_handled") == true
+        if (savedInstanceState != null) {
+            pendingExternalLink = prefs.getString("pending_external_link_url", null)
+            pendingExternalLinkGuest = if (prefs.contains("pending_external_link_guest")) {
+                prefs.getBoolean("pending_external_link_guest", false)
+            } else null
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val tab = currentTab()
@@ -458,13 +466,22 @@ class MainActivity : ComponentActivity() {
         }
         if (tabs.isEmpty()) ensureHomeTabRecord()
         applyVpnRoutingReadiness()
-        if (intent?.data != null) handleViewIntent(intent)
+        if (!launchIntentHandled && intent?.data != null) {
+            handleViewIntent(intent)
+            launchIntentHandled = true
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("nova_launch_intent_handled", launchIntentHandled)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleViewIntent(intent)
+        launchIntentHandled = true
     }
 
     /** Opens safe HTTP(S) links sent by other apps in a new tab. */
@@ -4030,7 +4047,7 @@ class MainActivity : ComponentActivity() {
         else if (wasActive) activeIndex = index.coerceAtMost(tabs.lastIndex)
         cleanupGuestContextIfIdle()
         if (removed.isGuest && wasGuestActive && tabs.none { it.isGuest }) {
-            if (tabs.isNotEmpty()) persistTabs()
+            if (tabs.isNotEmpty()) persistTabs() else ensureHomeTabRecord()
             toast("The last Guest tab was closed · Guest Mode is exiting")
             return
         }
@@ -5163,9 +5180,27 @@ class MainActivity : ComponentActivity() {
                                 document.querySelector('[role="main"]') ||
                                 document.querySelector('main') || document.body;
                               if (!root) return JSON.stringify({ url: location.href, text: '' });
-                              const clone = root.cloneNode(true);
-                              clone.querySelectorAll('script,style,form,input,textarea,select,button,iframe,object,embed,[contenteditable="true"]').forEach(node => node.remove());
-                              const text = (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24000);
+                              const excluded = 'script,style,form,input,textarea,select,button,iframe,object,embed,[contenteditable="true"],[hidden],[aria-hidden="true"]';
+                              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+                              const parts = [];
+                              let node;
+                              while ((node = walker.nextNode()) && parts.join(' ').length < 24000) {
+                                const parent = node.parentElement;
+                                if (!parent || parent.closest(excluded)) continue;
+                                let element = parent;
+                                let visible = true;
+                                while (element && root.contains(element)) {
+                                  const style = getComputedStyle(element);
+                                  if (style.display === 'none' || style.visibility === 'hidden' ||
+                                      style.visibility === 'collapse' || Number(style.opacity) === 0) {
+                                    visible = false;
+                                    break;
+                                  }
+                                  element = element.parentElement;
+                                }
+                                if (visible && parent.getClientRects().length > 0) parts.push(node.nodeValue || '');
+                              }
+                              const text = parts.join(' ').replace(/\\s+/g, ' ').trim().slice(0, 24000);
                               return JSON.stringify({ url: location.href, text });
                             })()
                         """.trimIndent()
@@ -7256,6 +7291,13 @@ private fun showForgotPassword(prefillEmail: String = "") {
         if (!isInPictureInPictureMode) tabs.forEach { it.browserEngine?.onHostPause() }
         persistTabs()
         super.onPause()
+    }
+
+    override fun onStop() {
+        // onPause normally pauses engines, but Android can stop the Activity after
+        // onPause was skipped for PiP. Do not pause the active PiP playback surface.
+        if (!isInPictureInPictureMode) tabs.forEach { it.browserEngine?.onHostPause() }
+        super.onStop()
     }
 
     override fun onResume() {

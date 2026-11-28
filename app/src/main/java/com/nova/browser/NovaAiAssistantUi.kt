@@ -770,8 +770,9 @@ internal class NovaAiAssistantUi(
 
     private fun summarise() {
         status.text = "Preparing page summary…"
+        val requestGeneration = conversationGeneration
         requestPageText { page ->
-            if (dialog?.isShowing != true) return@requestPageText
+            if (requestGeneration != conversationGeneration || dialog?.isShowing != true) return@requestPageText
             if (page.isNullOrBlank()) {
                 status.text = "No readable page found"
                 notify("Could not read the current webpage")
