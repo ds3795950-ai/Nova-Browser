@@ -289,7 +289,7 @@ class MainActivity : ComponentActivity() {
         var contentPermissions: List<GeckoSession.PermissionDelegate.ContentPermission> = emptyList(),
         var rendererRecoveryAttempts: Int = 0,
         var mediaSession: org.mozilla.geckoview.MediaSession? = null,
-        var mediaPlaybackActive: Boolean = false
+        var isFullscreenVideoPlaying: Boolean = false
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -2609,6 +2609,8 @@ class MainActivity : ComponentActivity() {
     private fun setBrowserFullscreen(fullScreen: Boolean, tab: BrowserTab? = currentTab()) {
         isFullscreen = fullScreen
         fullscreenTabId = if (fullScreen) tab?.id else null
+        if (fullScreen && tab != null) refreshFullscreenVideoPlayback(tab)
+        else tab?.isFullscreenVideoPlaying = false
         topChrome.visibility = if (fullScreen) View.GONE else View.VISIBLE
         bottomToolbar.visibility = if (fullScreen) View.GONE else View.VISIBLE
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -2992,19 +2994,7 @@ class MainActivity : ComponentActivity() {
                 mediaSession.muteAudio(!siteSettingAllowed(BrowserEngineType.GECKOVIEW, tab.lastUrl, "sound", true))
             }
             override fun onDeactivated(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
-                if (tab.mediaSession === mediaSession) {
-                    tab.mediaSession = null
-                    tab.mediaPlaybackActive = false
-                }
-            }
-            override fun onPlay(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
-                if (tab.mediaSession === mediaSession) tab.mediaPlaybackActive = true
-            }
-            override fun onPause(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
-                if (tab.mediaSession === mediaSession) tab.mediaPlaybackActive = false
-            }
-            override fun onStop(session: GeckoSession, mediaSession: org.mozilla.geckoview.MediaSession) {
-                if (tab.mediaSession === mediaSession) tab.mediaPlaybackActive = false
+                if (tab.mediaSession === mediaSession) tab.mediaSession = null
             }
         }
 
@@ -7287,6 +7277,45 @@ private fun showForgotPassword(prefillEmail: String = "") {
         applyFoldAwareLayout(separatingFold)
     }
 
+    private val fullscreenVideoProbeScript = """
+        (() => {
+          const root = document.fullscreenElement;
+          if (!root) return false;
+          const videos = root instanceof HTMLVideoElement ? [root] : Array.from(root.querySelectorAll('video'));
+          return videos.some(video => !video.paused && !video.ended && video.readyState >= 2);
+        })()
+    """.trimIndent()
+
+    private fun checkFullscreenVideoPlayback(tab: BrowserTab, onResult: (Boolean) -> Unit) {
+        val callback: (String?) -> Unit = { raw ->
+            onResult(raw?.trim()?.trim('"') == "true")
+        }
+        runCatching {
+            if (tab.engineType == BrowserEngineType.CEFRIUM) {
+                val engine = tab.browserEngine as? CefriumBrowserEngine
+                if (engine == null) onResult(false) else engine.evaluateJavaScript(fullscreenVideoProbeScript, callback)
+            } else {
+                val session = tab.session
+                if (session == null) onResult(false) else {
+                    session.evaluateJS(fullscreenVideoProbeScript)?.accept(
+                        { value -> callback(value) },
+                        { onResult(false) }
+                    ) ?: onResult(false)
+                }
+            }
+        }.onFailure { onResult(false) }
+    }
+
+    private fun refreshFullscreenVideoPlayback(tab: BrowserTab) {
+        checkFullscreenVideoPlayback(tab) { playing ->
+            runOnUiThread {
+                if (isFullscreen && fullscreenTabId == tab.id && currentTab()?.id == tab.id) {
+                    tab.isFullscreenVideoPlaying = playing
+                }
+            }
+        }
+    }
+
     private fun enterBrowserPictureInPicture(tab: BrowserTab, videoIsPlaying: Boolean) {
         val activeFullscreenTab = fullscreenTabId == tab.id && currentTab()?.id == tab.id
         if (!BrowserPictureInPicturePolicy.shouldEnter(
@@ -7310,18 +7339,17 @@ private fun showForgotPassword(prefillEmail: String = "") {
         super.onUserLeaveHint()
         val tab = fullscreenTabId?.let { id -> currentTab()?.takeIf { it.id == id } } ?: return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isFullscreen || isInPictureInPictureMode) return
-        if (tab.engineType == BrowserEngineType.CEFRIUM) {
-            val engine = tab.browserEngine as? CefriumBrowserEngine ?: return
-            val script = "(() => { const video = document.fullscreenElement; return !!(video instanceof HTMLVideoElement && !video.paused && video.readyState >= 2); })()"
-            engine.evaluateJavaScript(script) { raw ->
-                val playing = raw?.trim()?.trim('"') == "true"
-                runOnUiThread { enterBrowserPictureInPicture(tab, playing) }
-            }
+        if (tab.isFullscreenVideoPlaying) {
+            enterBrowserPictureInPicture(tab, true)
         } else {
-            enterBrowserPictureInPicture(
-                tab,
-                tab.mediaSession?.isActive() == true && tab.mediaPlaybackActive
-            )
+            // Query again at the moment the user leaves: playback may have started
+            // after the initial fullscreen callback.
+            checkFullscreenVideoPlayback(tab) { playing ->
+                runOnUiThread {
+                    tab.isFullscreenVideoPlaying = playing
+                    if (playing) enterBrowserPictureInPicture(tab, true)
+                }
+            }
         }
     }
 
