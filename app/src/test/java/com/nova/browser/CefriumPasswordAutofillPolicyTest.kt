@@ -39,6 +39,9 @@ class CefriumPasswordAutofillPolicyTest {
         assertFalse(CefriumPasswordAutofillPolicy.isAllowed(
             "https://example.com:8443", "https://example.com", null
         ))
+        assertFalse(CefriumPasswordAutofillPolicy.isAllowed(
+            "https://example.com:0", "https://example.com", null
+        ))
     }
 
     @Test fun credentialBearingOrNonWebOriginsAreRejected() {

@@ -384,12 +384,27 @@ class CefriumBrowserEngine(
               const forms = Array.from(document.forms);
               const form = forms.find(candidate => {
                 try {
-                  const action = new URL(candidate.getAttribute('action') || location.href, location.href);
-                  return action.origin === expectedOrigin && !!candidate.querySelector('input[type="password"]');
+                  const rawAction = candidate.getAttribute('action');
+                  // Missing/empty action submits to this document; non-empty relative actions
+                  // resolve against document.baseURI, including any page-provided <base>.
+                  const action = new URL(rawAction && rawAction.trim() ? rawAction : location.href, document.baseURI);
+                  if (action.origin !== expectedOrigin) return false;
+                  const hasExternalSubmitter = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="image"]'))
+                    .filter(control => control.form === candidate)
+                    .some(control => {
+                      if (control instanceof HTMLButtonElement && control.type !== 'submit') return false;
+                      const override = control.getAttribute('formaction');
+                      if (!override || !override.trim()) return false;
+                      try { return new URL(override, document.baseURI).origin !== expectedOrigin; }
+                      catch (_) { return true; }
+                    });
+                  if (hasExternalSubmitter) return false;
+                  const password = candidate.querySelector('input[type="password"][autocomplete="current-password"], input[type="password"]:not([autocomplete="new-password"])');
+                  return !!password && !password.disabled && !password.readOnly;
                 } catch (_) { return false; }
               });
               if (!form) return JSON.stringify({ok:false, reason:'same-origin-password-form-not-found'});
-              const passwordField = form.querySelector('input[autocomplete="current-password"], input[type="password"]:not([autocomplete="new-password"])');
+              const passwordField = form.querySelector('input[type="password"][autocomplete="current-password"], input[type="password"]:not([autocomplete="new-password"])');
               if (!passwordField || passwordField.disabled || passwordField.readOnly)
                 return JSON.stringify({ok:false, reason:'password-field-unavailable'});
               const usernameField = form.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[id*="user" i], input[name*="email" i], input[id*="email" i]');

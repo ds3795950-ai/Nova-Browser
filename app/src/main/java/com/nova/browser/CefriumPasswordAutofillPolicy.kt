@@ -21,7 +21,7 @@ object CefriumPasswordAutofillPolicy {
         // Never place a saved password into a clear-text HTTP page or a credential-bearing URL.
         if (scheme != "https" || uri.rawUserInfo != null) return null
         val port = uri.port
-        val normalizedPort = when { port <= 0 || port == 443 -> ""; else -> ":$port" }
+        val normalizedPort = when { port == -1 || port == 443 -> ""; else -> ":$port" }
         return "$scheme://$host$normalizedPort"
     }
 }
