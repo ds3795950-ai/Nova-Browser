@@ -5277,9 +5277,11 @@ class MainActivity : ComponentActivity() {
         session.saveAsPdf().accept({ input ->
             val pdf = File(cacheDir, "nova-print-${UUID.randomUUID()}.pdf")
             val saved = runCatching {
-                val source = input ?: return@runCatching false
-                source.use { stream -> pdf.outputStream().use { output -> stream.copyTo(output) } }
-                pdf.isFile && pdf.length() > 0L
+                val copied = input?.let { source ->
+                    source.use { stream -> pdf.outputStream().use { output -> stream.copyTo(output) } }
+                    true
+                } ?: false
+                copied && pdf.isFile && pdf.length() > 0L
             }.getOrDefault(false)
             runOnUiThread {
                 if (!saved) {
