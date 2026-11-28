@@ -8,7 +8,7 @@ import com.cefrium.CefriumResourceInterceptor
 import com.cefrium.CefriumResourceType
 
 /** Preference-only Cefrium request policy safe to retain for the lifetime of a shared profile. */
-internal class CefriumRequestPolicy(private val preferences: SharedPreferences) {
+class CefriumRequestPolicy(private val preferences: SharedPreferences) {
     fun imagesBlockedFor(url: String): Boolean =
         preferences.getBoolean("nova_data_saver_enabled", false) || !siteSettingAllowed(url, "images", true)
 
