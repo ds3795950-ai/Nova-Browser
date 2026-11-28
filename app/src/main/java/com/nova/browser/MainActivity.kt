@@ -851,7 +851,13 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             addView(actionButton("Back") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.goBack() })
             addView(actionButton("Forward") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.goForward() })
-            addView(actionButton("Reload") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.reload() })
+            addView(actionButton("Reload") {
+                tabs.firstOrNull { it.id == splitTabId }?.let { tab ->
+                    val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl) ?: return@let
+                    if (policyUrl != tab.lastUrl) loadSecondaryTabUrl(tab, policyUrl)
+                    else tab.browserEngine?.reload()
+                }
+            })
             addView(secondaryAddressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(actionButton("Go") { navigateSecondary(secondaryAddressBar.text.toString()) })
             addView(actionButton("Close split") { exitSplitScreen() })
@@ -1544,7 +1550,11 @@ class MainActivity : ComponentActivity() {
         session.open(runtime)
         attachAiPageReader(session, tab)
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
-            engine.loadUrl(tab.lastUrl)
+            val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl)
+            if (policyUrl != null) {
+                tab.lastUrl = policyUrl
+                engine.loadUrl(policyUrl)
+            }
             tab.needsReload = false
         }
         return session
@@ -1562,6 +1572,16 @@ class MainActivity : ComponentActivity() {
         (tab.browserEngine as? CefriumBrowserEngine)?.let { return it }
         check(!tab.isPrivate && !tab.isGuest) { "Private and Guest tabs must use GeckoView" }
         check(!guestTorReservesGeckoRuntime()) { "Normal Cefrium sessions are paused while Guest Tor owns the browser network context" }
+        val restoredUrl = tab.lastUrl
+        val policyUrl = applyHttpsOnlyPolicy(restoredUrl)
+        if (policyUrl == null) {
+            tab.needsReload = false
+            tab.cefriumNavigationState = null
+        } else if (policyUrl != restoredUrl) {
+            tab.lastUrl = policyUrl
+            tab.needsReload = true
+            tab.cefriumNavigationState = null
+        }
         val profile = CefriumProfile.get(enginePreferences.cefriumProfileName())
         val requestPolicy = CefriumRequestPolicy(prefs)
         // Install before creating the tab browser; this profile hook retains only preferences.
@@ -2149,7 +2169,11 @@ class MainActivity : ComponentActivity() {
         showPrimaryEngineView(engine.view)
         engine.setActive(true, true)
         if (tab.needsReload && tab.lastUrl != HOME_URL) {
-            engine.loadUrl(tab.lastUrl)
+            val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl)
+            if (policyUrl != null) {
+                tab.lastUrl = policyUrl
+                engine.loadUrl(policyUrl)
+            }
             tab.needsReload = false
         }
         if (tab.lastUrl == HOME_URL) showHomeScreen() else showBrowserPage()
@@ -4094,6 +4118,11 @@ class MainActivity : ComponentActivity() {
     private fun reloadPage() {
         currentTab()?.let { tab ->
             if (!canUseTabEngine(tab, "Reload")) return@let
+            val policyUrl = applyHttpsOnlyPolicy(tab.lastUrl) ?: return@let
+            if (policyUrl != tab.lastUrl) {
+                loadTabUrl(tab, policyUrl)
+                return@let
+            }
             if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) toast("Wait for browsing-data deletion to finish before reloading")
             else ensureBrowserEngine(tab).reload()
         }
@@ -5110,13 +5139,20 @@ class MainActivity : ComponentActivity() {
         if (tab.engineType == BrowserEngineType.GECKOVIEW && pendingGeckoDataClearActive) { toast("Wait for browsing-data deletion to finish before changing this tab"); return }
         if (tab.isPrivate || tab.isGuest) { toast("Desktop preference is not saved in private or Guest Mode"); return }
         val host = Uri.parse(tab.lastUrl).host ?: run { toast("Open a website first"); return }
+        val originalUrl = tab.lastUrl
+        val policyUrl = applyHttpsOnlyPolicy(originalUrl) ?: return
+        val urlWasUpgraded = policyUrl != originalUrl
+        tab.lastUrl = policyUrl
+        if (urlWasUpgraded) persistTabs()
         val sites = desktopSites
         tab.desktopSite = if (host in sites) { sites.remove(host); false } else { sites.add(host); true }
         prefs.edit().putStringSet("desktop_sites", sites).apply()
         val activeEngine = ensureBrowserEngine(tab)
         if (activeEngine is CefriumBrowserEngine) {
-            runCatching { activeEngine.setDesktopMode(tab.desktopSite); activeEngine.reload() }
-                .onFailure { failure ->
+            runCatching {
+                activeEngine.setDesktopMode(tab.desktopSite)
+                if (urlWasUpgraded) activeEngine.loadUrl(policyUrl) else activeEngine.reload()
+            }.onFailure { failure ->
                     val fallback = fallbackTabToGecko(tab, failure)
                     fallback.attachTo(browserView)
                     showPrimaryEngineView(fallback.view)
@@ -5130,7 +5166,8 @@ class MainActivity : ComponentActivity() {
             engine.attachTo(browserView)
             showPrimaryEngineView(engine.view)
             engine.setActive(true, true)
-            engine.loadUrl(tab.lastUrl)
+            engine.loadUrl(policyUrl)
+            tab.needsReload = false
         }
         toast(if (tab.desktopSite) "Desktop site enabled for $host" else "Mobile site restored for $host")
     }
