@@ -14,6 +14,21 @@ class CefriumTrackingProtectionPolicyTest {
         ))
     }
 
+    @Test fun siblingSubdomainsOfTheSameListedTrackerSiteAreFirstParty() {
+        assertFalse(CefriumTrackingProtectionPolicy.shouldBlockRequest(
+            "https://cdn.segment.io/analytics.js", "https://app.segment.io", true
+        ))
+    }
+
+    @Test fun trailingDotTrackerHostsAreCanonicalized() {
+        assertTrue(CefriumTrackingProtectionPolicy.shouldBlockRequest(
+            "https://google-analytics.com./collect", "https://news.example.com", true
+        ))
+        assertFalse(CefriumTrackingProtectionPolicy.shouldBlockRequest(
+            "https://google-analytics.com/collect", "https://google-analytics.com./", true
+        ))
+    }
+
     @Test fun leavesFirstPartyAndUnlistedRequestsAlone() {
         assertFalse(CefriumTrackingProtectionPolicy.shouldBlockRequest(
             "https://analytics.example.com/pixel", "https://example.com", true

@@ -357,7 +357,7 @@ class CefriumBrowserEngine(
 
     /**
      * Fill a saved login only after an explicit user action and only into a same-origin form.
-     * No credential is stored in page state, logged, or sent to a cross-origin form action.
+     * The destination is checked before filling; page scripts can still read fields on their own page.
      */
     fun fillSavedLogin(
         expectedOrigin: String,
@@ -378,6 +378,23 @@ class CefriumBrowserEngine(
             (() => {
               const expectedOrigin = $originLiteral;
               if (location.origin !== expectedOrigin) return JSON.stringify({ok:false, reason:'origin-changed'});
+              const findPasswordField = form => {
+                // form.elements includes controls associated via form="id", even outside the form.
+                const fields = Array.from(form.elements).filter(control =>
+                  control.form === form && control instanceof HTMLInputElement &&
+                  control.type === 'password' && control.autocomplete !== 'new-password' &&
+                  !control.disabled && !control.readOnly
+                );
+                return fields.find(field => field.autocomplete === 'current-password') || fields[0] || null;
+              };
+              const findUsernameField = (form, passwordField) =>
+                Array.from(form.elements).find(control =>
+                  control.form === form && control instanceof HTMLInputElement &&
+                  control !== passwordField && control.type !== 'password' &&
+                  !control.disabled && !control.readOnly &&
+                  (control.autocomplete === 'username' || control.type === 'email' ||
+                    /user|email/i.test((control.name || '') + ' ' + (control.id || '')))
+                ) || null;
               const forms = Array.from(document.forms);
               const form = forms.find(candidate => {
                 try {
@@ -396,15 +413,13 @@ class CefriumBrowserEngine(
                       catch (_) { return true; }
                     });
                   if (hasExternalSubmitter) return false;
-                  const password = candidate.querySelector('input[type="password"][autocomplete="current-password"], input[type="password"]:not([autocomplete="new-password"])');
-                  return !!password && !password.disabled && !password.readOnly;
+                  return !!findPasswordField(candidate);
                 } catch (_) { return false; }
               });
               if (!form) return JSON.stringify({ok:false, reason:'same-origin-password-form-not-found'});
-              const passwordField = form.querySelector('input[type="password"][autocomplete="current-password"], input[type="password"]:not([autocomplete="new-password"])');
-              if (!passwordField || passwordField.disabled || passwordField.readOnly)
-                return JSON.stringify({ok:false, reason:'password-field-unavailable'});
-              const usernameField = form.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[id*="user" i], input[name*="email" i], input[id*="email" i]');
+              const passwordField = findPasswordField(form);
+              if (!passwordField) return JSON.stringify({ok:false, reason:'password-field-unavailable'});
+              const usernameField = findUsernameField(form, passwordField);
               const setValue = (field, value) => {
                 const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
                 if (setter) setter.call(field, value); else field.value = value;

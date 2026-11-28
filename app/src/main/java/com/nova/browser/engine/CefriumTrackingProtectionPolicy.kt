@@ -19,9 +19,13 @@ object CefriumTrackingProtectionPolicy {
         if (!enabled) return false
         val host = webHost(url) ?: return false
         val topHost = webHost(topLevelUrl) ?: return false
-        // Never block a first-party request just because its host also appears in the list.
+        // Sibling subdomains under the same listed tracker site are same-site, not third-party.
+        val requestTrackerSite = trackerDomains.firstOrNull { host == it || host.endsWith(".$it") }
+        val topTrackerSite = trackerDomains.firstOrNull { topHost == it || topHost.endsWith(".$it") }
+        if (requestTrackerSite != null && requestTrackerSite == topTrackerSite) return false
+        // Also preserve ordinary parent/child first-party relationships.
         if (host == topHost || host.endsWith(".$topHost") || topHost.endsWith(".$host")) return false
-        return trackerDomains.any { host == it || host.endsWith(".$it") }
+        return requestTrackerSite != null
     }
 
     fun shouldBlockImage(isImage: Boolean, dataSaverEnabled: Boolean, siteImagesAllowed: Boolean): Boolean =
@@ -30,6 +34,6 @@ object CefriumTrackingProtectionPolicy {
     private fun webHost(value: String): String? = runCatching {
         val uri = URI(value)
         val scheme = uri.scheme?.lowercase()
-        uri.host?.lowercase()?.takeIf { scheme == "http" || scheme == "https" }
+        uri.host?.lowercase()?.removeSuffix(".")?.takeIf { scheme == "http" || scheme == "https" }
     }.getOrNull()
 }
