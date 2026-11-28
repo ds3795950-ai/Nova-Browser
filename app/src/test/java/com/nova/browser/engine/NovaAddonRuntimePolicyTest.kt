@@ -76,17 +76,19 @@ class NovaAddonRuntimePolicyTest {
     }
 
     @Test fun privateAndGuestNeverRunPersistentCefriumScripts() {
-        listOf(BrowserProfileKind.PRIVATE, BrowserProfileKind.GUEST).forEach { profile ->
-            val result = NovaAddonRuntimePolicy.assess(
-                BrowserEngineType.GECKOVIEW,
-                profile,
-                NovaAddonRequest(
-                    NovaAddonPackageKind.NOVA_SCRIPT,
-                    setOf(NovaAddonFeature.DOCUMENT_START_CONTENT_SCRIPT)
+        listOf(BrowserEngineType.GECKOVIEW, BrowserEngineType.CEFRIUM).forEach { engine ->
+            listOf(BrowserProfileKind.PRIVATE, BrowserProfileKind.GUEST).forEach { profile ->
+                val result = NovaAddonRuntimePolicy.assess(
+                    engine,
+                    profile,
+                    NovaAddonRequest(
+                        NovaAddonPackageKind.NOVA_SCRIPT,
+                        setOf(NovaAddonFeature.DOCUMENT_START_CONTENT_SCRIPT)
+                    )
                 )
-            )
-            assertFalse(result.supported)
-            assertEquals(NovaAddonRuntimeMode.UNSUPPORTED, result.runtimeMode)
+                assertFalse(result.supported)
+                assertEquals(NovaAddonRuntimeMode.UNSUPPORTED, result.runtimeMode)
+            }
         }
     }
 }
