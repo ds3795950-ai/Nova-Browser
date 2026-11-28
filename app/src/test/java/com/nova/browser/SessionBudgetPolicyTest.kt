@@ -49,4 +49,24 @@ class SessionBudgetPolicyTest {
         assertEquals(3, SessionBudgetPolicy.maxRetainedSessions(256, memoryPressure = true))
         assertEquals(6, SessionBudgetPolicy.maxRetainedSessions(512, memoryPressure = true))
     }
+
+    @Test fun sessionBudgetChangesOnlyAtConfiguredMemoryClassBoundaries() {
+        assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(127))
+        assertEquals(3, SessionBudgetPolicy.maxRetainedSessions(128))
+        assertEquals(3, SessionBudgetPolicy.maxRetainedSessions(191))
+        assertEquals(4, SessionBudgetPolicy.maxRetainedSessions(192))
+        assertEquals(4, SessionBudgetPolicy.maxRetainedSessions(255))
+        assertEquals(5, SessionBudgetPolicy.maxRetainedSessions(256))
+        assertEquals(5, SessionBudgetPolicy.maxRetainedSessions(383))
+        assertEquals(6, SessionBudgetPolicy.maxRetainedSessions(384))
+        assertEquals(6, SessionBudgetPolicy.maxRetainedSessions(511))
+        assertEquals(8, SessionBudgetPolicy.maxRetainedSessions(512))
+    }
+
+    @Test fun memoryPressurePreservesTheTwoSessionFloorAtLowMemoryBoundaries() {
+        assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(127, memoryPressure = true))
+        assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(128, memoryPressure = true))
+        assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(191, memoryPressure = true))
+        assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(192, memoryPressure = true))
+    }
 }
