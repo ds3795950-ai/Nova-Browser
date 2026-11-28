@@ -2208,13 +2208,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun switchCurrentTabToGecko(reason: String) {
-        val tab = currentTab() ?: return
+    private fun switchCurrentTabToGecko(reason: String): Boolean {
+        val tab = currentTab() ?: return false
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
-            )) return
-        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return
-        if (tab.engineType != BrowserEngineType.CEFRIUM) return
+            )) return false
+        if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) return false
+        if (tab.engineType != BrowserEngineType.CEFRIUM) return false
+        if (pendingGeckoDataClearActive) {
+            toast("Wait for GeckoView data deletion to finish before switching this tab")
+            return false
+        }
         closeTabRuntime(tab)
         tab.engineType = BrowserEngineType.GECKOVIEW
         tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
@@ -2224,6 +2228,7 @@ class MainActivity : ComponentActivity() {
         activateTab(tab)
         persistTabs()
         toast("Switched this tab to GeckoView: $reason")
+        return true
     }
 
     /**
@@ -5535,8 +5540,9 @@ class MainActivity : ComponentActivity() {
             .setTitle("Switch this tab to GeckoView?")
             .setMessage(decision.explanation + "\n\nNova will keep the page address and reload it, but site data and login state are not transferred between engines.")
             .setPositiveButton("Switch and continue") { _, _ ->
-                switchCurrentTabToGecko("Nova WebExtension installation")
-                installExtensionPrompt()
+                if (switchCurrentTabToGecko("Nova WebExtension installation")) {
+                    installExtensionPrompt()
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
