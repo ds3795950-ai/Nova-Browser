@@ -13,7 +13,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.json.JSONObject
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.torproject.jni.TorService
@@ -26,7 +25,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
-@Ignore("External Tor exit verification runs in the dedicated BrowserStack Guest Tor workflow")
 class GuestTorRoutingSmokeTest {
     @Test(timeout = 240_000L)
     fun embeddedTorBootstrapsAndSocksExitIsTor() {

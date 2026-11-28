@@ -14,7 +14,7 @@ Do not commit either credential or paste the access key into source files. The w
 
 Open **Actions → BrowserStack Home and Search Tests → Run workflow**. Choose an Android device name and OS version available to your BrowserStack App Automate plan. The initial defaults are Google Pixel 8 / Android 14.0; change them if that device/OS is not enabled on your account.
 
-The workflow uses a debug AAB, so release signing secrets are not required. BrowserStack App Automate usage is subject to the account's device availability and plan limits. If BrowserStack returns `BROWSERSTACK_TESTING_TIME_LIMIT_EXHAUSTED`, the workflow emits a warning and skips device execution instead of treating quota exhaustion as a product failure. Screenshots and test diagnostics are uploaded as a GitHub Actions artifact when available.
+The workflow uses a debug AAB, so release signing secrets are not required. BrowserStack App Automate usage is subject to the account's device availability and plan limits. If BrowserStack returns `BROWSERSTACK_TESTING_TIME_LIMIT_EXHAUSTED`, the upload step fails with an explicit quota error before any device session starts. This is an infrastructure limitation, not a Nova product-test result. Screenshots and test diagnostics are uploaded as a GitHub Actions artifact when available.
 
 ## Coverage and limits
 

@@ -3094,6 +3094,7 @@ class MainActivity : ComponentActivity() {
                 if (!title.isNullOrBlank()) {
                     val tab = tabs.firstOrNull { it.session === session } ?: return
                     if (tab.renamedTitle.isNullOrBlank()) tab.title = title
+                    syncGeckoEngineState(tab)
                     if (currentTab() === tab) updateTabChrome(tab)
                 }
             }
@@ -3109,6 +3110,8 @@ class MainActivity : ComponentActivity() {
                 }
                 if (!(tab.isErrorPage && url.startsWith("data:"))) tab.isErrorPage = false
                 tab.isLoading = true
+                tab.progress = 0
+                syncGeckoEngineState(tab)
                 if (!tab.isErrorPage) tab.securityStatus = ""
                 if (currentTab() === tab) runOnUiThread {
                     progressBar.visibility = View.VISIBLE
@@ -3117,10 +3120,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
             override fun onProgressChange(session: GeckoSession, progress: Int) {
-                if (currentTab() === tab) runOnUiThread { progressBar.progress = progress.coerceIn(0, 100) }
+                tab.progress = progress.coerceIn(0, 100)
+                syncGeckoEngineState(tab)
+                if (currentTab() === tab) runOnUiThread { progressBar.progress = tab.progress }
             }
             override fun onPageStop(session: GeckoSession, success: Boolean) {
                 tab.isLoading = false
+                if (success) tab.progress = 100
+                syncGeckoEngineState(tab)
                 runOnUiThread {
                     if (pendingTranslationTabId == tab.id) {
                         pendingTranslationTabId = null
@@ -3234,12 +3241,19 @@ class MainActivity : ComponentActivity() {
                 }
                 return GeckoResult.fromValue("data:text/html;charset=utf-8,${Uri.encode(html)}")
             }
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) { tab.canGoBack = canGoBack }
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) { tab.canGoForward = canGoForward }
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                tab.canGoBack = canGoBack
+                syncGeckoEngineState(tab)
+            }
+            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                tab.canGoForward = canGoForward
+                syncGeckoEngineState(tab)
+            }
             override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                 if (url.isNullOrBlank()) return
                 if (tab.isErrorPage && url.startsWith("data:")) return
                 tab.lastUrl = url
+                syncGeckoEngineState(tab)
                 tab.mediaSession?.muteAudio(!siteSettingAllowed(BrowserEngineType.GECKOVIEW, url, "sound", true))
                 tab.contentPermissions = perms
                 tab.trackingPermission = perms.firstOrNull { it.permission == GeckoSession.PermissionDelegate.PERMISSION_TRACKING }
@@ -3256,6 +3270,22 @@ class MainActivity : ComponentActivity() {
     }
 
 
+
+    /** Keep the engine-neutral state snapshot in sync with Gecko's delegates. */
+    private fun syncGeckoEngineState(tab: BrowserTab) {
+        val engine = tab.browserEngine as? GeckoViewBrowserEngine ?: return
+        engine.updateState(
+            BrowserEngineState(
+                url = tab.lastUrl,
+                title = tab.title,
+                isLoading = tab.isLoading,
+                progress = tab.progress.coerceIn(0, 100),
+                canGoBack = tab.canGoBack,
+                canGoForward = tab.canGoForward,
+                error = if (tab.isErrorPage) tab.securityStatus.ifBlank { "Page failed to load" } else null
+            )
+        )
+    }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)

@@ -15,9 +15,9 @@ In the Supabase Dashboard for the Nova Browser project:
    <p>If you did not request this code, you can ignore this email.</p>
    ```
    The important variable is `{{ .Token }}`; do not use only `{{ .ConfirmationURL }}`.
-3. Set **Email OTP Expiration** to 600 seconds (10 minutes).
-4. Configure a trusted custom SMTP provider under **Authentication → SMTP Settings** before production use. Keep SMTP credentials in the Supabase Dashboard only; never add them to the Android app, repository, or client build config. Supabase's default mail service may be rate-limited and is not a production delivery guarantee.
-5. Save the template and SMTP settings, then test a new account and an existing account using a real inbox.
+3. The live project is already set to six digits and **600 seconds (10 minutes)**.
+4. A custom SMTP host is already configured on port **465**, with sender name **Nova creator**. Keep SMTP credentials in the Supabase Dashboard only; never add them to the Android app, repository, or client build config.
+5. The live settings were read and verified on 2026-11-28. Still test sending and verifying a code with a real inbox before calling delivery production-accepted.
 
 Nova requests a six-digit code, verifies it with `type=email`, and stores the resulting session encrypted with AES-GCM using a non-exportable Android Keystore key. The refresh token is not stored in plaintext. Sign-out revokes the current session where possible and removes the local encrypted session file.
 
@@ -27,8 +27,8 @@ Nova requests a six-digit code, verifies it with `type=email`, and stores the re
 - Encryption: AES-256-GCM with a fresh 96-bit IV and 128-bit authentication tag; key derivation: PBKDF2-HMAC-SHA256, 310,000 iterations and a per-backup 128-bit salt.
 - The sync passphrase is never uploaded. Optional periodic sync stores it only as AES-GCM ciphertext protected by a non-exportable Android Keystore key.
 - Each account is bound to its Supabase Auth user ID. Database RLS policies restrict reads, inserts, updates and deletes to `auth.uid() = user_id`.
-- New uploads package the encrypted browser snapshot and encrypted password vault into one compare-and-swap row in `nova_sync_state`. This avoids a partial backup if one of two independent table writes conflicts.
-- Older two-table backups remain readable: Nova falls back to `nova_encrypted_vault` only when the sync-state row is still in the legacy format. New writes use the atomic bundle format.
+- New uploads package the encrypted browser snapshot and encrypted password vault into one JSONB bundle in a single `nova_sync_state` row. The row is written with one compare-and-swap revision check, so the browser state and vault cannot be partially updated.
+- The legacy two-table format remains read-compatible: clients continue reading `nova_encrypted_vault` and merge it with any bundled vault data. New clients do not write the legacy vault table. The security-invoker `nova_upload_sync_bundle` RPC updates only `nova_sync_state`; it never migrates or shares browser cookies, storage, or engine profiles.
 - Included: bookmarks, normal browsing history (up to 500 restored entries), saved workspaces, selected browser settings and saved passwords.
 - Excluded: Private Mode and Guest Mode data. Downloads remain device-local.
 - Automatic sync is opt-in and scheduled every six hours when a network is available. Turning it off clears the locally stored auto-sync passphrase but does not delete the cloud backup.
