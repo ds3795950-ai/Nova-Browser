@@ -126,7 +126,12 @@ class NovaScriptAddonStore(context:android.content.Context) {
         try {
             writeIndex(readIndexStrict()+item)
         } catch (error: Exception) {
-            scriptFile.delete()
+            // finishWrite may have published the index before its verification read failed.
+            // Keep the script whenever the committed row exists or publication is uncertain.
+            val indexReferencesScript = runCatching {
+                readIndexStrict().any { it.id == id }
+            }.getOrDefault(true)
+            if (!indexReferencesScript) scriptFile.delete()
             throw error
         }
         return item
