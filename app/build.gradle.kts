@@ -217,7 +217,11 @@ val prepare1VpnAssets by tasks.registering {
                 try { decision = m(details); }
                 catch (e) { return vpnEnabled ? __novaFailClosedProxy : {type: "direct"}; }
                 var enforce = function(result) {
-                  if (vpnEnabled && (!result || result.type === "direct")) return __novaFailClosedProxy;
+                  var chain = Array.isArray(result) ? result : [result];
+                  var containsDirectFallback = !result || chain.some(function(proxy) {
+                    return !proxy || proxy.type === "direct";
+                  });
+                  if (vpnEnabled && containsDirectFallback) return __novaFailClosedProxy;
                   return result || (vpnEnabled ? __novaFailClosedProxy : {type: "direct"});
                 };
                 if (decision && typeof decision.then === "function") {
