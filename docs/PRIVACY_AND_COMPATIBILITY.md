@@ -2,7 +2,7 @@
 
 ## Engine selection and Nova Shield
 
-Normal tabs prefer Cefrium, but engine selection is capability-gated. Nova Shield and saved-password autofill currently require GeckoView, so Normal tabs fall back to GeckoView whenever those protections or credentials are needed. Private and Guest tabs are always GeckoView-only and use ephemeral contexts. The Cefrium profile is persistent and reserved for Normal browsing.
+Normal tabs prefer Cefrium, but engine selection is capability-gated. Nova Shield and automatic saved-password detection/autofill currently require GeckoView, so Normal tabs fall back to GeckoView whenever those protections or automatic credential handling are needed. Cefrium supports manual saved-login filling after user-initiated exact-origin selection and device credential or biometric verification. Private and Guest tabs are always GeckoView-only and use ephemeral contexts. The Cefrium profile is persistent and reserved for Normal browsing.
 
 Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Browsing lists. Standard/Aggressive modes additionally enable cookie purging, private-mode query stripping and email-tracker protection; Aggressive enables strict social-tracker and fingerprinting protection. These controls block known trackers and some ad trackers, but they are **not** a complete EasyList/uBlock-style ad blocker and do not remove every ad or cosmetic page element. Safe Browsing remains active even when Shield is Off.
 

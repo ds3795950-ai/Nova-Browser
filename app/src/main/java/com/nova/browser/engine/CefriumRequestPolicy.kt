@@ -12,12 +12,14 @@ import com.cefrium.CefriumResourceType
  * for profile-level service-worker requests, which may use the profile cookie store.
  */
 class CefriumRequestPolicy(private val preferences: SharedPreferences) {
-    fun imagesBlockedFor(url: String): Boolean =
-        CefriumTrackingProtectionPolicy.shouldBlockImage(
+    fun imagesBlockedFor(url: String): Boolean {
+        val globalDefault = preferences.getBoolean("site_default_cefrium_images", true)
+        return CefriumTrackingProtectionPolicy.shouldBlockImage(
             isImage = true,
             dataSaverEnabled = preferences.getBoolean("nova_data_saver_enabled", false),
-            siteImagesAllowed = siteSettingAllowed(url, "images", true)
+            siteImagesAllowed = siteSettingAllowed(url, "images", globalDefault)
         )
+    }
 
     fun browserCookiesAllowedFor(url: String): Boolean = siteSettingAllowed(url, "cookies", true)
 
