@@ -14,7 +14,7 @@ class NovaDownloadManagerRecoveryTest {
     @Test
     fun processRestartMarksActiveTransfersInterruptedButKeepsUserPausedItemsPaused() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val preferences = context.getSharedPreferences("nova_downloads_cefrium", Context.MODE_PRIVATE)
+        val preferences = context.getSharedPreferences("nova_downloads_cefrium_recovery_test", Context.MODE_PRIVATE)
         val records = JSONArray()
             .put(record("running-transfer", "RUNNING"))
             .put(record("finalizing-transfer", "FINALIZING"))
@@ -23,7 +23,7 @@ class NovaDownloadManagerRecoveryTest {
 
         try {
             // Constructing a new manager simulates process recreation and record restoration.
-            val restored = NovaDownloadManager(context, "cefrium", null).items().associateBy { it.id }
+            val restored = NovaDownloadManager(context, "cefrium_recovery_test", null).items().associateBy { it.id }
 
             assertEquals("INTERRUPTED", restored["running-transfer"]?.state)
             assertEquals("INTERRUPTED", restored["finalizing-transfer"]?.state)
