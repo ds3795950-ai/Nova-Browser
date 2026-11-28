@@ -80,23 +80,29 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import org.mozilla.geckoview.GeckoView
 import com.cefrium.Cefrium
+import com.cefrium.CefriumExperimental
 import com.cefrium.CefriumProfile
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumContextMenu
 import com.nova.browser.engine.BrowserEngine as TabBrowserEngine
 import com.nova.browser.engine.BrowserEngineType
+import com.nova.browser.engine.BrowserEngineCapability
+import com.nova.browser.engine.BrowserEngineCapabilityPolicy
+import com.nova.browser.engine.BrowserEngineCapabilitySets
+import com.nova.browser.engine.BrowserEngineProfilePolicy
 import com.nova.browser.engine.BrowserRendererRecoveryPolicy
 import com.nova.browser.engine.BrowserEngineMode
 import com.nova.browser.engine.BrowserEngineState
 import com.nova.browser.engine.BrowserEngineListener
 import com.nova.browser.engine.BrowserEnginePreferenceStore
 import com.nova.browser.engine.CefriumTabStateCipher
-import com.nova.browser.engine.BrowserEngineProfilePolicy
 import com.nova.browser.engine.BrowserProfileKind
 import com.nova.browser.engine.EngineSelectionRequest
 import com.nova.browser.engine.EngineSelectionPolicy
 import com.nova.browser.engine.CefriumBrowserEngine
 import com.nova.browser.engine.CefriumSitePermissionPolicy
+import com.nova.browser.engine.CefriumRequestPolicy
+import com.nova.browser.engine.CefriumProfileResourceInterceptor
 import com.nova.browser.engine.GeckoViewBrowserEngine
 
 /** Nova browser core. Normal tabs may use Cefrium; Private and Guest remain GeckoView-only. */
@@ -210,6 +216,7 @@ class MainActivity : ComponentActivity() {
     private var launchIntentHandled = false
     private val historyExportRequestCode = 4103
     private val detectedPageLanguages = mutableMapOf<String, String>()
+    private var pendingTranslationTabId: String? = null
     private val bookmarkRequestCode = 4101
     private val uploadRequestCode = 4102
     private val desktopSites get() = prefs.getStringSet("desktop_sites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -252,7 +259,6 @@ class MainActivity : ComponentActivity() {
     private var lastFontScale = 1f
     private var searchEngine = "Google"
     private val prefs by lazy { getSharedPreferences("nova_local", MODE_PRIVATE) }
-
     private data class BookmarkEntry(val url: String, val title: String, val folder: String, val addedAt: Long)
     private data class HistoryEntry(val url: String, val title: String, val visitedAt: Long)
     private data class HomeShortcut(val title: String, val url: String)
@@ -376,7 +382,7 @@ class MainActivity : ComponentActivity() {
             override fun onLoginSave(login: Autocomplete.LoginEntry) {
                 if (currentTab()?.let { it.isPrivate || it.isGuest } == true) return
                 runCatching { passwordVault.save(login) }
-                    .onSuccess { runOnUiThread { switchCefriumTabsForSavedLogins() } }
+                    .onSuccess { runOnUiThread { toast("Login saved securely in Nova Password Manager") } }
                     .onFailure { runOnUiThread { toast("Could not save login securely: ${it?.localizedMessage ?: "Unknown error"}") } }
             }
         })
@@ -1277,6 +1283,9 @@ class MainActivity : ComponentActivity() {
             }
             actions += "Search tabs" to { showTabSearch() }
             actions += getString(R.string.password_manager) to { showPasswordVault() }
+            if (tab?.engineType == BrowserEngineType.CEFRIUM) {
+                actions += "Fill saved login" to { fillSavedLoginForCurrentCefriumTab() }
+            }
             actions += "Site Settings" to { showSiteSettingsHub() }
             actions += getString(R.string.accessibility_settings) to { showAccessibilitySettings() }
             actions += getString(R.string.protected_dns) to { showProtectedDnsSettings() }
@@ -1377,7 +1386,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (splitTabId != null) exitSplitScreen()
-        // GeckoView's internal proxy bridge is runtime-wide rather than per-session. Suspend
+        // GeckoView's proxy extension is runtime-wide rather than per-session. Suspend
         // every persistent Normal engine session before enabling Guest Tor, including
         // Cefrium tabs, so no Normal page continues background activity during Guest.
         // Navigation state is retained and sessions are recreated only after Tor reset.
@@ -1400,7 +1409,7 @@ class MainActivity : ComponentActivity() {
             onReady = {
                 guestTorStartPending = false
                 if (isFinishing || isDestroyed) {
-                    TorGuestRoutingController.stop { /* a recreated Activity resumes only after the proxy bridge confirms Tor is off */ }
+                    TorGuestRoutingController.stop { /* a recreated Activity resumes only after the extension confirms Tor is off */ }
                     return@start
                 }
                 if (!prefs.edit().putBoolean("guest_context_used", true).commit()) {
@@ -1508,6 +1517,7 @@ class MainActivity : ComponentActivity() {
         return session
     }
 
+    @OptIn(CefriumExperimental::class)
     private fun ensureCefriumEngine(tab: BrowserTab, existingBrowser: CefriumBrowser? = null): CefriumBrowserEngine {
         check(!GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime())) {
             "Normal and Private Cefrium engines are paused while Guest Tor owns the shared proxy"
@@ -1520,6 +1530,9 @@ class MainActivity : ComponentActivity() {
         check(!tab.isPrivate && !tab.isGuest) { "Private and Guest tabs must use GeckoView" }
         check(!guestTorReservesGeckoRuntime()) { "Normal Cefrium sessions are paused while Guest Tor owns the browser network context" }
         val profile = CefriumProfile.get(enginePreferences.cefriumProfileName())
+        val requestPolicy = CefriumRequestPolicy(prefs)
+        // Install before creating the tab browser; this profile hook retains only preferences.
+        profile.setResourceInterceptor(CefriumProfileResourceInterceptor(requestPolicy))
         val restoredNavigationState = tab.cefriumNavigationState?.let { CefriumTabStateCipher.decrypt(it, enginePreferences.cefriumProfileName()) }
         val engine = CefriumBrowserEngine(
             activity = this,
@@ -1555,6 +1568,7 @@ class MainActivity : ComponentActivity() {
             autoplayAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "autoplay", false) },
             adBlockingEnabledForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "ads", true) },
             soundAllowedForUrl = { url -> siteSettingAllowed(BrowserEngineType.CEFRIUM, url, "sound", true) },
+            requestPolicy = requestPolicy,
             onPermissionRequest = { origin, permissions, respond ->
                 runOnUiThread {
                     if (tabs.any { it.id == tab.id }) showCefriumPermissionPrompt(tab.id, origin, permissions.toSet(), respond)
@@ -1897,11 +1911,6 @@ class MainActivity : ComponentActivity() {
         val uri = Uri.parse(url)
         val scheme = uri.scheme?.lowercase()
         if (url != HOME_URL && url != "about:blank" && scheme !in setOf("http", "https")) return "This page type is not supported by Cefrium"
-        val host = uri.host ?: return null
-        val hasSavedLogin = runCatching {
-            passwordVault.all().any { Uri.parse(it.origin).host.equals(host, ignoreCase = true) }
-        }.getOrDefault(false)
-        if (hasSavedLogin) return "Saved-password autofill for this site requires GeckoView"
         return null
     }
 
@@ -2202,6 +2211,10 @@ class MainActivity : ComponentActivity() {
 
     private fun switchCurrentTabToGecko(reason: String) {
         val tab = currentTab() ?: return
+        if (pendingGeckoDataClearActive) {
+            toast("Wait for GeckoView data cleanup to finish before switching engines")
+            return
+        }
         if (BrowserVpnNavigationPolicy.shouldBlockNavigation(
                 NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady()
             )) return
@@ -2217,7 +2230,8 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Enforce the requested 1VPN state at the tab/session boundary. If the proxy bridge or its blocking traffic gate is not ready, close live engines so existing
+     * Enforce the requested 1VPN state at the tab/session boundary. If the extension
+     * bridge or its blocking traffic gate is not ready, close live engines so existing
      * documents cannot keep issuing background requests. Restore the active tab only
      * after the protected route is verified, or when the user turns 1VPN off.
      */
@@ -2229,7 +2243,7 @@ class MainActivity : ComponentActivity() {
         }
         if (TorGuestRoutingController.blocksNormalGeckoSessions()) {
             // If the combined 1VPN route drops while Guest owns GeckoView, close Guest's
-            // live renderer too; the proxy gate alone is not enough for existing pages.
+            // live renderer too; the extension gate alone is not enough for existing pages.
             if (NovaBrowserVpnController.isVpnEnabled() && !NovaBrowserVpnController.isVpnRoutingReady()) {
                 tabs.filter { it.isGuest && (it.browserEngine != null || it.session != null) }.forEach { tab ->
                     closeTabRuntime(tab)
@@ -2293,23 +2307,6 @@ class MainActivity : ComponentActivity() {
         currentTab()?.let { if (it in changed) activateTab(it) }
         if (splitTabId != null && changed.any { it.id == splitTabId }) restoreSplitPane()
         toast("Cefrium tabs switched to GeckoView: $reason")
-    }
-
-    private fun switchCefriumTabsForSavedLogins() {
-        val savedHosts = runCatching { passwordVault.all().mapNotNull { Uri.parse(it.origin).host?.lowercase() }.toSet() }.getOrDefault(emptySet())
-        val changed = tabs.filter { tab ->
-            tab.engineType == BrowserEngineType.CEFRIUM && Uri.parse(tab.lastUrl).host?.lowercase() in savedHosts
-        }
-        if (changed.isEmpty()) return
-        changed.forEach { tab ->
-            closeTabRuntime(tab)
-            tab.engineType = BrowserEngineType.GECKOVIEW
-            tab.cefriumNavigationState = null
-            tab.needsReload = tab.lastUrl != HOME_URL
-            tab.engineFallbackReason = "Saved-password autofill requires GeckoView"
-        }
-        currentTab()?.let { if (it in changed) activateTab(it) }
-        if (splitTabId != null && changed.any { it.id == splitTabId }) restoreSplitPane()
     }
 
     private fun cefriumOriginForUrl(url: String): String? {
@@ -3124,10 +3121,20 @@ class MainActivity : ComponentActivity() {
             }
             override fun onPageStop(session: GeckoSession, success: Boolean) {
                 tab.isLoading = false
-                if (currentTab() === tab) runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    if (success && !tab.isErrorPage) captureTabThumbnail(tab)
-                    setPageStatus(if (tab.isErrorPage) tab.securityStatus else if (success) tab.securityStatus.ifBlank { getString(R.string.ready_for_host, Uri.parse(tab.lastUrl).host ?: "Nova") } else getString(R.string.page_failed_to_load), if (tab.isErrorPage || !success) 5 else 4)
+                runOnUiThread {
+                    if (pendingTranslationTabId == tab.id) {
+                        pendingTranslationTabId = null
+                        if (success && !tab.isErrorPage && currentTab() === tab && tab.engineType == BrowserEngineType.GECKOVIEW) {
+                            showTranslationLanguagePicker(tab)
+                        } else if (!success && currentTab() === tab) {
+                            toast("The page could not finish loading for translation")
+                        }
+                    }
+                    if (currentTab() === tab) {
+                        progressBar.visibility = View.GONE
+                        if (success && !tab.isErrorPage) captureTabThumbnail(tab)
+                        setPageStatus(if (tab.isErrorPage) tab.securityStatus else if (success) tab.securityStatus.ifBlank { getString(R.string.ready_for_host, Uri.parse(tab.lastUrl).host ?: "Nova") } else getString(R.string.page_failed_to_load), if (tab.isErrorPage || !success) 5 else 4)
+                    }
                 }
             }
             override fun onSecurityChange(session: GeckoSession, securityInfo: GeckoSession.ProgressDelegate.SecurityInformation) {
@@ -4957,14 +4964,41 @@ class MainActivity : ComponentActivity() {
     private fun translatePage() {
         val tab = currentTab() ?: return
         if (!tab.lastUrl.startsWith("http")) { toast("Open a webpage first"); return }
-        if (tab.engineType == BrowserEngineType.CEFRIUM) { toast("On-device translation currently requires GeckoView; switch this tab's engine first"); return }
+        val route = capabilityRouteForTab(tab, BrowserEngineCapability.TRANSLATION)
+        if (!route.available) { toast(route.reason); return }
+        if (route.requiresSwitch) {
+            AlertDialog.Builder(this).setTitle("Switch to GeckoView for translation?")
+                .setMessage("Nova on-device translation requires GeckoView. Switching reloads this page in GeckoView's separate profile. Cookies, site storage and login sessions are not transferred, and Cefrium's per-site cookie rules will not apply after the switch. GeckoView's own tracking and cookie protections will apply. Continue?")
+                .setPositiveButton("Switch and continue") { _, _ ->
+                    if (currentTab()?.id != tab.id) {
+                        toast("The active tab changed; no engine was switched")
+                        return@setPositiveButton
+                    }
+                    val previousEngineChoice = tab.explicitEngineChoice
+                    tab.explicitEngineChoice = BrowserEngineType.GECKOVIEW
+                    pendingTranslationTabId = tab.id
+                    switchCurrentTabToGecko(route.reason)
+                    if (tab.engineType != BrowserEngineType.GECKOVIEW) {
+                        tab.explicitEngineChoice = previousEngineChoice
+                        pendingTranslationTabId = null
+                        toast("Engine switch is blocked while GeckoView cleanup or protected routing is active")
+                    } else {
+                        toast("Switching to GeckoView; translation options will open after the page reloads")
+                    }
+                }.setNegativeButton("Cancel", null).show()
+            return
+        }
+        showTranslationLanguagePicker(tab)
+    }
+
+    private fun showTranslationLanguagePicker(tab: BrowserTab) {
+        if (currentTab() !== tab || tab.engineType != BrowserEngineType.GECKOVIEW) return
         val languages = arrayOf(
             "English" to "en", "Hindi" to "hi", "Bengali" to "bn",
             "Japanese" to "ja", "Chinese" to "zh", "Spanish" to "es", "French" to "fr",
             "German" to "de", "Arabic" to "ar", "Portuguese" to "pt", "Russian" to "ru"
         )
         var source = detectedPageLanguages[tab.id] ?: "en"
-        val sourceIndex = languages.indexOfFirst { it.second == source }.let { if (it >= 0) it else 0 }
         AlertDialog.Builder(this).setTitle("Translate from · detected ${source}")
             .setItems((listOf("Use detected ($source)") + languages.map { it.first }).toTypedArray()) { _, fromIndex ->
                 if (fromIndex > 0) source = languages[fromIndex - 1].second
@@ -5294,7 +5328,7 @@ class MainActivity : ComponentActivity() {
                     val cachedUrl = aiPageUrl[active.id]
                     val fallback = aiPageText[active.id]?.takeIf { cachedUrl != null && sameDocumentUrl(cachedUrl, expectedUrl) }
                     // GeckoView intentionally exposes no direct page-JavaScript evaluation API.
-                    // The built-in Nova reader bridge asynchronously maintains this tab-bound cache.
+                    // The built-in Nova reader extension asynchronously maintains this tab-bound cache.
                     callback(fallback)
                 } else {
                     callback(null)
@@ -5305,7 +5339,6 @@ class MainActivity : ComponentActivity() {
         ).show()
     }
 
-    /** Remove retired user-installed packages while preserving Nova's private built-in bridges. */
     private fun purgeRetiredUserPackages() {
         runCatching { java.io.File(filesDir, "nova_cefrium_addons").deleteRecursively() }
         val retainedBuiltIns = setOf(
@@ -5343,9 +5376,9 @@ class MainActivity : ComponentActivity() {
 
     private fun attachAiPageReader(session: GeckoSession, tab: BrowserTab) {
         if (tab.isPrivate || tab.isGuest) return
-        val bridge = aiPageReaderBridge ?: return
+        val extension = aiPageReaderBridge ?: return
         session.getWebExtensionController().setMessageDelegate(
-            bridge,
+            extension,
             object : WebExtension.MessageDelegate {
                 override fun onMessage(
                     nativeApp: String,
@@ -5370,6 +5403,80 @@ class MainActivity : ComponentActivity() {
             },
             "nova_ai_reader"
         )
+    }
+
+    private fun capabilityRouteForTab(tab: BrowserTab, required: BrowserEngineCapability) =
+        BrowserEngineCapabilityPolicy.resolve(
+            currentEngine = tab.engineType,
+            profile = BrowserEngineProfilePolicy.kindFor(tab.isPrivate, tab.isGuest),
+            required = required,
+            currentCapabilities = if (tab.engineType == BrowserEngineType.CEFRIUM)
+                BrowserEngineCapabilitySets.CEFRIUM else BrowserEngineCapabilitySets.GECKOVIEW
+        )
+
+    private fun fillSavedLoginForCurrentCefriumTab() {
+        val tab = currentTab() ?: return
+        if (tab.engineType != BrowserEngineType.CEFRIUM || tab.isPrivate || tab.isGuest) {
+            toast("Saved-login filling is available only in Normal Cefrium tabs")
+            return
+        }
+        val expectedOrigin = cefriumOriginForUrl(tab.lastUrl)
+        if (expectedOrigin == null) { toast("Open a secure website first"); return }
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        if (!keyguard.isDeviceSecure) {
+            AlertDialog.Builder(this).setTitle(getString(R.string.vault_device_lock_required))
+                .setMessage(getString(R.string.vault_device_lock_message))
+                .setPositiveButton(android.R.string.ok, null).show()
+            return
+        }
+        val prompt = android.hardware.biometrics.BiometricPrompt.Builder(this)
+            .setTitle(getString(R.string.unlock_password_vault))
+            .setSubtitle(getString(R.string.verify_identity))
+            .setDescription("Verify before filling a saved login into this website")
+            .setDeviceCredentialAllowed(true)
+            .build()
+        prompt.authenticate(android.os.CancellationSignal(), mainExecutor, object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                runOnUiThread {
+                    val active = tabs.firstOrNull { it.id == tab.id }
+                    if (active == null || currentTab()?.id != tab.id || active.engineType != BrowserEngineType.CEFRIUM ||
+                        cefriumOriginForUrl(active.lastUrl) != expectedOrigin) {
+                        toast("The active page changed; no login was filled")
+                        return@runOnUiThread
+                    }
+                    val matches = runCatching { passwordVault.all().filter {
+                        CefriumPasswordAutofillPolicy.isAllowed(active.lastUrl, it.origin, it.formActionOrigin)
+                    } }.getOrElse {
+                        toast("Could not read Nova Password Manager: ${it.localizedMessage ?: "Unknown error"}")
+                        return@runOnUiThread
+                    }
+                    if (matches.isEmpty()) { toast("No saved login matches this exact website"); return@runOnUiThread }
+                    val labels = matches.map { it.username.ifBlank { "Saved login" } }.toTypedArray()
+                    AlertDialog.Builder(this@MainActivity).setTitle("Choose saved login · ${Uri.parse(active.lastUrl).host}")
+                        .setItems(labels) { _, which ->
+                            val stillActive = tabs.firstOrNull { it.id == tab.id }
+                            if (stillActive == null || currentTab()?.id != tab.id ||
+                                cefriumOriginForUrl(stillActive.lastUrl) != expectedOrigin) {
+                                toast("The active page changed; no login was filled")
+                                return@setItems
+                            }
+                            val login = matches[which]
+                            if (!CefriumPasswordAutofillPolicy.isAllowed(stillActive.lastUrl, login.origin, login.formActionOrigin)) {
+                                toast("Saved login origin did not match this page")
+                                return@setItems
+                            }
+                            val engine = stillActive.browserEngine as? CefriumBrowserEngine
+                            if (engine == null) { toast("The browser tab is not ready"); return@setItems }
+                            engine.fillSavedLogin(expectedOrigin, login.username, login.password, login.formActionOrigin) { success, message ->
+                                runOnUiThread { if (!isFinishing && !isDestroyed) toast(message) }
+                            }
+                        }.setNegativeButton(android.R.string.cancel, null).show()
+                }
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                runOnUiThread { toast(getString(R.string.vault_locked)) }
+            }
+        })
     }
 
     private fun showPasswordVault() {
@@ -5479,7 +5586,7 @@ class MainActivity : ComponentActivity() {
                     .origin(url).username(username.text.toString()).password(password.text.toString())
                 entry?.httpRealm?.let { builder.httpRealm(it) }
                 entry?.formActionOrigin?.let { builder.formActionOrigin(it) }
-                runCatching { passwordVault.save(builder.build()); switchCefriumTabsForSavedLogins(); onSaved() }
+                runCatching { passwordVault.save(builder.build()); onSaved() }
                     .onFailure { toast(getString(R.string.vault_save_failed)) }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -5497,7 +5604,7 @@ class MainActivity : ComponentActivity() {
                 val url = if (raw.startsWith("https://") || raw.startsWith("http://")) raw else "https://$raw"
                 if (Uri.parse(url).host.isNullOrBlank() || username.text.isBlank() || password.text.isBlank()) { toast("Enter a valid site, username and password"); return@setPositiveButton }
                 runCatching { passwordVault.save(Autocomplete.LoginEntry.Builder().guid(UUID.randomUUID().toString()).origin("${Uri.parse(url).scheme}://${Uri.parse(url).host}").username(username.text.toString()).password(password.text.toString()).build()) }
-                    .onSuccess { switchCefriumTabsForSavedLogins(); toast("Login saved encrypted on this device") }
+                    .onSuccess { toast("Login saved encrypted on this device") }
                     .onFailure { toast("Could not save login: ${it?.localizedMessage ?: "Unknown error"}") }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -5608,7 +5715,11 @@ class MainActivity : ComponentActivity() {
             "sound" -> if (tab.engineType == BrowserEngineType.CEFRIUM) engine?.setAudioMuted(!enabled) else tab.mediaSession?.muteAudio(!enabled)
         }
         if (setting != "sound") tab.browserEngine?.reload()
-        toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
+        if (setting == "ads" && tab.engineType == BrowserEngineType.CEFRIUM) {
+            toast("Ads and tracker protection turned " + (if (enabled) "on" else "off"))
+        } else {
+            toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
+        }
     }
 
     /**
@@ -5771,6 +5882,20 @@ private fun showQuickSettings() {
             applyProtectedDns(enabled)
             toast(if (enabled) "AdGuard encrypted DNS enabled in Nova" else "Protected DNS disabled")
         }
+        addSwitch(
+            "Data Saver",
+            "Block page images in both engines to reduce data use",
+            checked = prefs.getBoolean("nova_data_saver_enabled", false),
+            enabled = !isRestricted
+        ) { enabled ->
+            prefs.edit().putBoolean("nova_data_saver_enabled", enabled).apply()
+            applyGeckoImageBehavior { applied ->
+                if (!applied) toast("GeckoView image settings could not be updated")
+                tabs.filter { !it.isPrivate && !it.isGuest && it.lastUrl.startsWith("http", true) }
+                    .forEach { it.browserEngine?.reload() }
+            }
+            toast(if (enabled) "Data Saver enabled · page images blocked" else "Data Saver disabled · image preferences restored")
+        }
         addAction("Nova Shield", "Current mode: ${NovaShield.fromStored(prefs.getString("shield_mode", "STANDARD")).name}",
             enabled = !isGuest) { showShieldSettings() }
         addAction("Site permissions", "Review permissions and clear this site's data",
@@ -5836,12 +5961,28 @@ private fun showQuickSettings() {
         })
     }
 
+    private fun cefriumCookieNotice(message: String): TextView {
+        val density = resources.displayMetrics.density
+        return TextView(this).apply {
+            text = message
+            textSize = 13f
+            setPadding(
+                (20 * density).toInt(),
+                (12 * density).toInt(),
+                (20 * density).toInt(),
+                (8 * density).toInt()
+            )
+        }
+    }
+
     private fun showDefaultSiteSettings(engine: BrowserEngineType) {
         val definitions = listOf(Triple("javascript", "JavaScript", true)) +
             if (engine == BrowserEngineType.CEFRIUM) listOf(
                 Triple("popups", "Pop-ups and redirects", false),
                 Triple("autoplay", "Autoplay", false),
-                Triple("ads", "Ads and trackers", true),
+                Triple("ads", "Ads and tracker protection", true),
+                Triple("images", "Images", true),
+                Triple("cookies", "Cookies (browser requests only)", true),
                 Triple("sound", "Sound", true)
             ) else listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -5854,10 +5995,12 @@ private fun showQuickSettings() {
         val cookieDefaults = if (engine == BrowserEngineType.GECKOVIEW) arrayOf("Cookies and site data", "Images") else emptyArray()
         val labels = definitions.map { (key, name, fallback) ->
             val enabled = prefs.getBoolean("site_default_${engine.name.lowercase()}_$key", fallback)
-            "$name · ${if (enabled) "Allowed" else "Blocked"}"
+            if (key == "ads" && engine == BrowserEngineType.CEFRIUM) "$name · ${if (enabled) "On" else "Off"}"
+            else "$name · ${if (enabled) "Allowed" else "Blocked"}"
         }.toTypedArray() + permissionDefaults + cookieDefaults
         val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
+            .apply { if (engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Nova's Cefrium cookie rule applies to browser-owned requests only; service-worker requests may use profile cookies.")) }
             .setItems(labels) { _, which ->
                 if (which == definitions.size) {
                     if (engine == BrowserEngineType.CEFRIUM) showDefaultCefriumPermissions() else showDefaultGeckoPermissions()
@@ -5891,6 +6034,7 @@ private fun showQuickSettings() {
                             }
                         }
                         "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(siteSettingAllowed(engine, active.lastUrl, "ads", true))
+                        "images", "cookies" -> Unit // Browser request interceptor reads preferences; per-origin cookie hooks are not verified for profile-level service-worker requests.
                         "sound" -> {
                             val effective = siteSettingAllowed(engine, active.lastUrl, "sound", true)
                             if (engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!effective) else active.mediaSession?.muteAudio(!effective)
@@ -5901,7 +6045,7 @@ private fun showQuickSettings() {
                 if (engine == BrowserEngineType.GECKOVIEW && key == "autoplay") {
                     resetClosedGeckoAutoplayPermissions()
                 }
-                toast("$engineLabel default · $name ${if (next) "allowed" else "blocked"}")
+                toast(if (key == "ads" && engine == BrowserEngineType.CEFRIUM) "$engineLabel default · Ads and tracker protection ${if (next) "on" else "off"}" else "$engineLabel default · $name ${if (next) "allowed" else "blocked"}")
                 showDefaultSiteSettings(engine)
             }.setNegativeButton(getString(R.string.close), null).show()
     }
@@ -6012,6 +6156,8 @@ private fun showQuickSettings() {
             add("site_sound_${engine}_$encoded")
             if (entry.engine == BrowserEngineType.CEFRIUM) {
                 add("site_ads_${engine}_$encoded")
+                add("site_images_${engine}_$encoded")
+                add("site_cookies_${engine}_$encoded")
                 add(cefriumSitePermissionsKey(entry.origin))
             } else if (entry.engine == BrowserEngineType.GECKOVIEW) {
                 prefs.all.keys.filter {
@@ -6028,7 +6174,9 @@ private fun showQuickSettings() {
             if (entry.engine == BrowserEngineType.CEFRIUM) listOf(
                 Triple("popups", "Pop-ups and redirects", false),
                 Triple("autoplay", "Autoplay", false),
-                Triple("ads", "Ads and trackers", true),
+                Triple("ads", "Ads and tracker protection", true),
+                Triple("images", "Images", true),
+                Triple("cookies", "Cookies (browser requests only)", true),
                 Triple("sound", "Sound", true)
             ) else listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -6053,6 +6201,7 @@ private fun showQuickSettings() {
         val labels = definitions.map(::label).toTypedArray() + permissionAction +
             arrayOf("Reset this site's settings", "Clear this site's data")
         AlertDialog.Builder(this).setTitle("$host · $engineLabel")
+            .apply { if (entry.engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Nova's per-origin cookie rule applies to browser-owned requests only; service-worker requests may use profile cookies.")) }
             .setItems(labels) { _, which ->
                 when {
                     which < definitions.size -> {
@@ -6078,6 +6227,7 @@ private fun showQuickSettings() {
                                         .forEach { runtime.storageController.setPermission(it, if (next) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
                                 }
                                 "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
+                                "images", "cookies" -> Unit // Browser-owned requests only; per-origin cookie callbacks are not relied on for profile-level service-worker requests.
                                 "sound" -> if (entry.engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next) else active.mediaSession?.muteAudio(!next)
                             }
                             active.browserEngine?.reload()
@@ -6167,8 +6317,12 @@ private fun showQuickSettings() {
         val soundLabel = "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted"
         if (tab.engineType == BrowserEngineType.CEFRIUM) {
             val origin = originAtOpen
+            val adsLabel = "Ads and tracker protection · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "On" else "Off"
+            val imagesLabel = "Images · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "images", true)) "Allowed" else "Blocked"
+            val cookiesLabel = "Cookies (browser requests only) · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "cookies", true)) "Allowed" else "Blocked"
             AlertDialog.Builder(this).setTitle("Site controls · $host")
-                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, "Ads and trackers · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "ads", true)) "Allowed" else "Blocked", "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Blocked", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
+                .setView(cefriumCookieNotice("Nova's Cefrium cookie rule applies to browser-owned requests only. Service-worker requests may use profile cookies, so this is not complete cookie isolation."))
+                .setItems(arrayOf(jsLabel, popupLabel, autoplayLabel, adsLabel, imagesLabel, cookiesLabel, "Sound · " + if (siteSettingAllowed(tab.engineType, siteUrlAtOpen, "sound", true)) "Allowed" else "Muted", "Clear this site's cookies and storage", "Manage location, camera, microphone, notifications, clipboard and NFC")) { _, which ->
                     if (!ensureOriginUnchanged()) return@setItems
                     if (which == 0) {
                         toggleJavaScriptForCurrentSite(tab, originAtOpen, engineAtOpen)
@@ -6179,8 +6333,12 @@ private fun showQuickSettings() {
                     } else if (which == 3) {
                         toggleSiteSetting(tab, "ads", true, originAtOpen, engineAtOpen)
                     } else if (which == 4) {
-                        toggleSiteSetting(tab, "sound", true, originAtOpen, engineAtOpen)
+                        toggleSiteSetting(tab, "images", true, originAtOpen, engineAtOpen)
                     } else if (which == 5) {
+                        toggleSiteSetting(tab, "cookies", true, originAtOpen, engineAtOpen)
+                    } else if (which == 6) {
+                        toggleSiteSetting(tab, "sound", true, originAtOpen, engineAtOpen)
+                    } else if (which == 7) {
                         AlertDialog.Builder(this).setMessage("Clear cookies, local storage and service workers for $host? Other sites are not affected.")
                             .setPositiveButton("Clear site data") { _, _ ->
                                 if (!ensureOriginUnchanged()) return@setPositiveButton
@@ -6190,7 +6348,7 @@ private fun showQuickSettings() {
                                     }
                                 }.onFailure { toast("Could not clear Cefrium site data: ${it.localizedMessage ?: "unknown error"}") }
                             }.setNegativeButton("Cancel", null).show()
-                    } else if (which == 6) showCefriumSitePermissionSettings(origin)
+                    } else if (which == 8) showCefriumSitePermissionSettings(origin)
                 }.setNegativeButton("Close", null).show()
             return
         }
@@ -7408,7 +7566,7 @@ private fun showForgotPassword(prefillEmail: String = "") {
         downloadManagers.values.forEach { it.setOnChangedListener(null) }
         guestTorStartPending = false
         if ((!isChangingConfigurations || tabs.none { it.isGuest }) && TorGuestRoutingController.blocksNormalGeckoSessions()) {
-            TorGuestRoutingController.stop { /* a recreated Activity is notified after the proxy bridge acknowledges the reset */ }
+            TorGuestRoutingController.stop { /* a recreated Activity is notified after the extension acknowledges the reset */ }
         }
         NovaBrowserVpnController.clearStatusListener(this)
         cancelPendingRemoteSuggestions()

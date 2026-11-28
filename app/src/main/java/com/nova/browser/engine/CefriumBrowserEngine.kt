@@ -21,10 +21,13 @@ import com.cefrium.CefriumChromeClient
 import com.cefrium.CefriumPermissionRequest
 import com.cefrium.CefriumPermission
 import com.cefrium.CefriumContentSetting
+import com.cefrium.CefriumResourceInterceptor
+import com.cefrium.CefriumResourceType
 import com.cefrium.CefriumNavigationClient
 import com.cefrium.CefriumProfile
 import com.cefrium.CefriumContextMenu
 import com.nova.browser.DownloadProtocol
+import com.nova.browser.CefriumPasswordAutofillPolicy
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -62,6 +65,7 @@ class CefriumBrowserEngine(
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
     private val soundAllowedForUrl: (String) -> Boolean = { true },
+    private val requestPolicy: CefriumRequestPolicy? = null,
     private val onEngineRoutingRequired: (String, String) -> Boolean = { _, _ -> false }
 ) : BrowserEngine {
     override val type = BrowserEngineType.CEFRIUM
@@ -78,7 +82,11 @@ class CefriumBrowserEngine(
         BrowserEngineCapability.CONTEXT_MENU,
         BrowserEngineCapability.HTTP_AUTH,
         BrowserEngineCapability.EXTERNAL_NAVIGATION,
-        BrowserEngineCapability.SITE_DATA
+        BrowserEngineCapability.SITE_DATA,
+        BrowserEngineCapability.PASSWORD_FILL,
+        BrowserEngineCapability.IMAGE_BLOCKING,
+        BrowserEngineCapability.BROWSER_COOKIE_FILTERING,
+        BrowserEngineCapability.TRACKER_BLOCKING,
     )
     private val browser = existingBrowser ?: CefriumBrowser.createWithSurface(activity, profile)
     private val downloadPublisher = CefriumDownloadPublisher(activity.applicationContext, onDownloadCompleted)
@@ -94,6 +102,27 @@ class CefriumBrowserEngine(
 
     override val state: BrowserEngineState
         get() = currentState
+
+    private fun createNovaResourceInterceptor(): CefriumResourceInterceptor =
+        object : CefriumResourceInterceptor {
+            override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
+                val pageUrl = request.topLevelUrl.ifBlank { request.documentUrl }
+                if (request.getType() == CefriumResourceType.IMAGE && requestPolicy?.imagesBlockedFor(pageUrl) == true) return true
+                if (request.getType() == CefriumResourceType.MAIN_FRAME) return false
+                return requestPolicy?.shouldBlockTracker(request.url, pageUrl)
+                    ?: CefriumTrackingProtectionPolicy.shouldBlockRequest(
+                        request.url, pageUrl, adBlockingEnabledForUrl(pageUrl)
+                    )
+            }
+
+            // Cefrium invokes these cookie callbacks for browser-owned requests only.
+            // Profile-level service-worker requests do not invoke them in SDK 0.21.
+            override fun onCanSendCookie(url: String, name: String, value: String): Boolean =
+                requestPolicy?.browserCookiesAllowedFor(url) ?: true
+
+            override fun onCanSaveCookie(url: String, name: String, value: String): Boolean =
+                requestPolicy?.browserCookiesAllowedFor(url) ?: true
+        }
 
     init {
         // Restore the encrypted per-tab navigation stack before any new navigation.
@@ -116,6 +145,9 @@ class CefriumBrowserEngine(
         browser.setPageVisible(false)
         browser.setFocus(false)
         browser.setJavaScriptEnabled(javaScriptEnabledForUrl(browser.getUrl().orEmpty()))
+        // Cefrium 0.21 exposes request interception on the network thread. Keep these
+        // callbacks fast and preference-only: no disk, UI, or network work is allowed here.
+        browser.setResourceInterceptor(createNovaResourceInterceptor())
         browser.setNavigationClient(object : CefriumNavigationClient {
             override fun onBeforeNavigate(browser: CefriumBrowser, request: com.cefrium.CefriumNavigationRequest): Boolean {
                 val url = request.url
@@ -257,7 +289,6 @@ class CefriumBrowserEngine(
         browser.setAudioMuted(muted)
     }
 
-    /** Persist a per-origin website permission decision in this Cefrium profile. */
     fun setSitePermission(origin: String, permission: String, decision: String) {
         if (closed) return
         val cefriumPermission = when (permission.uppercase()) {
@@ -284,6 +315,104 @@ class CefriumBrowserEngine(
     fun evaluateJavaScript(script: String, onResult: (String?) -> Unit) {
         checkOpen()
         browser.evaluateJavaScript(script, ValueCallback { value -> onResult(value) })
+    }
+
+    /**
+     * Fill a saved login only after an explicit user action and only into a same-origin form.
+     * The destination is checked before filling; page scripts can still read fields on their own page.
+     */
+    fun fillSavedLogin(
+        expectedOrigin: String,
+        username: String,
+        password: String,
+        formActionOrigin: String?,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        checkOpen()
+        val normalizedExpectedOrigin = CefriumPasswordAutofillPolicy.normalizedOrigin(expectedOrigin)
+        if (normalizedExpectedOrigin == null || !CefriumPasswordAutofillPolicy.isAllowed(
+                browser.getUrl().orEmpty(), normalizedExpectedOrigin, formActionOrigin
+            )) {
+            onResult(false, "The page or saved form action no longer matches this login")
+            return
+        }
+        val originLiteral = JSONObject.quote(normalizedExpectedOrigin)
+        val usernameLiteral = JSONObject.quote(username)
+        val passwordLiteral = JSONObject.quote(password)
+        val script = """
+            (() => {
+              const expectedOrigin = $originLiteral;
+              if (location.origin !== expectedOrigin) return JSON.stringify({ok:false, reason:'origin-changed'});
+              const hasAutocomplete = (field, token) =>
+                (field.autocomplete || '').toLowerCase().split(/\s+/).includes(token);
+              const findPasswordField = form => {
+                // form.elements includes controls associated via form="id", even outside the form.
+                const fields = Array.from(form.elements).filter(control =>
+                  control.form === form && control instanceof HTMLInputElement &&
+                  control.type === 'password' && !hasAutocomplete(control, 'new-password') &&
+                  !control.disabled && !control.readOnly
+                );
+                return fields.find(field => hasAutocomplete(field, 'current-password')) || fields[0] || null;
+              };
+              const findUsernameField = (form, passwordField) => {
+                const editableFields = Array.from(form.elements).filter(control =>
+                  control.form === form && control instanceof HTMLInputElement &&
+                  ['text', 'email', 'search', 'tel'].includes(control.type) &&
+                  !control.disabled && !control.readOnly
+                );
+                return editableFields.find(field => hasAutocomplete(field, 'username')) ||
+                  editableFields.find(field => field.type === 'email') ||
+                  editableFields.find(field => /user|email/i.test((field.name || '') + ' ' + (field.id || ''))) || null;
+              };
+              const forms = Array.from(document.forms);
+              const form = forms.find(candidate => {
+                try {
+                  const rawAction = candidate.getAttribute('action');
+                  // Missing/empty action submits to this document; non-empty relative actions
+                  // resolve against document.baseURI, including any page-provided <base>.
+                  const action = new URL(rawAction && rawAction.trim() ? rawAction : location.href, document.baseURI);
+                  if (action.origin !== expectedOrigin) return false;
+                  const hasExternalSubmitter = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="image"]'))
+                    .filter(control => control.form === candidate)
+                    .some(control => {
+                      if (control instanceof HTMLButtonElement && control.type !== 'submit') return false;
+                      const override = control.getAttribute('formaction');
+                      if (!override || !override.trim()) return false;
+                      try { return new URL(override, document.baseURI).origin !== expectedOrigin; }
+                      catch (_) { return true; }
+                    });
+                  if (hasExternalSubmitter) return false;
+                  return !!findPasswordField(candidate);
+                } catch (_) { return false; }
+              });
+              if (!form) return JSON.stringify({ok:false, reason:'same-origin-password-form-not-found'});
+              const passwordField = findPasswordField(form);
+              if (!passwordField) return JSON.stringify({ok:false, reason:'password-field-unavailable'});
+              const usernameField = findUsernameField(form, passwordField);
+              const setValue = (field, value) => {
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(field, value); else field.value = value;
+                field.dispatchEvent(new Event('input', {bubbles:true}));
+                field.dispatchEvent(new Event('change', {bubbles:true}));
+              };
+              if (usernameField && !usernameField.disabled && !usernameField.readOnly) setValue(usernameField, $usernameLiteral);
+              setValue(passwordField, $passwordLiteral);
+              return JSON.stringify({ok:true});
+            })()
+        """.trimIndent()
+        browser.evaluateJavaScript(script, ValueCallback { raw ->
+            val result = runCatching {
+                val decoded = JSONTokener(raw ?: "{}").nextValue()
+                if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+            }.getOrNull()
+            val success = result?.optBoolean("ok") == true
+            val reason = result?.optString("reason").orEmpty()
+            onResult(success, if (success) "Saved login filled" else when (reason) {
+                "origin-changed" -> "The page changed origin; login was not filled"
+                "password-field-unavailable" -> "The password field is not available"
+                else -> "No same-origin password form was found"
+            })
+        })
     }
 
     /** Loads HTML with an explicit origin for deterministic local compatibility tests and Reader Mode. */
