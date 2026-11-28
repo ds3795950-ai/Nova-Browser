@@ -2,7 +2,7 @@
 
 **Branch:** `feature/phase-1-dual-engine-foundation`  
 **Baseline audited:** `fb717c1cd48da2683ad376d40e5b0bfbbe686d22` (`main`, 2026-11-19)  
-**Status (2026-11-28):** dual-engine source integration exists on `main`; the Guest Tor/VPN hardening work is still on the open PR #25 branch and is not merged. CI, lint and emulator smoke checks must be checked against the latest PR head before release. Physical-device acceptance and VPN/Tor leak testing remain open.
+**Status (2026-11-28):** dual-engine integration and Guest Tor/VPN routing hardening are merged into `main` by PR #25 (merge commit `390a7c495a75f6deabd5fc079e3964cb6168be22`). PR #27 contains a separate low-memory/session-diagnostics change; its JVM/build/lint and CodeRabbit checks passed, while its Android 16 instrumentation job exposed two `Long`/`Int` test-source errors. Those are fixed in commit `c62c281231d5f559c4f26ba30a2ae6211072080a`; rerun CI is pending. Physical-device acceptance and VPN/Tor leak testing remain open.
 
 ## Repository findings
 
@@ -65,8 +65,8 @@ References: [Arti Android integration](https://arti.torproject.org/integrating-a
 
 ## Acceptance criteria and current status
 
-- [ ] Verify unit tests and Android debug build for the latest PR #25 head before merge; the current hardening changes are not yet on `main`.
-- [ ] Verify Android lint and Android emulator smoke for the same PR #25 head before merge.
+- [x] PR #25 engine-routing and Guest Tor hardening merged into `main`; main-branch Android CI and lint passed on merge commit `390a7c4`.
+- [ ] Complete Android 16 emulator instrumentation on the latest main/PR #27 head; the PR #27 test-source type errors are fixed in `c62c281` and a fresh run is pending.
 - [x] MainActivity has production Cefrium tab creation, engine preference selection, profile isolation, and GeckoView fallback paths.
 - [x] Unit tests cover engine selection, feature capability routing, profile isolation and renderer recovery policy.
 - [ ] Run the full Cefrium navigation/lifecycle suite on physical ARM64 Android, including back, forward, reload, pause/resume and renderer recovery.
