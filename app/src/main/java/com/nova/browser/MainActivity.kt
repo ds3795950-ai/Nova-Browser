@@ -5272,7 +5272,7 @@ class MainActivity : ComponentActivity() {
 
     private fun pwaMetadataNetworkAllowed(tab: BrowserTab, expectedUrl: String): Boolean {
         val currentPageUrl = if (tab.lastUrl.startsWith("about:reader")) tab.readerOriginalUrl ?: tab.lastUrl else tab.lastUrl
-        return !isFinishing && !isDestroyed && tabs.any { it.id == tab.id } &&
+        return !isFinishing && !isDestroyed &&
             currentPageUrl == expectedUrl && tab.engineType == BrowserEngineType.CEFRIUM &&
             tab.browserEngine is CefriumBrowserEngine && !tab.isPrivate && !tab.isGuest &&
             !guestTorReservesGeckoRuntime() && !NovaBrowserVpnController.isVpnEnabled()
