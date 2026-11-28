@@ -41,6 +41,7 @@ import android.content.res.Configuration
 import android.view.ViewGroup
 import android.graphics.Typeface
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.ColorDrawable
@@ -4836,7 +4837,6 @@ class MainActivity : ComponentActivity() {
         }
         val manager = downloadsFor(tab)
         downloadsItems = manager.items()
-        if (downloadsItems.isEmpty()) { downloadPrompt(); return }
         val listView = ListView(this)
         val emptyView = TextView(this).apply { text = getString(R.string.no_downloads); gravity = Gravity.CENTER; setPadding(dp(16), dp(24), dp(16), dp(24)) }
         val adapter = object : android.widget.BaseAdapter() {
@@ -4878,6 +4878,10 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
             setPadding(dp(8), dp(4), dp(8), dp(4))
+            addView(Button(this@MainActivity).apply {
+                text = "Open Downloads"
+                setOnClickListener { openAndroidDownloads() }
+            })
             addView(Button(this@MainActivity).apply {
                 text = "Clear completed"
                 setOnClickListener { clearCompletedDownloads(manager) }
@@ -5227,18 +5231,123 @@ class MainActivity : ComponentActivity() {
             toast("This launcher does not support pinned shortcuts")
             return
         }
-        val title = tab.title.trim().ifBlank { host }.take(40)
-        val shortcut = ShortcutInfoCompat.Builder(this, "nova-site-${Uri.encode(host).take(32)}-${url.hashCode()}")
+
+        // PWA manifest metadata is an enhancement only: unsupported engines or pages without
+        // a valid same-origin manifest still get a regular Nova website shortcut.
+        val fallbackTitle = tab.title.trim().ifBlank { host }.take(40)
+        val engine = tab.browserEngine as? CefriumBrowserEngine
+        if (tab.engineType == BrowserEngineType.CEFRIUM && engine != null) {
+            runCatching { engine.evaluateJavaScript(PWA_SHORTCUT_METADATA_SCRIPT) { raw ->
+                runOnUiThread {
+                    val metadata = parsePwaShortcutMetadata(raw)
+                    val launchUri = metadata.optString("startUrl").takeIf { it.isNotBlank() }?.let {
+                        runCatching { Uri.parse(it) }.getOrNull()
+                    }?.takeIf { it.scheme in setOf("http", "https") && it.host.equals(host, true) } ?: uri
+                    val title = metadata.optString("shortName").ifBlank {
+                        metadata.optString("name").ifBlank { fallbackTitle }
+                    }.take(40)
+                    val icon = metadata.optString("iconDataUrl").takeIf { it.startsWith("data:image/") }
+                        ?.substringAfter("base64,", "")
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { encoded ->
+                            runCatching {
+                                val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                                if (bytes.size > 512 * 1024) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            }.getOrNull()
+                        }
+                    pinWebsiteShortcut(launchUri, host, url, title, icon)
+                }
+            } }.onFailure { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
+        } else {
+            pinWebsiteShortcut(uri, host, url, fallbackTitle, null)
+        }
+    }
+
+    private fun parsePwaShortcutMetadata(raw: String?): JSONObject {
+        if (raw.isNullOrBlank()) return JSONObject()
+        return runCatching {
+            val decoded = org.json.JSONTokener(raw).nextValue()
+            if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+        }.getOrDefault(JSONObject())
+    }
+
+    private fun pinWebsiteShortcut(
+        launchUri: Uri,
+        host: String,
+        originalUrl: String,
+        title: String,
+        icon: Bitmap?
+    ) {
+        val shortcut = ShortcutInfoCompat.Builder(this, "nova-site-${Uri.encode(host).take(32)}-${originalUrl.hashCode()}")
             .setShortLabel(title.take(25))
             .setLongLabel(title)
-            .setIcon(IconCompat.createWithResource(this, R.mipmap.ic_nova_launcher))
-            .setIntent(Intent(Intent.ACTION_VIEW, uri, this, MainActivity::class.java).apply {
+            .setIcon(if (icon != null) IconCompat.createWithBitmap(icon) else IconCompat.createWithResource(this, R.mipmap.ic_nova_launcher))
+            .setIntent(Intent(Intent.ACTION_VIEW, launchUri, this, MainActivity::class.java).apply {
                 addCategory(Intent.CATEGORY_BROWSABLE)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             })
             .build()
         val requested = runCatching { ShortcutManagerCompat.requestPinShortcut(this, shortcut, null) }.getOrDefault(false)
         toast(if (requested) "Home-screen shortcut request sent" else "Could not create the home-screen shortcut")
+    }
+
+    private fun openAndroidDownloads() {
+        val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
+        runCatching {
+            if (intent.resolveActivity(packageManager) != null) {
+                startActivity(intent)
+            } else {
+                toast("No Android Downloads app is available on this device")
+            }
+        }.onFailure { toast("Could not open Android Downloads: ${it.localizedMessage ?: "Unknown error"}") }
+    }
+
+    private companion object {
+        const val PWA_SHORTCUT_METADATA_SCRIPT = """
+            (async () => {
+              try {
+                const link = document.querySelector('link[rel~="manifest"]');
+                if (!link) return JSON.stringify({});
+                const manifestUrl = new URL(link.href, location.href);
+                if (manifestUrl.origin !== location.origin) return JSON.stringify({});
+                const response = await fetch(manifestUrl.href, { credentials: 'same-origin' });
+                if (!response.ok) return JSON.stringify({});
+                const manifest = await response.json();
+                const safeUrl = (value) => {
+                  try {
+                    const candidate = new URL(value, manifestUrl.href);
+                    return candidate.origin === location.origin ? candidate.href : '';
+                  } catch (_) { return ''; }
+                };
+                let startUrl = safeUrl(manifest.start_url || location.href);
+                const scope = safeUrl(manifest.scope || new URL('.', manifestUrl.href).href);
+                if (scope && !startUrl.startsWith(scope)) startUrl = location.href;
+                let iconDataUrl = '';
+                const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
+                const icon = icons.find(item => item && (String(item.sizes || '').includes('192') || item.sizes === 'any')) || icons[0];
+                const iconUrl = icon && safeUrl(icon.src);
+                if (iconUrl) {
+                  const iconResponse = await fetch(iconUrl, { credentials: 'same-origin' });
+                  if (iconResponse.ok) {
+                    const blob = await iconResponse.blob();
+                    if (blob.size > 0 && blob.size <= 524288 && /^image\//i.test(blob.type)) {
+                      const bytes = new Uint8Array(await blob.arrayBuffer());
+                      let binary = '';
+                      for (let i = 0; i < bytes.length; i += 0x8000)
+                        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+                      iconDataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
+                    }
+                  }
+                }
+                return JSON.stringify({
+                  name: String(manifest.name || '').slice(0, 80),
+                  shortName: String(manifest.short_name || '').slice(0, 40),
+                  startUrl,
+                  iconDataUrl
+                });
+              } catch (_) { return JSON.stringify({}); }
+            })()
+        """
     }
 
     private fun printCurrentPage() {
