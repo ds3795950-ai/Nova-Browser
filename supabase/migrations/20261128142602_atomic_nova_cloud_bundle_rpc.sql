@@ -1,5 +1,5 @@
--- Atomically validate both sync sources and update the bundled snapshot plus
--- compatibility vault row. SECURITY INVOKER preserves the caller's RLS policies.
+-- Atomically validate and update both original encrypted sync rows.
+-- SECURITY INVOKER preserves the caller's RLS policies.
 create or replace function public.nova_upload_sync_bundle(
     p_snapshot jsonb,
     p_legacy_vault jsonb,

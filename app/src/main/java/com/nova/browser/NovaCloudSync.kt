@@ -282,11 +282,12 @@ class NovaCloudSync(context: Context) {
         val userId = session.getString("user_id")
         check(userId == expectedUserId) { "Nova Cloud account changed during sync" }
         val token = session.getString("access_token")
-        // The RPC validates both source revisions and updates the bundled snapshot plus
-        // the legacy vault row in one database transaction. This preserves old-client
-        // compatibility without allowing a concurrent legacy write to be silently omitted.
+        // The RPC validates both source revisions and updates the two original encrypted
+        // rows in one database transaction. Keeping the snapshot shape unchanged preserves
+        // rollback compatibility while detecting concurrent writes to either source.
         val body = JSONObject()
-            .put("p_snapshot", NovaCloudBundle.pack(snapshot, vault))
+            // Keep the original encrypted snapshot shape so older Nova clients can read it.
+            .put("p_snapshot", snapshot)
             .put("p_legacy_vault", vault)
             .put("p_expected_snapshot_updated_at", snapshotVersion ?: JSONObject.NULL)
             .put("p_expected_legacy_vault_updated_at", vaultVersion ?: JSONObject.NULL)
