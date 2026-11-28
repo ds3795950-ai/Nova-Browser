@@ -52,9 +52,9 @@ internal class OwnerScopedListenerRegistry {
 
 /** Controls the bundled 1VPN browser proxy. It never creates an Android VpnService. */
 object NovaBrowserVpnController {
-    const val EXTENSION_ID = "1vpn-internal@nova.browser"
+    const val BRIDGE_ID = "1vpn-internal@nova.browser"
     private const val NATIVE_APP = "com.nova.browser.vpn"
-    private const val EXTENSION_URI = "resource://android/assets/nova_1vpn/"
+    private const val BRIDGE_ASSET_URI = "resource://android/assets/nova_1vpn/"
 
     private var runtime: GeckoRuntime? = null
     private var preferences: SharedPreferences? = null
@@ -77,21 +77,21 @@ object NovaBrowserVpnController {
             notifyStatusListeners()
         }
         // Restore the persisted toggle before any Cefrium profile is opened. Profiles
-        // registered later will receive a fail-closed proxy until the extension handshake.
+        // registered later will receive a fail-closed proxy until the proxy bridge handshake.
         CefriumVpnController.setEnabled(preferences?.getBoolean("nova_vpn_enabled", false) == true)
 
         geckoRuntime.getWebExtensionController()
-            .ensureBuiltIn(EXTENSION_URI, EXTENSION_ID)
-            .accept({ extension ->
+            .ensureBuiltIn(BRIDGE_ASSET_URI, BRIDGE_ID)
+            .accept({ bridge ->
                 Handler(Looper.getMainLooper()).post {
-                    if (extension == null) {
+                    if (bridge == null) {
                         preferences?.edit()
                             ?.putBoolean("nova_vpn_proxy_supported", false)
                             ?.putString("nova_vpn_status", "1VPN built-in component could not be installed")
                             ?.apply()
                         notifyStatusListeners()
                     } else {
-                        extension.setMessageDelegate(object : WebExtension.MessageDelegate {
+                        bridge.setMessageDelegate(object : WebExtension.MessageDelegate {
                             override fun onConnect(port: WebExtension.Port) {
                                 nativePort = port
                                 // A replacement bridge must not inherit the prior port's ready state.
@@ -274,7 +274,7 @@ object NovaBrowserVpnController {
         nativePort != null && preferences?.getBoolean("nova_tor_guest_enabled", false) == true &&
             preferences?.getBoolean("nova_tor_guest_proxy_ready", false) == true
 
-    /** True only after the latest matching disable request is acknowledged by the extension. */
+    /** True only after the latest matching disable request is acknowledged by the proxy bridge. */
     fun isTorGuestRoutingDisabledConfirmed(): Boolean {
         val prefs = preferences ?: return false
         val requestId = prefs.getLong("nova_tor_guest_disable_request_id", 0L)

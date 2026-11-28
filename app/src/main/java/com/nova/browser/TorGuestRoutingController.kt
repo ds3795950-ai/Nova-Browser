@@ -14,7 +14,7 @@ import org.torproject.jni.TorService
 
 /**
  * Owns the embedded Tor daemon for Guest Mode. Guest navigation is not released until Tor has
- * built a circuit and the GeckoView proxy extension confirms SOCKS5, remote DNS and WebRTC
+ * built a circuit and the GeckoView internal proxy bridge confirms SOCKS5, remote DNS and WebRTC
  * protection. Any loss of that chain closes Guest Mode instead of falling back to DIRECT.
  */
 internal object TorGuestRoutingController {
@@ -135,7 +135,7 @@ internal object TorGuestRoutingController {
     }
 
     /**
-     * Stop Tor and wait until the WebExtension acknowledges that its runtime-wide proxy
+     * Stop Tor and wait until the proxy bridge acknowledges that its runtime-wide proxy
      * has left Guest mode. Callers that will resume Normal Gecko sessions must supply
      * [onStopped]; lifecycle teardown may use the immediate no-callback path.
      */
@@ -156,7 +156,7 @@ internal object TorGuestRoutingController {
         }
         this.onStopped = onStopped
         state = State.STOPPING
-        lastError = "Waiting for the proxy extension to confirm Guest Tor is disabled"
+        lastError = "Waiting for the proxy bridge to confirm Guest Tor is disabled"
         // Keep the status listener alive while requesting the reset. Even Activity teardown
         // without a completion callback must not release the shared Gecko runtime early.
         stopInternal(disableProxy = false, clearStatusListener = false)

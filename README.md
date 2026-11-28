@@ -7,8 +7,8 @@ Nova is an Android/Kotlin browser built around an engine-neutral tab manager, wi
 - **Normal tabs:** Cefrium is the preferred engine for eligible sites. Nova falls back to GeckoView when Nova Shield is active, 1VPN is enabled, saved-password autofill is required, a page type is unsupported, or Cefrium cannot initialize.
 - **Private and Guest tabs:** GeckoView-only, with separate ephemeral contexts.
 - **Engine isolation:** GeckoView and Cefrium use independent profiles. Nova does not copy cookies, cache, local storage, passwords, permissions or session state between engines.
-- **Guest Mode:** Uses the embedded Tor Android service and a GeckoView SOCKS5/WebExtension bridge with remote DNS and WebRTC protection. GeckoView's proxy is runtime-wide, not a supported per-tab proxy API; Nova blocks conflicting GeckoView sessions while Guest routing starts, runs and shuts down. This is not a claim of Tor Browser equivalence or formally audited per-tab isolation.
-- **1VPN:** The bundled 1VPN extension provides a browser proxy, not Android VpnService or a full-device VPN. It currently protects GeckoView traffic; Nova falls back from Cefrium while 1VPN is enabled.
+- **Guest Mode:** Uses the embedded Tor Android service and a GeckoView internal SOCKS5 proxy bridge with remote DNS and WebRTC protection. GeckoView's proxy is runtime-wide, not a supported per-tab proxy API; Nova blocks conflicting GeckoView sessions while Guest routing starts, runs and shuts down. This is not a claim of Tor Browser equivalence or formally audited per-tab isolation.
+- **1VPN:** The bundled 1VPN proxy component provides a browser proxy, not Android VpnService or a full-device VPN. It currently protects GeckoView traffic; Nova falls back from Cefrium while 1VPN is enabled.
 - **Privacy and sync:** Nova Shield, protected DNS, encrypted cloud sync and authentication are implemented in app services. Private and Guest data are excluded from normal sync/history.
 
 ## Build

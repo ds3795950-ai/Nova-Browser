@@ -34,7 +34,6 @@ class GeckoViewBrowserEngine(
         BrowserEngineCapability.TRANSLATION,
         BrowserEngineCapability.PASSWORD_AUTOFILL,
         BrowserEngineCapability.NOVA_SHIELD,
-        BrowserEngineCapability.EXTENSIONS
     )
     private var attachedView: GeckoView = initialView
     private var isAttached = false

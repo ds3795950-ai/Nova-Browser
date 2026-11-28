@@ -49,7 +49,6 @@ These are the previously agreed product choices. Do not replace them with generi
 - Define encrypted sync and recovery before syncing sensitive data. Password sync must not be enabled by default.
 
 ## 10. Additional browser capabilities
-- Extensions.
 - Split-screen.
 - Bookmark folders and import/export.
 - Workspaces.
@@ -57,6 +56,7 @@ These are the previously agreed product choices. Do not replace them with generi
 - Tab sleeping.
 - Phishing/malware protection.
 - Also retain the previously discussed desktop-site mode with per-site preferences, downloads, file uploads, reader mode, translation, password manager/autofill and session restore as roadmap items.
+- User-installable extensions, scripts and an add-on manager are intentionally outside Nova’s product scope.
 
 ## Engine strategy (latest explicit user decision)
 - Normal Mode uses Cefrium as its primary engine, with GeckoView fallback only where a required feature or site-compatibility limitation makes Cefrium unsuitable.

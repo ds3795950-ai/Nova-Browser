@@ -17,7 +17,7 @@ Last reconciled: 2026-11-28. This document describes the current default `main` 
 - Eligible Normal tabs prefer Cefrium; GeckoView remains the fallback when a required capability is unsupported or a protected route requires it.
 - Private and Guest tabs are GeckoView-only and use separate ephemeral contexts. Cefrium and GeckoView persistent profiles remain isolated; website data is not migrated across engines.
 - The shared per-tab engine interface and adapters are present. Some app-level GeckoView delegates and feature routing still live in `MainActivity`; a full extraction is a maintainability task, not a missing user-facing browser feature.
-- Nova Shield, saved-password autofill, GeckoView WebExtensions and translation remain GeckoView-dependent. Cefrium capability routing must continue to fall back rather than silently dropping protections. Do not claim Chromium extension-store compatibility.
+- Nova Shield, saved-password autofill and translation remain GeckoView-dependent. Cefrium capability routing must continue to fall back rather than silently dropping protections.
 - Cefrium navigation, lifecycle, permissions, downloads, Reader Mode, desktop mode and protected DNS have implementation paths. SDK parity is not complete for every GeckoView feature.
 - Renderer-recovery policy and engine/profile isolation regression tests exist. Real Android lifecycle, process-death and renderer-crash behavior still require device/emulator acceptance.
 
@@ -26,7 +26,7 @@ Last reconciled: 2026-11-28. This document describes the current default `main` 
 **Implemented in source; security acceptance remains open.**
 
 - Private and Guest state is excluded from normal restore, history and cloud sync. Guest context cleanup and session isolation are enforced by policy and runtime barriers.
-- Guest Mode starts the embedded Tor Android service and uses the GeckoView SOCKS5/WebExtension bridge with remote DNS and WebRTC protection. Startup and shutdown are gated; a lost route is intended to fail closed.
+- Guest Mode starts the embedded Tor Android service and uses the GeckoView internal SOCKS5 proxy bridge with remote DNS and WebRTC protection. Startup and shutdown are gated; a lost route is intended to fail closed.
 - GeckoView's proxy setting is runtime-wide, not per-session. Nova suspends persistent Normal sessions, refuses Guest startup while Private tabs exist, and blocks non-Guest session use while Guest Tor owns the runtime. This is a mitigation, not proof of formally audited Guest-only isolation or Tor Browser equivalence.
 - 1VPN is a browser proxy, not Android `VpnService` or a full-device VPN. Protected DNS is browser-only. Neither should be described as system-wide protection.
 - Physical-device tests are still required for IP/DNS/WebRTC/IPv6/UDP leakage, proxy loss, Tor bootstrap and shutdown, concurrent profiles, and recovery after process death. BrowserStack UI checks alone cannot establish network privacy.

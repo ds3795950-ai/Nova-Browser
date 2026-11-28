@@ -58,7 +58,6 @@ class CefriumBrowserEngine(
     desktopMode: Boolean = false,
     existingBrowser: CefriumBrowser? = null,
     initialNavigationState: ByteArray? = null,
-    initialNovaAddons: List<NovaScriptAddon> = emptyList(),
     private val javaScriptEnabledForUrl: (String) -> Boolean = { true },
     private val autoplayAllowedForUrl: (String) -> Boolean = { false },
     private val adBlockingEnabledForUrl: (String) -> Boolean = { true },
@@ -90,7 +89,6 @@ class CefriumBrowserEngine(
         progress = browser.getProgress()
     )
     @Volatile private var closed = false
-    private val novaAddonScriptHandlers = mutableMapOf<String, CefriumBrowser.ScriptHandler>()
     var didRestoreInitialNavigationState: Boolean = false
         private set
 
@@ -176,7 +174,6 @@ class CefriumBrowserEngine(
             }
         })
         browser.addDocumentStartJavaScript(DESKTOP_VIEWPORT_SCRIPT, setOf("*"))
-        setNovaScriptAddons(initialNovaAddons)
         if (desktopMode) browser.setUserAgentOverride(DESKTOP_USER_AGENT)
         browser.setDownloadClient(downloadPublisher.client)
         browser.setChromeClient(object : CefriumChromeClient {
@@ -260,42 +257,6 @@ class CefriumBrowserEngine(
         browser.setAudioMuted(muted)
     }
 
-    fun setNovaScriptAddons(addons: List<NovaScriptAddon>): List<String> {
-        checkOpen()
-        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
-        novaAddonScriptHandlers.clear()
-        val failures = mutableListOf<String>()
-        addons.filter { it.enabled }.forEach { addon ->
-            if (addon.allowedOriginRules.isEmpty()) {
-                failures += addon.id
-                android.util.Log.w("NovaBrowser", "Skipping add-on ${addon.id}: empty origin allowlist")
-                return@forEach
-            }
-            runCatching {
-                val idLiteral = org.json.JSONObject.quote(addon.id)
-                val nameLiteral = org.json.JSONObject.quote(addon.name)
-                val wrapped = """
-                    (() => {
-                      try {
-                        globalThis.__novaAddonLoaded = globalThis.__novaAddonLoaded || Object.create(null);
-                        if (globalThis.__novaAddonLoaded[$idLiteral]) return;
-                        globalThis.__novaAddonLoaded[$idLiteral] = true;
-                        ${addon.script}
-                      } catch (error) {
-                        console.error("[Nova Add-on: " + $nameLiteral + "]", error);
-                      }
-                    })();
-                """.trimIndent()
-                browser.addDocumentStartJavaScript(wrapped, addon.allowedOriginRules)
-            }.onSuccess { handler ->
-                novaAddonScriptHandlers[addon.id] = handler
-            }.onFailure { error ->
-                failures += addon.id
-                android.util.Log.w("NovaBrowser", "Could not register Nova add-on ${addon.id}", error)
-            }
-        }
-        return failures.distinct()
-    }
     /** Persist a per-origin website permission decision in this Cefrium profile. */
     fun setSitePermission(origin: String, permission: String, decision: String) {
         if (closed) return
@@ -459,8 +420,6 @@ class CefriumBrowserEngine(
     override fun close() {
         if (closed) return
         detach()
-        novaAddonScriptHandlers.values.forEach { runCatching { it.remove() } }
-        novaAddonScriptHandlers.clear()
         closed = true
         browser.close()
     }
