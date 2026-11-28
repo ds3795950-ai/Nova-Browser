@@ -731,7 +731,7 @@ class MainActivity : ComponentActivity() {
         topChrome = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(4))
-            setBackgroundColor(getColor(R.color.nova_surface))
+            NovaBrowserChromeStyle.applyChromeSurface(this@MainActivity, this)
         }
         val addressRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -741,15 +741,6 @@ class MainActivity : ComponentActivity() {
             hint = getString(R.string.address_bar_hint)
             contentDescription = getString(R.string.address_bar_accessibility)
             isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            textSize = 15f
-            setTextColor(getColor(R.color.nova_text_primary))
-            setHintTextColor(getColor(R.color.nova_text_secondary))
-            setSelectAllOnFocus(true)
-            imeOptions = EditorInfo.IME_ACTION_GO
-            setBackgroundColor(getColor(R.color.nova_surface_elevated))
-            minimumHeight = dp(48)
-            setPadding(dp(12), 0, dp(12), 0)
             setOnEditorActionListener { _, actionId, event ->
                 val enterKey = event?.let {
                     it.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
@@ -762,6 +753,7 @@ class MainActivity : ComponentActivity() {
                     true
                 } else false
             }
+            NovaBrowserChromeStyle.applyAddressField(this@MainActivity, this)
         }
         addressSuggestionsAdapter = ArrayAdapter<BrowserSuggestion>(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
         // Suggestions are already ranked by Nova; disable Android's second, label-only filter.
@@ -788,14 +780,14 @@ class MainActivity : ComponentActivity() {
                 addressBar.dismissDropDown()
             }
         }
-        addressRow.minimumHeight = dp(48)
-        addressBar.minimumHeight = dp(48)
+        addressRow.minimumHeight = dp(NovaBrowserChromeStyle.sharedMetrics.addressHeightDp)
         addressRow.addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val clearAddress = actionButton(getString(R.string.clear_address_button)) { addressBar.text?.clear(); addressBar.requestFocus() }.apply {
             contentDescription = getString(R.string.clear_address)
-            minWidth = dp(48); minimumWidth = dp(48)
+            minWidth = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
+            minimumWidth = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
         }
-        addressRow.addView(clearAddress, LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT))
+        addressRow.addView(clearAddress, LinearLayout.LayoutParams(dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp), ViewGroup.LayoutParams.WRAP_CONTENT))
         val attachSearchButton = actionButton(getString(R.string.attach_search_button)) {
             val query = addressBar.text?.toString().orEmpty()
             val share = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, query) }
@@ -808,9 +800,9 @@ class MainActivity : ComponentActivity() {
         searchEngineButton.minimumWidth = dp(64)
         addressRow.addView(searchEngineButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val goButton = actionButton(getString(R.string.go)) { submitAddressBar() }
-        goButton.minWidth = dp(48)
-        goButton.minimumWidth = dp(48)
-        addressRow.addView(goButton, LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT))
+        goButton.minWidth = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
+        goButton.minimumWidth = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
+        addressRow.addView(goButton, LinearLayout.LayoutParams(dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp), ViewGroup.LayoutParams.WRAP_CONTENT))
         topChrome.addView(addressRow)
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
@@ -822,36 +814,42 @@ class MainActivity : ComponentActivity() {
 
         tabLabel = TextView(this).apply {
             text = getString(R.string.app_name)
-            textSize = 12f
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            setTextColor(getColor(R.color.nova_text_secondary))
-            setPadding(dp(4), dp(5), dp(4), dp(5))
+            NovaBrowserChromeStyle.applyMetaLabel(
+                this@MainActivity, this, NovaBrowserChromeStyle.sharedMetrics.tabLabelTextSizeSp, 5, 5
+            )
         }
         pageStatus = TextView(this).apply {
             text = getString(R.string.ready)
             contentDescription = getString(R.string.nova_session_status)
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            textSize = 11f
-            setTextColor(getColor(R.color.nova_text_secondary))
-            setPadding(dp(4), 0, dp(4), dp(4))
+            NovaBrowserChromeStyle.applyMetaLabel(
+                this@MainActivity, this, NovaBrowserChromeStyle.sharedMetrics.statusTextSizeSp, 0, 4
+            )
         }
         topChrome.addView(tabLabel)
         topChrome.addView(pageStatus)
 
-        browserView = GeckoView(this)
-        secondaryBrowserView = GeckoView(this)
+        browserView = GeckoView(this).also { NovaBrowserChromeStyle.applyEngineSurface(this, it) }
+        secondaryBrowserView = GeckoView(this).also { NovaBrowserChromeStyle.applyEngineSurface(this, it) }
         secondaryAddressBar = EditText(this).apply {
             hint = getString(R.string.secondary_address_bar_hint)
-            isSingleLine = true
-            textSize = 12f
-            setTextColor(getColor(R.color.nova_text_primary))
-            setHintTextColor(getColor(R.color.nova_text_secondary))
-            setBackgroundColor(getColor(R.color.nova_surface_elevated))
-            minimumHeight = dp(48)
-            setPadding(dp(12), 0, dp(12), 0)
+            setOnEditorActionListener { _, actionId, event ->
+                val enterKey = event?.let {
+                    it.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
+                        it.action == android.view.KeyEvent.ACTION_DOWN
+                } == true
+                if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || enterKey) {
+                    navigateSecondary(text.toString())
+                    true
+                } else false
+            }
+            NovaBrowserChromeStyle.applyAddressField(this@MainActivity, this)
         }
         val secondaryControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            NovaBrowserChromeStyle.applyChromeSurface(this@MainActivity, this, minimumHeight = true)
             addView(actionButton("Back") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.goBack() })
             addView(actionButton("Forward") { tabs.firstOrNull { it.id == splitTabId }?.browserEngine?.goForward() })
             addView(actionButton("Reload") {
@@ -889,8 +887,7 @@ class MainActivity : ComponentActivity() {
         bottomToolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            minimumHeight = dp(48)
-            setBackgroundColor(getColor(R.color.nova_surface))
+            NovaBrowserChromeStyle.applyChromeSurface(this@MainActivity, this, minimumHeight = true)
         }
         bottomToolbar.addView(iconButton(R.drawable.ic_back, getString(R.string.back)) { goBack() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bottomToolbar.addView(iconButton(R.drawable.ic_forward, getString(R.string.forward)) { goForward() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -904,7 +901,7 @@ class MainActivity : ComponentActivity() {
         bottomToolbar.addView(menuButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(getColor(R.color.nova_background))
+            NovaBrowserChromeStyle.applyEngineSurface(this@MainActivity, this)
             addView(topChrome, LinearLayout.LayoutParams(-1, -2))
             addView(homeScroll, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(browserPane, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -1160,7 +1157,7 @@ class MainActivity : ComponentActivity() {
         android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             isFillViewport = false
-            addView(row, android.view.ViewGroup.LayoutParams(-2, dp(48)))
+            addView(row, android.view.ViewGroup.LayoutParams(-2, dp(NovaBrowserChromeStyle.sharedMetrics.toolbarMinHeightDp)))
         }
 
     private fun iconButton(icon: Int, description: String, action: () -> Unit) = android.widget.ImageButton(this).apply {
@@ -1169,8 +1166,8 @@ class MainActivity : ComponentActivity() {
         scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
         setBackgroundResource(android.R.color.transparent)
         setPadding(dp(12), dp(12), dp(12), dp(12))
-        minimumWidth = dp(48)
-        minimumHeight = dp(48)
+        minimumWidth = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
+        minimumHeight = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
         setOnClickListener { action() }
     }
 
@@ -1350,8 +1347,8 @@ class MainActivity : ComponentActivity() {
         textSize = 11f
         isAllCaps = false
         minWidth = dp(48)
-        minimumWidth = dp(48)
-        minimumHeight = dp(48)
+        minimumWidth = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
+        minimumHeight = dp(NovaBrowserChromeStyle.sharedMetrics.controlMinSizeDp)
         setPadding(dp(7), 0, dp(7), 0)
         setOnClickListener { action() }
     }
@@ -1960,6 +1957,7 @@ class MainActivity : ComponentActivity() {
     private fun resolveEngineForTab(tab: BrowserTab, url: String = tab.lastUrl): BrowserEngineType {
         val selection = engineSelectionForTab(tab, url)
         tab.engineFallbackReason = selection.reason.takeIf { selection.usedFallback }
+            ?.let(NovaEnginePresentation::userFacingReason)
         return selection.engine
     }
 
@@ -1984,7 +1982,7 @@ class MainActivity : ComponentActivity() {
         tab.lastUrl = url
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
-        tab.engineFallbackReason = selection.reason
+        tab.engineFallbackReason = NovaEnginePresentation.userFacingReason(selection.reason)
     }
 
     private val pendingEngineFallbackTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -2085,7 +2083,7 @@ class MainActivity : ComponentActivity() {
                 tab.lastUrl = destination
                 tab.cefriumNavigationState = null
                 tab.needsReload = destination != HOME_URL
-                tab.engineFallbackReason = latestSelection.reason
+                tab.engineFallbackReason = NovaEnginePresentation.userFacingReason(latestSelection.reason)
                 persistTabs()
                 if (wasActive) {
                     val index = tabs.indexOfFirst { it.id == tab.id }
@@ -2134,7 +2132,7 @@ class MainActivity : ComponentActivity() {
         tab.engineType = BrowserEngineType.GECKOVIEW
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
-        tab.engineFallbackReason = "Cefrium could not continue this tab. Nova reopened its URL in GeckoView; site data was not transferred."
+        tab.engineFallbackReason = "Nova reopened this page in its compatibility engine after a rendering problem. Site data was not transferred."
         ensureSession(tab)
         return tab.browserEngine as? GeckoViewBrowserEngine
             ?: error("Nova could not fall back to GeckoView")
@@ -2219,6 +2217,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPrimaryEngineView(engineView: View) {
+        NovaBrowserChromeStyle.applyEngineSurface(this, engineView)
         activePrimaryEngineView?.let { old -> if (old !== engineView && old.parent === browserPane) browserPane.removeView(old) }
         (engineView.parent as? ViewGroup)?.let { parent -> if (parent !== browserPane) parent.removeView(engineView) }
         val params = enginePaneLayoutParams(browserPane)
@@ -2229,6 +2228,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSecondaryEngineView(engineView: View) {
+        NovaBrowserChromeStyle.applyEngineSurface(this, engineView)
         activeSecondaryEngineView?.let { old -> if (old !== engineView && old.parent === secondaryPane) secondaryPane.removeView(old) }
         (engineView.parent as? ViewGroup)?.let { parent -> if (parent !== secondaryPane) parent.removeView(engineView) }
         val params = enginePaneLayoutParams(secondaryPane)
@@ -2415,7 +2415,7 @@ class MainActivity : ComponentActivity() {
         tab.engineType = BrowserEngineType.GECKOVIEW
         tab.cefriumNavigationState = null
         tab.needsReload = tab.lastUrl != HOME_URL
-        tab.engineFallbackReason = "Phishing and malware protection requires GeckoView. Nova reopened this URL; website data was not transferred."
+        tab.engineFallbackReason = "Nova reopened this page in its protected compatibility engine. Website data was not transferred."
         persistTabs()
         if (currentTab() === tab) activateTab(tab)
         else if (splitTabId == tab.id) restoreSplitPane()
@@ -2525,7 +2525,7 @@ class MainActivity : ComponentActivity() {
             val status = (prefs.getString("site_default_permission_cefrium_${permission.lowercase()}", "ASK") ?: "ASK").uppercase()
             "$label · ${when (status) { "ALLOW" -> "Allowed"; "BLOCK" -> "Blocked"; else -> "Ask" }}"
         }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Default Cefrium permissions")
+        AlertDialog.Builder(this).setTitle("Default Nova Core permissions")
             .setItems(labels) { _, which ->
                 val (permission, label) = definitions[which]
                 val prefKey = "site_default_permission_cefrium_${permission.lowercase()}"
@@ -2596,7 +2596,7 @@ class MainActivity : ComponentActivity() {
             val status = (prefs.getString("site_default_permission_geckoview_$token", "ASK") ?: "ASK").uppercase()
             "$label · ${when (status) { "ALLOW" -> "Allowed"; "BLOCK" -> "Blocked"; else -> "Ask" }}"
         }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Default GeckoView permissions")
+        AlertDialog.Builder(this).setTitle("Default Nova Compatibility permissions")
             .setItems(labels) { _, which ->
                 val (token, label) = definitions[which]
                 val key = "site_default_permission_geckoview_$token"
@@ -2616,12 +2616,12 @@ class MainActivity : ComponentActivity() {
         val labels = arrayOf("Allow all cookies", "Block third-party cookies", "Isolate third-party cookies · recommended", "Block all cookies")
         val current = prefs.getString("site_default_geckoview_cookies", "ISOLATE") ?: "ISOLATE"
         val selected = values.indexOf(current).takeIf { it >= 0 } ?: 2
-        AlertDialog.Builder(this).setTitle("GeckoView cookies and site data")
+        AlertDialog.Builder(this).setTitle("Nova Compatibility cookies and site data")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
                 prefs.edit().putString("site_default_geckoview_cookies", values[which]).apply()
                 applyGeckoCookieBehavior()
                 dialog.dismiss()
-                toast("GeckoView cookie policy · ${labels[which]}")
+                toast("Nova Compatibility cookie policy · ${labels[which]}")
             }
             .setNegativeButton(getString(R.string.close), null).show()
     }
@@ -2642,7 +2642,7 @@ class MainActivity : ComponentActivity() {
         val values = intArrayOf(1, 2)
         val labels = arrayOf("Load all images", "Block all images")
         val selected = if (prefs.getInt("site_default_geckoview_images", 1) == 2) 1 else 0
-        AlertDialog.Builder(this).setTitle("GeckoView images")
+        AlertDialog.Builder(this).setTitle("Nova Compatibility images")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
                 val next = values[which]
                 applyGeckoImageBehavior(next) { applied ->
@@ -2651,7 +2651,7 @@ class MainActivity : ComponentActivity() {
                         dialog.dismiss()
                         toast("Image loading · ${labels[which]}")
                     } else {
-                        toast("Could not update GeckoView image settings")
+                        toast("Could not update Nova Compatibility image settings")
                     }
                 }
             }
@@ -4030,7 +4030,7 @@ class MainActivity : ComponentActivity() {
     private fun cycleSiteDarkMode() {
         val tab = currentTab() ?: return
         if (tab.engineType != BrowserEngineType.CEFRIUM || tab.browserEngine !is CefriumBrowserEngine) {
-            toast("Per-site page appearance is currently supported on Cefrium tabs only")
+            toast("Per-site page appearance is currently supported on Nova Core tabs only")
             return
         }
         val host = Uri.parse(tab.lastUrl).host?.lowercase(Locale.ROOT)
@@ -6651,7 +6651,7 @@ private fun showQuickSettings() {
             if (key == "ads" && engine == BrowserEngineType.CEFRIUM) "$name · ${if (enabled) "On" else "Off"}"
             else "$name · ${if (enabled) "Allowed" else "Blocked"}"
         }.toTypedArray() + permissionDefaults + cookieDefaults
-        val engineLabel = if (engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
+        val engineLabel = NovaEnginePresentation.label(engine)
         AlertDialog.Builder(this).setTitle("Default site settings · $engineLabel")
             .apply { if (engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Nova's Cefrium cookie rule applies to browser-owned requests only; service-worker requests may use profile cookies.")) }
             .setItems(labels) { _, which ->
@@ -6732,7 +6732,7 @@ private fun showQuickSettings() {
         }
         val sorted = entries.sortedWith(compareBy({ it.engine.name }, { it.origin }))
         val labels = sorted.map {
-            "${it.origin}  ·  ${if (it.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"}"
+            "${it.origin}  ·  ${NovaEnginePresentation.label(it.engine)}"
         }.toTypedArray()
         AlertDialog.Builder(this).setTitle("All sites")
             .setItems(labels) { _, which -> showSiteRuleDetails(sorted[which]) }
@@ -6751,7 +6751,7 @@ private fun showQuickSettings() {
             }
             runOnUiThread {
                 if (matching.isEmpty()) {
-                    toast("No saved GeckoView permissions for ${Uri.parse(entry.origin).host}")
+                    toast("No saved Nova Compatibility permissions for ${Uri.parse(entry.origin).host}")
                     showSiteRuleDetails(entry)
                 } else {
                     val labels = matching.map { permission ->
@@ -6822,7 +6822,7 @@ private fun showQuickSettings() {
 
     private fun showSiteRuleDetails(entry: SiteRuleEntry) {
         val host = Uri.parse(entry.origin).host ?: entry.origin
-        val engineLabel = if (entry.engine == BrowserEngineType.GECKOVIEW) "GeckoView" else "Cefrium"
+        val engineLabel = NovaEnginePresentation.label(entry.engine)
         val definitions = listOf(Triple("javascript", "JavaScript", true)) +
             if (entry.engine == BrowserEngineType.CEFRIUM) listOf(
                 Triple("popups", "Pop-ups and redirects", false),
@@ -7088,7 +7088,7 @@ private fun showQuickSettings() {
             "Remember related sign-in domains"
         )
         AlertDialog.Builder(this).setCustomTitle(TextView(this).apply {
-            text = "Browser engine\n\nPrivate and Guest tabs always use GeckoView. Cefrium is used only when Nova Shield, 1VPN and saved-password autofill do not require GeckoView. Website data is not automatically migrated between engines."
+            text = "Nova browser engine\n\nNova automatically chooses the best fit for each page. Private and Guest tabs always use Nova Compatibility. Nova Core is used only when enabled protections and site requirements allow it. Website data stays separate between engines."
             setPadding(dp(24), dp(16), dp(24), dp(8))
             textSize = 14f
         }).setItems(actions) { _, which ->
@@ -7103,9 +7103,9 @@ private fun showQuickSettings() {
 
     private fun chooseNormalEngineMode() {
         val modes = BrowserEngineMode.values()
-        val labels = arrayOf("Automatic · Cefrium for compatible sites", "Cefrium · Chromium", "GeckoView")
+        val labels = BrowserEngineMode.values().map(NovaEnginePresentation::normalModeLabel).toTypedArray()
         val selected = modes.indexOf(enginePreferences.normalMode()).coerceAtLeast(0)
-        AlertDialog.Builder(this).setTitle("Normal-tab engine")
+        AlertDialog.Builder(this).setTitle("Normal-tab engine preference")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
                 val mode = modes[which]
                 enginePreferences.setNormalMode(mode)
@@ -7120,14 +7120,14 @@ private fun showQuickSettings() {
                         activateTab(tab)
                     }
                 }
-                toast("Normal-tab engine preference: ${mode.name.lowercase().replace('_', ' ')}")
+                toast("Normal-tab engine preference: ${NovaEnginePresentation.normalModeLabel(mode)}")
                 dialog.dismiss()
             }.setNegativeButton("Cancel", null).show()
     }
 
     private fun switchCurrentTabEngine() {
         val tab = currentTab() ?: return
-        if (tab.isPrivate || tab.isGuest) { toast("Private and Guest tabs must remain on GeckoView"); return }
+        if (tab.isPrivate || tab.isGuest) { toast("Private and Guest tabs always use Nova Compatibility"); return }
         val target = if (tab.engineType == BrowserEngineType.CEFRIUM) BrowserEngineType.GECKOVIEW else BrowserEngineType.CEFRIUM
         if (target == BrowserEngineType.CEFRIUM) {
             val previousFallback = tab.engineFallbackReason
@@ -7135,11 +7135,11 @@ private fun showQuickSettings() {
             val reason = cefriumCompatibilityReason(tab)
             if (reason != null) {
                 tab.engineFallbackReason = previousFallback
-                toast("Cefrium unavailable: $reason")
+                toast("${NovaEnginePresentation.label(BrowserEngineType.CEFRIUM)} unavailable: ${NovaEnginePresentation.userFacingReason(reason)}")
                 return
             }
         }
-        val targetLabel = if (target == BrowserEngineType.CEFRIUM) "Cefrium" else "GeckoView"
+        val targetLabel = NovaEnginePresentation.label(target)
         AlertDialog.Builder(this).setTitle("Switch to $targetLabel?")
             .setMessage("The tab will reload. Cookies, local storage and active sessions are not migrated between engines; you may need to sign in again.")
             .setNegativeButton("Cancel", null)
@@ -7165,7 +7165,7 @@ private fun showQuickSettings() {
         if (tab.isPrivate || tab.isGuest) { toast("Site engine preferences are not saved from Private or Guest tabs"); return }
         val host = Uri.parse(tab.lastUrl).host ?: run { toast("Open a website first"); return }
         val saved = enginePreferences.setSiteAffinity(tab.lastUrl, tab.engineType)
-        toast(if (saved) "${tab.engineType.name} remembered for $host" else "Could not save this site's engine preference")
+        toast(if (saved) "${NovaEnginePresentation.label(tab.engineType)} remembered for $host" else "Could not save this site's engine preference")
     }
 
     private fun rememberRelatedSignInDomains() {
