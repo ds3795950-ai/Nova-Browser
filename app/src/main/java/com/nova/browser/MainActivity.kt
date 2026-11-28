@@ -1939,6 +1939,7 @@ class MainActivity : ComponentActivity() {
             tab.lastUrl = destination
             tab.needsReload = destination != HOME_URL
             tab.cefriumNavigationState = null
+            persistTabs()
             toast("Navigation paused until Nova confirms protected routing")
             return true
         }
@@ -1949,16 +1950,28 @@ class MainActivity : ComponentActivity() {
         if (!pendingEngineFallbackTabIds.add(tab.id)) return true
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             try {
-                if (tabs.none { it.id == tab.id } || tab.engineType != BrowserEngineType.CEFRIUM) return@post
+                if (tabs.none { it.id == tab.id }) return@post
+                val wasActive = currentTab()?.id == tab.id
+                val wasSecondary = splitTabId == tab.id
                 if (GuestTorIsolationPolicy.shouldBlockNonGuestSession(tab.isGuest, guestTorReservesGeckoRuntime()) ||
                     BrowserVpnNavigationPolicy.shouldBlockNavigation(NovaBrowserVpnController.isVpnEnabled(), NovaBrowserVpnController.isVpnRoutingReady())) {
                     tab.lastUrl = destination
                     tab.needsReload = destination != HOME_URL
                     tab.cefriumNavigationState = null
+                    persistTabs()
                     return@post
                 }
-                val wasActive = currentTab()?.id == tab.id
-                val wasSecondary = splitTabId == tab.id
+                if (tab.engineType != BrowserEngineType.CEFRIUM) {
+                    // Another queued operation may have converted this tab while the
+                    // Cefrium handoff was waiting. Preserve and deliver the destination.
+                    tab.lastUrl = destination
+                    tab.needsReload = destination != HOME_URL
+                    tab.cefriumNavigationState = null
+                    persistTabs()
+                    if (wasActive) loadTabUrl(tab, destination)
+                    else if (wasSecondary) loadSecondaryTabUrl(tab, destination)
+                    return@post
+                }
                 val latestSelection = engineSelectionForTab(tab, destination)
                 if (latestSelection.engine == BrowserEngineType.CEFRIUM) {
                     // Engine preferences may change while this handoff is queued. Keep the
@@ -5250,8 +5263,9 @@ class MainActivity : ComponentActivity() {
                               const excluded = 'script,style,form,input,textarea,select,button,iframe,object,embed,[contenteditable="true"],[hidden],[aria-hidden="true"]';
                               const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
                               const parts = [];
+                              let total = 0;
                               let node;
-                              while ((node = walker.nextNode()) && parts.join(' ').length < 24000) {
+                              while ((node = walker.nextNode()) && total < 24000) {
                                 const parent = node.parentElement;
                                 if (!parent || parent.closest(excluded)) continue;
                                 let element = parent;
@@ -5267,9 +5281,16 @@ class MainActivity : ComponentActivity() {
                                   }
                                   element = element.parentElement;
                                 }
-                                if (visible && parent.getClientRects().length > 0) parts.push(node.nodeValue || '');
+                                if (!visible || parent.getClientRects().length === 0) continue;
+                                const value = (node.nodeValue || '').replace(/\s+/g, ' ').trim();
+                                if (!value) continue;
+                                const chunk = value.slice(0, 24000 - total);
+                                if (chunk) {
+                                  parts.push(chunk);
+                                  total += chunk.length;
+                                }
                               }
-                              const text = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 24000);
+                              const text = parts.join(' ').trim().slice(0, 24000);
                               return JSON.stringify({ url: location.href, text });
                             })()
                         """.trimIndent()
@@ -5323,10 +5344,8 @@ class MainActivity : ComponentActivity() {
             })
     }
 
-    private fun sameDocumentUrl(left: String, right: String): Boolean = runCatching {
-        Uri.parse(left).buildUpon().fragment(null).build().toString() ==
-            Uri.parse(right).buildUpon().fragment(null).build().toString()
-    }.getOrDefault(false)
+    private fun sameDocumentUrl(left: String, right: String): Boolean =
+        left == right
 
     private fun attachAiPageReader(session: GeckoSession, tab: BrowserTab) {
         if (tab.isPrivate || tab.isGuest) return
