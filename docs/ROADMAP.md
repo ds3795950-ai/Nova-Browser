@@ -67,7 +67,8 @@ Recorded in `docs/PHASE2_OPERA_FEATURES.md`; no fake toggles exist for these.
 - Screenshot annotation and per-site dark-mode overrides.
 - Video pop-out beyond the fullscreen-only Picture-in-Picture gate.
 - Cross-engine Back/Forward handoff (the Cefrium SDK does not expose the request method for history entries).
-- Phishing/malware protection on Cefrium (GeckoView keeps native Safe Browsing lists active in every Shield mode; fingerprinting protection is Aggressive-mode and Private-browsing only).
+- Phishing/malware reputation protection is engine-scoped: GeckoView keeps native Safe Browsing lists active in every Nova Shield mode; Cefrium is explicitly marked **unprotected by this service** and the Shield status action offers a per-tab switch to GeckoView. The switch reloads the URL and does not migrate cookies, storage, or other website data. This is not a guarantee that every phishing or malware site will be detected.
+- Fingerprinting protection is Aggressive-mode and Private-browsing only.
 
 ## Phase 1 exit criteria
 
