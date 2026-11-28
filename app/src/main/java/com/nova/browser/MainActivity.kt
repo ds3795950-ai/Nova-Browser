@@ -5237,25 +5237,19 @@ class MainActivity : ComponentActivity() {
         val fallbackTitle = tab.title.trim().ifBlank { host }.take(40)
         val engine = tab.browserEngine as? CefriumBrowserEngine
         if (tab.engineType == BrowserEngineType.CEFRIUM && engine != null) {
-            runCatching { engine.evaluateJavaScript(PWA_SHORTCUT_METADATA_SCRIPT) { raw ->
-                runOnUiThread {
-                    val metadata = parsePwaShortcutMetadata(raw)
-                    val launchUri = metadata.optString("startUrl").takeIf { it.isNotBlank() }?.let {
-                        runCatching { Uri.parse(it) }.getOrNull()
-                    }?.takeIf { it.scheme in setOf("http", "https") && it.host.equals(host, true) } ?: uri
-                    val title = metadata.optString("shortName").ifBlank {
-                        metadata.optString("name").ifBlank { fallbackTitle }
-                    }.take(40)
-                    val icon = metadata.optString("iconDataUrl").takeIf { it.startsWith("data:image/") }
-                        ?.substringAfter("base64,", "")
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { encoded ->
-                            runCatching {
-                                val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
-                                if (bytes.size > 512 * 1024) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            }.getOrNull()
+            runCatching { engine.evaluateJavaScript(PWA_MANIFEST_LINK_SCRIPT) { raw ->
+                val manifestUrl = parsePwaManifestUrl(raw, uri)
+                if (manifestUrl == null) {
+                    runOnUiThread { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
+                } else {
+                    Thread {
+                        val metadata = fetchPwaShortcutMetadata(manifestUrl, uri)
+                        runOnUiThread {
+                            val launchUri = metadata.first
+                            val title = metadata.second.ifBlank { fallbackTitle }
+                            pinWebsiteShortcut(launchUri, host, url, title, metadata.third)
                         }
-                    pinWebsiteShortcut(launchUri, host, url, title, icon)
+                    }.start()
                 }
             } }.onFailure { pinWebsiteShortcut(uri, host, url, fallbackTitle, null) }
         } else {
@@ -5263,12 +5257,104 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun parsePwaShortcutMetadata(raw: String?): JSONObject {
-        if (raw.isNullOrBlank()) return JSONObject()
+    private fun parsePwaManifestUrl(raw: String?, pageUri: Uri): java.net.URL? {
+        if (raw.isNullOrBlank()) return null
         return runCatching {
             val decoded = org.json.JSONTokener(raw).nextValue()
-            if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
-        }.getOrDefault(JSONObject())
+            val payload = if (decoded is JSONObject) decoded else JSONObject(decoded.toString())
+            val href = payload.optString("manifestUrl")
+            if (href.isBlank()) return null
+            val page = java.net.URL(pageUri.toString())
+            val manifest = java.net.URL(page, href)
+            manifest.takeIf { it.protocol in setOf("http", "https") && it.host.equals(page.host, true) && it.port == page.port }
+        }.getOrNull()
+    }
+
+    private fun fetchPwaShortcutMetadata(
+        manifestUrl: java.net.URL,
+        pageUri: Uri
+    ): Triple<Uri, String, Bitmap?> {
+        val fallback = Uri.parse(pageUri.toString()) to "" to null
+        return runCatching {
+            val connection = (manifestUrl.openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                instanceFollowRedirects = false
+                setRequestProperty("Accept", "application/manifest+json, application/json")
+            }
+            val bytes = connection.use { conn ->
+                if (conn.responseCode !in 200..299) throw IllegalStateException("Manifest request failed")
+                val declared = conn.getHeaderFieldLong("Content-Length", -1L)
+                if (declared > 256 * 1024) throw IllegalStateException("Manifest is too large")
+                conn.inputStream.use { input ->
+                    val output = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        if (total > 256 * 1024) throw IllegalStateException("Manifest is too large")
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                }
+            }
+            val manifest = JSONObject(String(bytes, Charsets.UTF_8))
+            val page = java.net.URL(pageUri.toString())
+            fun sameOrigin(value: String): java.net.URL? = runCatching {
+                java.net.URL(manifestUrl, value).takeIf {
+                    it.protocol in setOf("http", "https") && it.host.equals(page.host, true) && it.port == page.port
+                }
+            }.getOrNull()
+            val scope = sameOrigin(manifest.optString("scope"))
+            val start = sameOrigin(manifest.optString("start_url")).takeIf {
+                it != null && (scope == null || it.path.startsWith(scope.path))
+            } ?: page
+            val icons = manifest.optJSONArray("icons")
+            var bitmap: Bitmap? = null
+            if (icons != null) {
+                val candidates = (0 until icons.length()).mapNotNull { index ->
+                    icons.optJSONObject(index)?.let { it.optString("src") to it.optString("sizes") }
+                }.sortedByDescending { (_, sizes) -> if (sizes.contains("192")) 2 else if (sizes == "any") 1 else 0 }
+                for ((src, _) in candidates) {
+                    val iconUrl = sameOrigin(src) ?: continue
+                    val iconBytes = runCatching {
+                        val iconConnection = (iconUrl.openConnection() as java.net.HttpURLConnection).apply {
+                            connectTimeout = 4000
+                            readTimeout = 4000
+                            instanceFollowRedirects = false
+                        }
+                        iconConnection.use { conn ->
+                            if (conn.responseCode !in 200..299 || !conn.contentType.orEmpty().startsWith("image/")) return@use null
+                            val declared = conn.getHeaderFieldLong("Content-Length", -1L)
+                            if (declared > 512 * 1024) return@use null
+                            conn.inputStream.use { input ->
+                                val output = java.io.ByteArrayOutputStream()
+                                val buffer = ByteArray(8192)
+                                var total = 0
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    total += count
+                                    if (total > 512 * 1024) return@use null
+                                    output.write(buffer, 0, count)
+                                }
+                                output.toByteArray()
+                            }
+                        }
+                    }.getOrNull() ?: continue
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, bounds)
+                    if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 8192 || bounds.outHeight > 8192) continue
+                    val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 512)
+                    bitmap = BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                    if (bitmap != null) break
+                }
+            }
+            val title = manifest.optString("short_name").ifBlank { manifest.optString("name") }.take(40)
+            Triple(Uri.parse(start.toString()), title, bitmap)
+        }.getOrDefault(fallback)
     }
 
     private fun pinWebsiteShortcut(
@@ -5302,53 +5388,6 @@ class MainActivity : ComponentActivity() {
         }.onFailure { toast("Could not open Android Downloads: ${it.localizedMessage ?: "Unknown error"}") }
     }
 
-    private companion object {
-        const val PWA_SHORTCUT_METADATA_SCRIPT = """
-            (async () => {
-              try {
-                const link = document.querySelector('link[rel~="manifest"]');
-                if (!link) return JSON.stringify({});
-                const manifestUrl = new URL(link.href, location.href);
-                if (manifestUrl.origin !== location.origin) return JSON.stringify({});
-                const response = await fetch(manifestUrl.href, { credentials: 'same-origin' });
-                if (!response.ok) return JSON.stringify({});
-                const manifest = await response.json();
-                const safeUrl = (value) => {
-                  try {
-                    const candidate = new URL(value, manifestUrl.href);
-                    return candidate.origin === location.origin ? candidate.href : '';
-                  } catch (_) { return ''; }
-                };
-                let startUrl = safeUrl(manifest.start_url || location.href);
-                const scope = safeUrl(manifest.scope || new URL('.', manifestUrl.href).href);
-                if (scope && !startUrl.startsWith(scope)) startUrl = location.href;
-                let iconDataUrl = '';
-                const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
-                const icon = icons.find(item => item && (String(item.sizes || '').includes('192') || item.sizes === 'any')) || icons[0];
-                const iconUrl = icon && safeUrl(icon.src);
-                if (iconUrl) {
-                  const iconResponse = await fetch(iconUrl, { credentials: 'same-origin' });
-                  if (iconResponse.ok) {
-                    const blob = await iconResponse.blob();
-                    if (blob.size > 0 && blob.size <= 524288 && /^image\//i.test(blob.type)) {
-                      const bytes = new Uint8Array(await blob.arrayBuffer());
-                      let binary = '';
-                      for (let i = 0; i < bytes.length; i += 0x8000)
-                        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-                      iconDataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
-                    }
-                  }
-                }
-                return JSON.stringify({
-                  name: String(manifest.name || '').slice(0, 80),
-                  shortName: String(manifest.short_name || '').slice(0, 40),
-                  startUrl,
-                  iconDataUrl
-                });
-              } catch (_) { return JSON.stringify({}); }
-            })()
-        """
-    }
 
     private fun printCurrentPage() {
         val tab = currentTab() ?: return
@@ -8176,5 +8215,11 @@ private fun showForgotPassword(prefillEmail: String = "") {
         private val pendingGeckoDataClearTabIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         @Volatile private var pendingGeckoDataClearActive = false
         private const val ADGUARD_DOH_ENDPOINT = "https://dns.adguard-dns.com/dns-query"
+        private const val PWA_MANIFEST_LINK_SCRIPT = """
+            (() => {
+              const link = document.querySelector('link[rel~="manifest"]');
+              return JSON.stringify({ manifestUrl: link ? link.href : '' });
+            })()
+        """
     }
 }
