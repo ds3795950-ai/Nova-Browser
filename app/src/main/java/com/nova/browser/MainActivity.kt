@@ -6030,7 +6030,7 @@ private fun showQuickSettings() {
                             }
                         }
                         "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(siteSettingAllowed(engine, active.lastUrl, "ads", true))
-                        "images", "cookies" -> Unit // Browser request interceptor reads preferences; service-worker cookie hooks are unavailable in Cefrium 0.21.
+                        "images", "cookies" -> Unit // Browser request interceptor reads preferences; per-origin cookie hooks are not verified for profile-level service-worker requests.
                         "sound" -> {
                             val effective = siteSettingAllowed(engine, active.lastUrl, "sound", true)
                             if (engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!effective) else active.mediaSession?.muteAudio(!effective)
@@ -6223,7 +6223,7 @@ private fun showQuickSettings() {
                                         .forEach { runtime.storageController.setPermission(it, if (next) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY) }
                                 }
                                 "ads" -> (active.browserEngine as? CefriumBrowserEngine)?.setAdBlockingEnabled(next)
-                                "images", "cookies" -> Unit // Browser-owned requests only; service-worker cookie callbacks are not invoked by Cefrium 0.21.
+                                "images", "cookies" -> Unit // Browser-owned requests only; per-origin cookie callbacks are not relied on for profile-level service-worker requests.
                                 "sound" -> if (entry.engine == BrowserEngineType.CEFRIUM) (active.browserEngine as? CefriumBrowserEngine)?.setAudioMuted(!next) else active.mediaSession?.muteAudio(!next)
                             }
                             active.browserEngine?.reload()

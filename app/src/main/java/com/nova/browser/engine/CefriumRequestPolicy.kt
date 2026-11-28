@@ -8,8 +8,8 @@ import com.cefrium.CefriumResourceInterceptor
 import com.cefrium.CefriumResourceType
 
 /** Preference-only Cefrium request policy safe to retain for the lifetime of a shared profile.
- * Cookie filtering is browser-request-only; Cefrium 0.21 does not call cookie hooks for
- * profile-level service-worker requests.
+ * Cookie filtering is browser-request-only; Nova does not rely on per-origin cookie hooks
+ * for profile-level service-worker requests, which may use the profile cookie store.
  */
 class CefriumRequestPolicy(private val preferences: SharedPreferences) {
     fun imagesBlockedFor(url: String): Boolean =

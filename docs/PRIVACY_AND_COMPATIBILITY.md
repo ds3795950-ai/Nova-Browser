@@ -10,7 +10,7 @@ Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Brow
 
 Cefrium 0.22.0 supports a conservative curated tracker-domain filter, image blocking for Data Saver/per-site image rules, and per-origin cookie send/store filtering for browser-owned requests. The tracker list is not a complete filter-list engine or full GeckoView Enhanced Tracking Protection.
 
-**Cookie limitation:** Cefrium 0.22.0 does not invoke the cookie callbacks for profile-level requests that belong to no browser, including service-worker requests and their fetches. Nova labels the Cefrium cookie control "browser requests only" and does not claim complete cookie isolation or third-party cookie partitioning. A site may still use cookies from its service worker. Do not present this setting as a comprehensive cookie-blocking guarantee.
+**Cookie limitation:** Nova does not rely on per-origin cookie callbacks for profile-level requests that belong to no browser, including service-worker requests and their fetches. Those requests may use the profile cookie store. Nova labels the Cefrium cookie control "browser requests only" and does not claim complete cookie isolation or third-party cookie partitioning. Do not present this setting as a comprehensive cookie-blocking guarantee.
 
 Explicit saved-login filling in Normal Cefrium tabs is manual, HTTPS-only, exact-origin and same-origin-form-action constrained, and requires device credential or biometric verification. Automatic password detection and save prompts remain GeckoView-only.
 
