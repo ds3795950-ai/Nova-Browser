@@ -34,7 +34,7 @@ internal class NovaPdfPrintAdapter(
             .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
             .setPageCount(PrintDocumentInfo.PAGE_COUNT_UNKNOWN)
             .build()
-        callback.onLayoutFinished(info, true)
+        callback.onLayoutFinished(info, false)
     }
 
     override fun onWrite(

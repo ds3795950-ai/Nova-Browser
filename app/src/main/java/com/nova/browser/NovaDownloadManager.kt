@@ -273,9 +273,9 @@ class NovaDownloadManager(
                 val destinationStore = runCatching { java.nio.file.Files.getFileStore(destinationDirectory.toPath()) }.getOrNull()
                 // If the store cannot be identified, assume both paths share storage and use the
                 // conservative combined requirement rather than risk a failed MediaStore copy.
-                val sameStore = if (partialStore != null && destinationStore != null) {
+                val sameStore: Boolean? = if (partialStore != null && destinationStore != null) {
                     partialStore == destinationStore
-                } else true
+                } else null
                 val partialBytes = part.length().coerceAtLeast(0L)
                 if (length > Long.MAX_VALUE - partialBytes) {
                     throw IllegalStateException("The server declared an invalid download size")
@@ -285,14 +285,29 @@ class NovaDownloadManager(
                     throw IllegalStateException("The server declared an invalid download size")
                 }
                 val destinationRequired = completedBytes + margin
-                if (sameStore) {
-                    if (length > Long.MAX_VALUE - destinationRequired ||
-                        partialAvailable < length + destinationRequired
-                    ) {
-                        throw IllegalStateException("Not enough free storage to finish and publish this download")
+                when (sameStore) {
+                    true -> {
+                        if (length > Long.MAX_VALUE - destinationRequired ||
+                            partialAvailable < length + destinationRequired
+                        ) {
+                            throw IllegalStateException("Not enough free storage to finish and publish this download")
+                        }
                     }
-                } else if (partialAvailable < length + margin || destinationAvailable < destinationRequired) {
-                    throw IllegalStateException("Not enough free storage to finish and publish this download")
+                    false -> {
+                        if (partialAvailable < length + margin || destinationAvailable < destinationRequired) {
+                            throw IllegalStateException("Not enough free storage to finish and publish this download")
+                        }
+                    }
+                    null -> {
+                        // Android may deny filesystem identity inspection. Use the conservative
+                        // combined-space requirement and also verify the publish destination.
+                        if (length > Long.MAX_VALUE - destinationRequired ||
+                            partialAvailable < length + destinationRequired ||
+                            destinationAvailable < destinationRequired
+                        ) {
+                            throw IllegalStateException("Not enough free storage to finish and publish this download")
+                        }
+                    }
                 }
             }
             val hasValidatedResume = code == HttpURLConnection.HTTP_PARTIAL && offset > 0 && validator != null

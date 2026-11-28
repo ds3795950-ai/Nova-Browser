@@ -5343,8 +5343,10 @@ class MainActivity : ComponentActivity() {
     ): Triple<Uri, String, Bitmap?> {
         val fallback = Triple(Uri.parse(pageUri.toString()), "", null)
         return runCatching {
-            if (!networkAllowed()) return@runCatching fallback
-            val bytes = readPwaResource(manifestUrl, 256 * 1024, networkAllowed = networkAllowed)
+            val deadlineNanos = System.nanoTime() + 12_000_000_000L
+            val canContinue = { networkAllowed() && System.nanoTime() < deadlineNanos }
+            if (!canContinue()) return@runCatching fallback
+            val bytes = readPwaResource(manifestUrl, 256 * 1024, networkAllowed = canContinue)
                 ?: return@runCatching fallback
             val manifest = JSONObject(String(bytes, Charsets.UTF_8))
             val page = java.net.URL(pageUri.toString())
@@ -5363,10 +5365,10 @@ class MainActivity : ComponentActivity() {
                 val candidates = (0 until icons.length()).mapNotNull { index ->
                     icons.optJSONObject(index)?.let { it.optString("src") to it.optString("sizes") }
                 }.sortedByDescending { (_, sizes) -> if (sizes.contains("192")) 2 else if (sizes == "any") 1 else 0 }
-                for ((src, _) in candidates) {
+                for ((src, _) in candidates.take(4)) {
+                    if (!canContinue()) break
                     val iconUrl = sameOrigin(src) ?: continue
-                    if (!networkAllowed()) break
-                    val iconBytes = readPwaResource(iconUrl, 512 * 1024, "image/", networkAllowed) ?: continue
+                    val iconBytes = readPwaResource(iconUrl, 512 * 1024, "image/", canContinue) ?: continue
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, bounds)
                     if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 8192 || bounds.outHeight > 8192) continue
