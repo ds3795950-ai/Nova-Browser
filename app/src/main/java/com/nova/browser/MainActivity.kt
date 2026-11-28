@@ -5715,7 +5715,11 @@ class MainActivity : ComponentActivity() {
             "sound" -> if (tab.engineType == BrowserEngineType.CEFRIUM) engine?.setAudioMuted(!enabled) else tab.mediaSession?.muteAudio(!enabled)
         }
         if (setting != "sound") tab.browserEngine?.reload()
-        toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
+        if (setting == "ads" && tab.engineType == BrowserEngineType.CEFRIUM) {
+            toast("Ads and tracker protection turned " + (if (enabled) "on" else "off"))
+        } else {
+            toast(setting + (if (enabled) " allowed for " else " blocked for ") + (Uri.parse(tab.lastUrl).host ?: "site"))
+        }
     }
 
     /**
@@ -6041,7 +6045,7 @@ private fun showQuickSettings() {
                 if (engine == BrowserEngineType.GECKOVIEW && key == "autoplay") {
                     resetClosedGeckoAutoplayPermissions()
                 }
-                toast("$engineLabel default · $name ${if (next) "allowed" else "blocked"}")
+                toast(if (key == "ads" && engine == BrowserEngineType.CEFRIUM) "$engineLabel default · Ads and tracker protection ${if (next) "on" else "off"}" else "$engineLabel default · $name ${if (next) "allowed" else "blocked"}")
                 showDefaultSiteSettings(engine)
             }.setNegativeButton(getString(R.string.close), null).show()
     }
@@ -6197,7 +6201,7 @@ private fun showQuickSettings() {
         val labels = definitions.map(::label).toTypedArray() + permissionAction +
             arrayOf("Reset this site's settings", "Clear this site's data")
         AlertDialog.Builder(this).setTitle("$host · $engineLabel")
-            .apply { if (entry.engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Cookie rules apply to browser-owned requests only; service-worker requests are not covered by Cefrium 0.21.")) }
+            .apply { if (entry.engine == BrowserEngineType.CEFRIUM) setView(cefriumCookieNotice("Nova's per-origin cookie rule applies to browser-owned requests only; service-worker requests may use profile cookies.")) }
             .setItems(labels) { _, which ->
                 when {
                     which < definitions.size -> {

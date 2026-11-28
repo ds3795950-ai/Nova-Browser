@@ -8,7 +8,7 @@ Nova Shield uses GeckoView's built-in Enhanced Tracking Protection and Safe Brow
 
 ## Cefrium Normal-tab request controls
 
-Cefrium 0.22.0 supports a conservative curated tracker-domain filter, image blocking for Data Saver/per-site image rules, and per-origin cookie send/store filtering for browser-owned requests. The tracker list is not a complete filter-list engine or full GeckoView Enhanced Tracking Protection.
+Cefrium 0.22.0 supports a conservative curated tracker-domain filter, Data Saver/per-site image blocking, and per-origin cookie send/store filtering for browser-owned requests. Nova also applies image and listed-tracker blocking to profile-owned service-worker requests; when the top-level origin is unknown, only explicitly listed tracker hosts are blocked globally. This is not a complete filter-list engine or full GeckoView Enhanced Tracking Protection.
 
 **Cookie limitation:** Nova does not rely on per-origin cookie callbacks for profile-level requests that belong to no browser, including service-worker requests and their fetches. Those requests may use the profile cookie store. Nova labels the Cefrium cookie control "browser requests only" and does not claim complete cookie isolation or third-party cookie partitioning. Do not present this setting as a comprehensive cookie-blocking guarantee.
 

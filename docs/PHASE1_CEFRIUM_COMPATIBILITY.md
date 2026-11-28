@@ -50,7 +50,7 @@ The build-time patch intentionally checks the upstream 1VPN package's authentica
 ## Cefrium 0.22.0 request-filter boundaries
 
 - Data Saver blocks image requests in browser tabs and profile-level service-worker image requests.
-- The curated tracker-domain filter applies when a browser request has a known top-level page URL; it is not full Enhanced Tracking Protection.
+- Browser-owned requests use the known top-level page URL to distinguish listed cross-site trackers. Profile-owned service-worker requests are also filtered: when the top-level origin is unavailable, only explicitly listed tracker hosts are blocked globally. This is not full Enhanced Tracking Protection.
 - Per-origin cookie send/store rules apply to browser-owned requests only. Nova does not rely on those per-origin callbacks for profile-level service-worker requests, which may use the profile cookie store; do not describe this as complete cookie isolation. The Site controls UI labels the limitation explicitly.
 - Explicit saved-login fill is HTTPS-only, exact-origin, user-triggered and protected by device credential/biometric verification. Automatic password detection and save prompts remain GeckoView-only.
 - Nova's capability policy routes page translation to GeckoView and asks before switching; the page reloads and site data is not transferred.
