@@ -40,13 +40,13 @@ class SessionBudgetPolicyTest {
 
     @Test fun sessionBudgetScalesWithMemoryClass() {
         assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(96))
-        assertEquals(4, SessionBudgetPolicy.maxRetainedSessions(256))
+        assertEquals(5, SessionBudgetPolicy.maxRetainedSessions(256))
         assertEquals(8, SessionBudgetPolicy.maxRetainedSessions(512))
     }
 
     @Test fun memoryPressureTightensTheSessionBudget() {
         assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(96, memoryPressure = true))
-        assertEquals(2, SessionBudgetPolicy.maxRetainedSessions(256, memoryPressure = true))
+        assertEquals(3, SessionBudgetPolicy.maxRetainedSessions(256, memoryPressure = true))
         assertEquals(6, SessionBudgetPolicy.maxRetainedSessions(512, memoryPressure = true))
     }
 }
